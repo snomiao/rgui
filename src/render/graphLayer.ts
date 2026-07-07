@@ -190,10 +190,104 @@ function drawNode(
   // body fill (fills butt together squarely at junctions)
   ctx.beginPath();
   ctx.roundRect(n.x, n.y, n.w, h, [tl, tr, br, bl]);
-  ctx.fillStyle = "#2b3036";
+  ctx.fillStyle = n.bg ?? "#2b3036";
   ctx.fill();
 
-  // border: stroke only the uncovered pieces of each side + live corners
+  drawNodeBorder(ctx, n, h, [tl, tr, br, bl], cov);
+  if (n.draw) {
+    // full-content override: the node draws its own title/fields/body in
+    // screen px; rgui keeps the block, ports, pin and fused boundaries
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(n.x, n.y, n.w, h, [tl, tr, br, bl]);
+    ctx.clip();
+    ctx.translate(n.x, n.y);
+    ctx.scale(1 / k, 1 / k);
+    try {
+      n.draw(ctx, { width: n.w * k, height: h * k }, { k });
+    } catch (err) {
+      console.error("[rgui] node draw hook failed:", err);
+    }
+    ctx.restore();
+    // border re-strokes after the hook so a custom background can't cover it
+    drawNodeBorder(ctx, n, h, [tl, tr, br, bl], cov);
+    drawNodePin(ctx, n);
+    drawNodePorts(ctx, n, k, rule, layout);
+    drawResizeGrip(ctx, n, h);
+    return;
+  }
+
+  // single block: no header band — the category speaks through the title
+  // color, so a node (and a fused stack) reads as one uninterrupted shape
+  ctx.fillStyle = CATEGORY_COLOR[n.category];
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillText(n.title, n.x + NODE_PAD, n.y + NODE_HEADER_H / 2 + 0.5);
+
+  drawNodePin(ctx, n);
+
+  // field rows — skip when they would render unreadably small
+  if (NODE_ROW_H * k >= rule.fieldMinPx) {
+    ctx.font = "11px system-ui, sans-serif";
+    for (let i = 0; i < n.fields.length; i++) {
+      const [key, v] = n.fields[i]!;
+      const y = n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H;
+      ctx.fillStyle = "#8b949e";
+      ctx.textAlign = "left";
+      ctx.fillText(key, n.x + NODE_PAD + 10, y);
+      ctx.fillStyle = "#e6e9ec";
+      ctx.textAlign = "right";
+      ctx.fillText(v, n.x + n.w - NODE_PAD - 10, y);
+    }
+  }
+
+  // live body — host-drawn region (waveform / partial text / thumbnails).
+  // Screen-space ctx clipped to the region; skipped when unreadably small.
+  const bodyR = bodyRect(n);
+  if (n.body && bodyR && bodyR.h * k >= 12) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bodyR.x, bodyR.y, bodyR.w, bodyR.h);
+    ctx.clip();
+    ctx.translate(bodyR.x, bodyR.y);
+    ctx.scale(1 / k, 1 / k); // hand the host SCREEN pixels
+    try {
+      n.body(ctx, { width: bodyR.w * k, height: bodyR.h * k }, { k });
+    } catch (err) {
+      console.error("[rgui] node body hook failed:", err);
+    }
+    ctx.restore();
+  }
+
+  drawNodePorts(ctx, n, k, rule, layout);
+  drawResizeGrip(ctx, n, h);
+}
+
+/** diagonal grip lines at the bottom-right corner (resize affordance) */
+function drawResizeGrip(ctx: CanvasRenderingContext2D, n: GraphNode, h: number) {
+  const x = n.x + n.w;
+  const y = n.y + h;
+  ctx.save();
+  ctx.strokeStyle = "#8b949e";
+  ctx.globalAlpha = 0.35;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(x - 9, y - 3);
+  ctx.lineTo(x - 3, y - 9);
+  ctx.moveTo(x - 5.5, y - 3);
+  ctx.lineTo(x - 3, y - 5.5);
+  ctx.stroke();
+  ctx.restore();
+}
+function drawNodeBorder(
+  ctx: CanvasRenderingContext2D,
+  n: GraphNode,
+  h: number,
+  radii: [number, number, number, number],
+  cov: SideCoverage,
+) {
+  const [tl, tr, br, bl] = radii;
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = "#14161a";
   ctx.beginPath();
@@ -230,78 +324,39 @@ function drawNode(
   if (br) ctx.moveTo(n.x + n.w, n.y + h - br), ctx.arc(n.x + n.w - br, n.y + h - br, br, 0, 0.5 * Math.PI);
   if (bl) ctx.moveTo(n.x + bl, n.y + h), ctx.arc(n.x + bl, n.y + h - bl, bl, 0.5 * Math.PI, Math.PI);
   ctx.stroke();
+}
 
-  // header strip
+function drawNodePin(ctx: CanvasRenderingContext2D, n: GraphNode) {
+  const [px, py] = pinPos(n);
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(Math.PI / 4);
+  ctx.globalAlpha = n.pinned ? 1 : 0.25;
+  ctx.fillStyle = n.pinned ? "#ffd60a" : "#8b949e";
+  ctx.strokeStyle = n.pinned ? "#ffd60a" : "#8b949e";
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.roundRect(n.x, n.y, n.w, NODE_HEADER_H, [tl, tr, 0, 0]);
-  ctx.fillStyle = CATEGORY_COLOR[n.category];
+  ctx.arc(0, -3, 3.2, 0, Math.PI * 2); // head
   ctx.fill();
+  ctx.beginPath(); // needle
+  ctx.moveTo(0, -0.5);
+  ctx.lineTo(0, 5.5);
+  ctx.stroke();
+  ctx.restore();
+}
 
-  // title
-  ctx.fillStyle = "#101215";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  ctx.fillText(n.title, n.x + NODE_PAD, n.y + NODE_HEADER_H / 2 + 0.5);
-
-  // pin glyph (header right): solid when pinned, faint affordance otherwise
-  {
-    const [px, py] = pinPos(n);
-    ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(Math.PI / 4);
-    ctx.globalAlpha = n.pinned ? 1 : 0.28;
-    ctx.fillStyle = n.pinned ? "#ffd60a" : "#101215";
-    ctx.strokeStyle = "#101215";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(0, -3, 3.2, 0, Math.PI * 2); // head
-    ctx.fill();
-    if (n.pinned) ctx.stroke();
-    ctx.beginPath(); // needle
-    ctx.moveTo(0, -0.5);
-    ctx.lineTo(0, 5.5);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // field rows — skip when they would render unreadably small
-  if (NODE_ROW_H * k >= rule.fieldMinPx) {
-    ctx.font = "11px system-ui, sans-serif";
-    for (let i = 0; i < n.fields.length; i++) {
-      const [key, v] = n.fields[i]!;
-      const y = n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H;
-      ctx.fillStyle = "#8b949e";
-      ctx.textAlign = "left";
-      ctx.fillText(key, n.x + NODE_PAD + 10, y);
-      ctx.fillStyle = "#e6e9ec";
-      ctx.textAlign = "right";
-      ctx.fillText(v, n.x + n.w - NODE_PAD - 10, y);
-    }
-  }
-
-  // live body — host-drawn region (waveform / partial text / thumbnails).
-  // Screen-space ctx clipped to the region; skipped when unreadably small.
-  const bodyR = bodyRect(n);
-  if (n.body && bodyR && bodyR.h * k >= 12) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(bodyR.x, bodyR.y, bodyR.w, bodyR.h);
-    ctx.clip();
-    ctx.translate(bodyR.x, bodyR.y);
-    ctx.scale(1 / k, 1 / k); // hand the host SCREEN pixels
-    try {
-      n.body(ctx, { width: bodyR.w * k, height: bodyR.h * k }, { k });
-    } catch (err) {
-      console.error("[rgui] node body hook failed:", err);
-    }
-    ctx.restore();
-  }
-
+function drawNodePorts(
+  ctx: CanvasRenderingContext2D,
+  n: GraphNode,
+  k: number,
+  rule: RgRule,
+  layout: Map<string, PortPlacement>,
+) {
   // ports — layout-driven: internal ports vanish (辺界消融), external ports
   // sit on the edge their wire leaves from
   const labels = NODE_ROW_H * k >= rule.portLabelMinPx;
   ctx.font = "10px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
   const drawPorts = (dir: "in" | "out", ports: typeof n.inputs) => {
     for (const p of ports) {
       const pl = layout.get(`${n.id}/${dir}/${p.id}`);
@@ -362,12 +417,8 @@ function drawPseudoNode(
   ctx.strokeStyle = accent;
   ctx.stroke();
 
-  ctx.beginPath();
-  ctx.roundRect(0, 0, w, PSEUDO.headerH, [r, r, 0, 0]);
+  // single block: accent lives in the border + title color, no header band
   ctx.fillStyle = accent;
-  ctx.fill();
-
-  ctx.fillStyle = "#101215";
   ctx.font = "bold 13px system-ui, sans-serif";
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";

@@ -29,6 +29,7 @@ import {
 import {
   inputPortPos,
   nodeHeight,
+  nodeMinHeight,
   outputPortPos,
   type Edge,
   type Graph,
@@ -37,6 +38,7 @@ import {
 } from "./core/graph.js";
 import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
 import {
+  clampSize,
   computePortLayout,
   flushComponents,
   flushSegments,
@@ -85,6 +87,10 @@ export interface RguiOptions {
   onSelectionChange?: (nodeIds: string[]) => void;
   /** a node's pin was toggled via the header glyph */
   onPinChange?: (nodeId: string, pinned: boolean) => void;
+  /** fires during a corner-grip resize (grid-snapped, overlap-clamped) */
+  onNodeResize?: (nodeId: string, size: { w: number; h: number }) => void;
+  /** fires once when a corner-grip resize ends */
+  onNodeResizeEnd?: (nodeId: string, size: { w: number; h: number }) => void;
   /**
    * screen-anchored palettes/panels drawn as canvas chrome — items support
    * click-to-add (Panel.onItemClick) and drag-onto-canvas (Panel.onItemDrop)
@@ -136,6 +142,11 @@ export interface Rgui {
   ): { x: number; y: number; edge: "left" | "right"; hidden: boolean } | null;
   /** replace the panel set (host mutates panels + calls this or invalidate) */
   setPanels(panels: Panel[]): void;
+  /**
+   * programmatic resize (for nodes that want to size themselves) — snapped
+   * to minimums and clamped against neighbors (一格一物), then re-rendered
+   */
+  resizeNode(nodeId: string, size: { w?: number; h?: number }): void;
   /**
    * screen midpoint of a wire's bezier as currently drawn — null if the
    * wire is dissolved (inside a flush stack) or an endpoint is collapsed.
@@ -418,6 +429,7 @@ export function createRgui(
     | { type: "pseudo"; pseudo: PseudoNode; wx: number; wy: number; moved: boolean }
     | { type: "wire"; from: PortHit; toSx: number; toSy: number }
     | { type: "marquee"; x0: number; y0: number; x1: number; y1: number }
+    | { type: "resize"; node: GraphNode; moved: boolean }
     | {
         type: "panelItem";
         panel: Panel;
@@ -469,6 +481,15 @@ export function createRgui(
     return from.port.kind === to.port.kind;
   }
 
+  /** resize-grip hit-test: bottom-right corner, ~10px screen radius */
+  function gripHitAt(sx: number, sy: number): GraphNode | null {
+    for (const n of lastRg?.nodes ?? graph.nodes) {
+      const [px, py] = worldToScreenXY(n.x + n.w, n.y + nodeHeight(n));
+      if (Math.hypot(px - sx, py - sy) <= 10) return n;
+    }
+    return null;
+  }
+
   /** pin-glyph hit-test (screen ~9px around the glyph) */
   function pinHitAt(sx: number, sy: number): GraphNode | null {
     for (const n of lastRg?.nodes ?? graph.nodes) {
@@ -505,6 +526,13 @@ export function createRgui(
     const ind = indicatorAt(ev.offsetX, ev.offsetY);
     if (ind) {
       panTo(ind.cx, ind.cy);
+      return;
+    }
+    // bottom-right grip starts a resize
+    const gripNode = gripHitAt(ev.offsetX, ev.offsetY);
+    if (gripNode && !gripNode.pinned) {
+      drag = { type: "resize", node: gripNode, moved: false };
+      canvas.setPointerCapture(ev.pointerId);
       return;
     }
     // pin glyph toggles pinned state
@@ -562,11 +590,30 @@ export function createRgui(
 
   const onPointerMove = (ev: PointerEvent) => {
     pointer = { sx: ev.offsetX, sy: ev.offsetY };
+    if (!drag) {
+      canvas.style.cursor = gripHitAt(ev.offsetX, ev.offsetY)
+        ? "nwse-resize"
+        : "grab";
+    }
     if (drag) {
       const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
       // rg-ui: every element snaps to the minor readable grid → dense layouts
       const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[1]!.step;
-      if (drag.type === "panelItem") {
+      if (drag.type === "resize") {
+        const n = drag.node;
+        const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
+        // grid-snap the corner, respect minimums, stop at neighbors
+        const minW = 96;
+        const wantW = Math.max(minW, snap(wx - n.x, step));
+        const wantH = Math.max(nodeMinHeight(n), snap(wy - n.y, step));
+        const { w, h } = clampSize(n, wantW, wantH, graph.nodes);
+        if (w !== n.w || h !== nodeHeight(n)) {
+          n.w = w;
+          n.h = h;
+          drag.moved = true;
+          options.onNodeResize?.(n.id, { w, h: nodeHeight(n) });
+        }
+      } else if (drag.type === "panelItem") {
         drag.sx = ev.offsetX;
         drag.sy = ev.offsetY;
         if (
@@ -633,6 +680,16 @@ export function createRgui(
     }
     emptyDown = null;
     if (!drag) return;
+    if (drag.type === "resize") {
+      if (drag.moved)
+        options.onNodeResizeEnd?.(drag.node.id, {
+          w: drag.node.w,
+          h: nodeHeight(drag.node),
+        });
+      drag = null;
+      invalidate();
+      return;
+    }
     if (drag.type === "panelItem") {
       const overPanel = panelHitAt(lastPanelRects, ev.offsetX, ev.offsetY);
       if (!drag.moved) {
@@ -738,6 +795,7 @@ export function createRgui(
       if (me.shiftKey) return false; // shift+drag = box select
       if (indicatorAt(me.offsetX, me.offsetY)) return false; // indicator click
       if (panelHitAt(lastPanelRects, me.offsetX, me.offsetY)) return false;
+      if (gripHitAt(me.offsetX, me.offsetY)) return false; // resize grip
       if (
         (options.onConnect || options.isValidConnection) &&
         portAt(me.offsetX, me.offsetY)
@@ -798,6 +856,19 @@ export function createRgui(
     },
     setPanels(next: Panel[]) {
       panels = next;
+      invalidate();
+    },
+    resizeNode(nodeId: string, size: { w?: number; h?: number }) {
+      const n = graph.nodes.find((m) => m.id === nodeId);
+      if (!n) return;
+      const { w, h } = clampSize(
+        n,
+        Math.max(96, size.w ?? n.w),
+        Math.max(nodeMinHeight(n), size.h ?? nodeHeight(n)),
+        graph.nodes,
+      );
+      n.w = w;
+      n.h = h;
       invalidate();
     },
     portScreenPos(nodeId: string, portId: string, side: "in" | "out") {

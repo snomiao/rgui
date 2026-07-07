@@ -32,6 +32,25 @@ export interface GraphNode {
    */
   pinned?: boolean;
   /**
+   * explicit height override (world units) — resize grows the live-body
+   * region; ignored when below the derived minimum (rows + bodyRows)
+   */
+  h?: number;
+  /** custom block background fill (default #2b3036) */
+  bg?: string;
+  /**
+   * Full-content draw override: when set, rgui still owns the node block
+   * (shape, fused boundaries, border, ports, pin, selection) but the ENTIRE
+   * content — title, fields, everything — is drawn by this hook instead of
+   * the defaults. Same contract as `body`: SCREEN-space ctx clipped to the
+   * node, origin at the node's top-left, rect in screen px.
+   */
+  draw?: (
+    ctx: CanvasRenderingContext2D,
+    rect: { width: number; height: number },
+    view: { k: number },
+  ) => void;
+  /**
    * Reserved live-body rows below the field rows (row height NODE_ROW_H).
    * The `body` hook draws inside this region.
    */
@@ -79,7 +98,8 @@ export const NODE_ROW_H = 22;
 export const NODE_PAD = 10;
 export const PORT_R = 5;
 
-export function nodeHeight(n: GraphNode): number {
+/** derived minimum height (rows + reserved body rows) */
+export function nodeMinHeight(n: GraphNode): number {
   const rows = Math.max(
     n.fields.length,
     Math.max(n.inputs.length, n.outputs.length),
@@ -92,6 +112,10 @@ export function nodeHeight(n: GraphNode): number {
   );
 }
 
+export function nodeHeight(n: GraphNode): number {
+  return Math.max(nodeMinHeight(n), n.h ?? 0);
+}
+
 /** world-space rect of the reserved live-body region (null if none) */
 export function bodyRect(
   n: GraphNode,
@@ -101,11 +125,13 @@ export function bodyRect(
     n.fields.length,
     Math.max(n.inputs.length, n.outputs.length),
   );
+  const top = n.y + NODE_HEADER_H + NODE_PAD + rows * NODE_ROW_H;
+  // any resized extra height flows into the live-body region
   return {
     x: n.x + NODE_PAD,
-    y: n.y + NODE_HEADER_H + NODE_PAD + rows * NODE_ROW_H,
+    y: top,
     w: n.w - 2 * NODE_PAD,
-    h: n.bodyRows * NODE_ROW_H,
+    h: n.y + nodeHeight(n) - NODE_PAD - top,
   };
 }
 

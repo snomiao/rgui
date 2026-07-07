@@ -13,6 +13,7 @@
 import {
   inputPortPos,
   nodeHeight,
+  nodeMinHeight,
   type Graph,
   type GraphNode,
 } from "./graph.js";
@@ -94,6 +95,42 @@ export function resolveOverlap(
     }
   }
   return { x, y };
+}
+
+/**
+ * 一格一物 on resize: cap a node's requested size so growth stops at flush
+ * contact with neighbors (width first, then height with the new width).
+ */
+export function clampSize(
+  node: GraphNode,
+  w: number,
+  h: number,
+  others: GraphNode[],
+): { w: number; h: number } {
+  const hCur = nodeHeight(node);
+  for (const o of others) {
+    if (o === node) continue;
+    const r = rectOf(o);
+    // width cap: neighbor to the right overlapping our current y-span
+    if (
+      r.x >= node.x + EPS &&
+      r.y < node.y + hCur - EPS &&
+      r.y + r.h > node.y + EPS
+    )
+      w = Math.min(w, r.x - node.x);
+  }
+  for (const o of others) {
+    if (o === node) continue;
+    const r = rectOf(o);
+    // height cap: neighbor below overlapping our NEW x-span
+    if (
+      r.y >= node.y + EPS &&
+      r.x < node.x + w - EPS &&
+      r.x + r.w > node.x + EPS
+    )
+      h = Math.min(h, r.y - node.y);
+  }
+  return { w, h };
 }
 
 /** A flush contact segment between two nodes (world coords). */
