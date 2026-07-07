@@ -7,7 +7,7 @@ import {
   sizeLayerStep,
   snapSizeRadix,
 } from "./grid";
-import { demoGraph, nodeHeight, type GraphNode } from "./graph";
+import { demoGraph, nodeHeight, nodeScale, type GraphNode } from "./graph";
 import { buildRenderGraph, pseudoRect } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
@@ -61,6 +61,12 @@ describe("readable grid math (radix layers)", () => {
     expect(sizeLayerStep(200, 8)).toBe(64); // 4 grids @64
     expect(sizeLayerStep(8, 8)).toBe(1); // 8 grids @1
     expect(sizeLayerStep(513, 8)).toBe(512);
+  });
+
+  test("nodeScale: per-axis layers; w and h may differ", () => {
+    // tall-narrow: w=64 lives on layer 8 (8 grids), h=512 on layer 64
+    const tall = { ...mkNode("t", 0, 0, 64, 1), h: 512 };
+    expect(nodeScale(tall, 8)).toEqual({ x: 8, y: 64 });
   });
 
   test("node-size law: 1..radix grids, promote past the limit", () => {
@@ -162,6 +168,27 @@ describe("snap beats location (merge priority)", () => {
     expect(pseudoIds).toContain("b");
     expect(rg.nodes.map((n) => n.id)).toEqual(["far"]); // loose node stays
     expect(rg.pseudo.length).toBe(1); // one merged stack
+  });
+});
+
+describe("flow order", () => {
+  test("pseudo members sort by data flow, not insertion order", () => {
+    // insert REVERSED: sink first, source last
+    const a = mkNode("a", 0, 0, 200, 1);
+    const b = mkNode("b", 0, nodeHeight(mkNode("a", 0, 0, 200, 1)), 200, 1);
+    for (const n of [a, b]) {
+      n.outputs = [{ id: "o", label: "o", kind: "text" as const }];
+      n.inputs = [{ id: "i", label: "i", kind: "text" as const }];
+    }
+    const g = {
+      nodes: [b, a], // insertion order: b, a
+      edges: [{ from: { node: "a", port: "o" }, to: { node: "b", port: "i" } }],
+    };
+    const rg = buildRenderGraph(g, 0.5); // flush stack collapses
+    expect(rg.pseudo.length).toBe(1);
+    // flow order: a (source) before b (sink) despite insertion order
+    expect(rg.pseudo[0]!.members.map((m) => m.id)).toEqual(["a", "b"]);
+    expect(rg.pseudo[0]!.title).toBe("a +1");
   });
 });
 

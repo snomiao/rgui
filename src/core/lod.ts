@@ -239,6 +239,31 @@ export function buildRenderGraph(
     }
   }
 
+  // FLOW ORDER: pseudo members sort topologically (Kahn over the edges),
+  // so titles and "A → B → C" summaries always read in data direction —
+  // never in node insertion order
+  const topoIndex = new Map<string, number>();
+  {
+    const indeg = new Map<string, number>();
+    for (const n of graph.nodes) indeg.set(n.id, 0);
+    for (const e of graph.edges)
+      indeg.set(e.to.node, (indeg.get(e.to.node) ?? 0) + 1);
+    const q = graph.nodes.filter((n) => !indeg.get(n.id)).map((n) => n.id);
+    let idx = 0;
+    while (q.length) {
+      const id = q.shift()!;
+      topoIndex.set(id, idx++);
+      for (const e of graph.edges) {
+        if (e.from.node !== id) continue;
+        const d = (indeg.get(e.to.node) ?? 1) - 1;
+        indeg.set(e.to.node, d);
+        if (d === 0) q.push(e.to.node);
+      }
+    }
+    for (const n of graph.nodes)
+      if (!topoIndex.has(n.id)) topoIndex.set(n.id, idx++);
+  }
+
   // materialize clusters as pseudo-nodes (singletons become title chips)
   const clusters = new Map<string, GraphNode[]>();
   for (const n of elig) {
@@ -250,6 +275,9 @@ export function buildRenderGraph(
   const nodeToPseudo = new Map<string, PseudoNode>();
   const collapsed: PseudoNode[] = [];
   for (const members of clusters.values()) {
+    members.sort(
+      (a, b) => (topoIndex.get(a.id) ?? 0) - (topoIndex.get(b.id) ?? 0),
+    );
     const xs = members.flatMap((n) => [n.x, n.x + n.w]);
     const ys = members.flatMap((n) => [n.y, n.y + nodeHeight(n)]);
     const solo = members.length === 1;
@@ -344,14 +372,12 @@ export function buildRenderGraph(
   const mainStep = gridLevels(k, rule.minGridPx, rule.radix)[0]!.step;
   for (const p of pseudo) {
     const r = pseudoRect(p, k, rule);
-    // a merged block quantizes to the finer of the view grid and its own
-    // size layer — never coarser than the lattice it visually belongs to
-    const pstep = Math.min(
-      mainStep,
-      sizeLayerStep(Math.max(r.w, r.h), rule.radix),
-    );
-    p.cx += snap(r.x, pstep) - r.x;
-    p.cy += snap(r.y, pstep) - r.y;
+    // a merged block quantizes per axis to the finer of the view grid and
+    // its own size layer on that axis
+    const psx = Math.min(mainStep, sizeLayerStep(r.w, rule.radix));
+    const psy = Math.min(mainStep, sizeLayerStep(r.h, rule.radix));
+    p.cx += snap(r.x, psx) - r.x;
+    p.cy += snap(r.y, psy) - r.y;
   }
   const expanded = graph.nodes.filter((n) => !nodeToPseudo.has(n.id));
 

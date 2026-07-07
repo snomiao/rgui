@@ -51,6 +51,7 @@ export {
 } from "./core/aggregate.js";
 export {
   nodeHeight,
+  nodeScale,
   bodyRect,
   inputPortPos,
   outputPortPos,

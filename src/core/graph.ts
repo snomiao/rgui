@@ -15,6 +15,7 @@ export interface Port {
 }
 
 import type { MergeRule } from "./aggregate.js";
+import { sizeLayerStep } from "./grid.js";
 
 export interface GraphNode {
   id: string;
@@ -142,6 +143,22 @@ export function nodeMinHeight(n: GraphNode): number {
 
 export function nodeHeight(n: GraphNode): number {
   return Math.max(nodeMinHeight(n), n.h ?? 0);
+}
+
+/**
+ * A node's scale, per axis: the grid layer each dimension lives on
+ * (sizeLayerStep of w and of height). Width and height may legitimately
+ * live on DIFFERENT layers — a wide-flat node is coarse in x, fine in y —
+ * and position snapping follows each axis's own layer.
+ */
+export function nodeScale(
+  n: GraphNode,
+  radix = 8,
+): { x: number; y: number } {
+  return {
+    x: sizeLayerStep(n.w, radix),
+    y: sizeLayerStep(nodeHeight(n), radix),
+  };
 }
 
 /** world-space rect of the reserved live-body region (null if none) */

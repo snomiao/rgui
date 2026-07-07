@@ -434,12 +434,12 @@ export function createRgui(
     const mainStep = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
     const nodes = graph.nodes.map((n) => {
       const h = nodeHeight(n);
-      const nstep = nodeSnapStep(mainStep, n);
+      const [qsx, qsy] = nodeSnapStep(mainStep, n);
       const [cx, cy] = projectWorldPt(n.x + n.w / 2, n.y + h / 2, n.z ?? 0);
       const clone = {
         ...n,
-        x: snap(cx - n.w / 2, nstep),
-        y: snap(cy - h / 2, nstep),
+        x: snap(cx - n.w / 2, qsx),
+        y: snap(cy - h / 2, qsy),
       };
       displayNodes.set(n.id, clone);
       return clone;
@@ -836,20 +836,25 @@ export function createRgui(
     graph.nodes.find((m) => m.id === n.id) ?? n;
 
   /**
-   * a node's position snaps to the FINER of the viewing main grid and its
-   * OWN scale layer (from the size law): zoomed in you get precision on the
-   * visible grid; zoomed out the node's layer caps the coarseness so drags
-   * never jump in giant view-grid steps
+   * PER-AXIS snap steps: each axis snaps to the finer of the viewing main
+   * grid and the node's own scale on THAT axis (width layer for x, height
+   * layer for y) — a wide-flat node moves coarsely in x, finely in y.
+   * Zoomed out, the node's layers cap the coarseness.
    */
-  const nodeSnapStep = (viewStep: number, ...nodes: GraphNode[]) => {
-    let layer = 0;
-    for (const n of nodes)
-      layer = Math.max(
-        layer,
-        sizeLayerStep(n.w, rule.radix),
-        sizeLayerStep(nodeHeight(n), rule.radix),
-      );
-    return layer ? Math.min(viewStep, layer) : viewStep;
+  const nodeSnapStep = (
+    viewStep: number,
+    ...nodes: GraphNode[]
+  ): readonly [number, number] => {
+    let lx = 0;
+    let ly = 0;
+    for (const n of nodes) {
+      lx = Math.max(lx, sizeLayerStep(n.w, rule.radix));
+      ly = Math.max(ly, sizeLayerStep(nodeHeight(n), rule.radix));
+    }
+    return [
+      lx ? Math.min(viewStep, lx) : viewStep,
+      ly ? Math.min(viewStep, ly) : viewStep,
+    ];
   };
 
   let drag:
@@ -1130,10 +1135,10 @@ export function createRgui(
         // space — no second snap there, or the alignment would belong to
         // the rotated plane instead of the visible one
         const h0 = nodeHeight(drag.node);
-        const nstep = nodeSnapStep(step, drag.node);
+        const [sx0, sy0] = nodeSnapStep(step, drag.node);
         const [tdx, tdy] = [
-          snap(wx - drag.dx, nstep),
-          snap(wy - drag.dy, nstep),
+          snap(wx - drag.dx, sx0),
+          snap(wy - drag.dy, sy0),
         ];
         const [bcx, bcy] = rotActive
           ? unprojectWorldPt(
@@ -1156,9 +1161,9 @@ export function createRgui(
           options.onNodeMove?.(drag.node.id, { x: nx, y: ny });
         }
       } else if (drag.type === "group") {
-        const gstep = nodeSnapStep(step, ...drag.nodes);
-        const ddx = snap(wx - drag.wx, gstep);
-        const ddy = snap(wy - drag.wy, gstep);
+        const [gsx, gsy] = nodeSnapStep(step, ...drag.nodes);
+        const ddx = snap(wx - drag.wx, gsx);
+        const ddy = snap(wy - drag.wy, gsy);
         if (ddx || ddy) {
           const bdx = rotActive ? Ainv[0] * ddx + Ainv[1] * ddy : ddx;
           const bdy = rotActive ? Ainv[2] * ddx + Ainv[3] * ddy : ddy;
@@ -1174,11 +1179,11 @@ export function createRgui(
       } else {
         // a cluster with a pinned member is bolted down
         if (drag.pseudo.members.some((n) => n.pinned)) return;
-        const pstep = nodeSnapStep(step, ...drag.pseudo.members.map(baseOf));
+        const [psx, psy] = nodeSnapStep(step, ...drag.pseudo.members.map(baseOf));
         // TOTAL offset from the drag anchor, quantized once — immune to the
         // per-frame rebuild + lattice re-snap of the block
-        const tdx = snap(wx - drag.wx0, pstep);
-        const tdy = snap(wy - drag.wy0, pstep);
+        const tdx = snap(wx - drag.wx0, psx);
+        const tdy = snap(wy - drag.wy0, psy);
         const bdx = rotActive ? Ainv[0] * tdx + Ainv[1] * tdy : tdx;
         const bdy = rotActive ? Ainv[2] * tdx + Ainv[3] * tdy : tdy;
         let changed = false;
@@ -1622,9 +1627,9 @@ export function createRgui(
     snapGraph(opts?: { silent?: boolean }) {
       const step = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
       for (const n of graph.nodes) {
-        const nstep = nodeSnapStep(step, n);
-        const nx = snap(n.x, nstep);
-        const ny = snap(n.y, nstep);
+        const [gsx, gsy] = nodeSnapStep(step, n);
+        const nx = snap(n.x, gsx);
+        const ny = snap(n.y, gsy);
         if (nx !== n.x || ny !== n.y) {
           n.x = nx;
           n.y = ny;
