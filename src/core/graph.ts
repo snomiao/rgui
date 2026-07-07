@@ -21,6 +21,12 @@ export interface GraphNode {
   /** world coords of top-left corner */
   x: number;
   y: number;
+  /**
+   * depth in position space (default 0): under viewport 3-D rotation the
+   * node's PROJECTED position shifts with z, but the node itself always
+   * renders as an upright 2-D card facing the user
+   */
+  z?: number;
   w: number;
   inputs: Port[];
   outputs: Port[];

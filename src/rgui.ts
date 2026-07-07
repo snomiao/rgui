@@ -251,6 +251,7 @@ export function createRgui(
   const rot3 = { yaw: 0, pitch: 0, roll: 0 };
   let A: readonly [number, number, number, number] = [1, 0, 0, 1];
   let Ainv: readonly [number, number, number, number] = [1, 0, 0, 1];
+  let Zcol: readonly [number, number] = [0, 0];
   let rotActive = false;
   function updateRotation() {
     const { yaw, pitch, roll } = rot3;
@@ -268,38 +269,17 @@ export function createRgui(
     const c = sz * cy + cz * sx * sy; // R10
     const d = cz * cx; // R11
     A = [a, b, c, d];
+    // z column of R (first two rows) — how depth shifts projected positions
+    const zx = sy * cz + sx * cy * sz;
+    const zy = sy * sz - sx * cy * cz;
+    Zcol = [zx, zy];
     const det = a * d - b * c;
     const inv = Math.abs(det) < 0.05 ? (det < 0 ? -20 : 20) : 1 / det;
     Ainv = [d * inv, -b * inv, -c * inv, a * inv];
   }
-  const applyMat = (
-    m: readonly [number, number, number, number],
-    x: number,
-    y: number,
-  ): readonly [number, number] => {
-    const cx = canvas.clientWidth / 2;
-    const cy = canvas.clientHeight / 2;
-    const dx = x - cx;
-    const dy = y - cy;
-    return [cx + m[0] * dx + m[1] * dy, cy + m[2] * dx + m[3] * dy];
-  };
-  /** raw screen → view space (undo the viewport rotation) */
-  const toView = (sx: number, sy: number) =>
-    rotActive ? applyMat(Ainv, sx, sy) : ([sx, sy] as const);
-  /** view space → raw screen */
-  const fromView = (vx: number, vy: number) =>
-    rotActive ? applyMat(A, vx, vy) : ([vx, vy] as const);
-  /** coverage inflation for grid layers (0 = axis-aligned viewport) */
-  const coverage = () => {
-    if (!rotActive) return 0;
-    // min singular value of A → how much the inverse can stretch bounds
-    const [a, b, c, d] = A;
-    const t1 = a * a + b * b + c * c + d * d;
-    const det = Math.abs(a * d - b * c);
-    const s2 = Math.sqrt(Math.max(0, t1 * t1 / 4 - det * det));
-    const minSv = Math.sqrt(Math.max(1e-4, t1 / 2 - s2));
-    return 1 / Math.max(0.25, Math.min(1, minSv));
-  };
+  // the VIEW is always 2-D (billboard model): pointer coords are used as-is
+  const toView = (sx: number, sy: number) => [sx, sy] as const;
+  const fromView = (vx: number, vy: number) => [vx, vy] as const;
   /**
    * the grid field's 3-D base vector = R · (0,0,1): dots keep their screen
    * positions, arrows lean along the lateral part; z < 0 flips ⊙ → ⊗
@@ -319,16 +299,58 @@ export function createRgui(
     return { x: x0 * cz - y0 * sz, y: x0 * sz + y0 * cz, z: z0 };
   }
 
-  /** wrap a draw layer so it renders inside the rotated world frame */
-  const world = (layer: DrawLayer): DrawLayer => (ctx, t, size) => {
-    if (!rotActive) return layer(ctx, t, size);
-    ctx.save();
-    ctx.translate(size.width / 2, size.height / 2);
-    ctx.transform(A[0], A[2], A[1], A[3], 0, 0);
-    ctx.translate(-size.width / 2, -size.height / 2);
-    layer(ctx, t, size);
-    ctx.restore();
-  };
+  /**
+   * BILLBOARD projection: node POSITIONS rotate in 3-D, nodes themselves
+   * always render as upright 2-D cards. Project a world point through the
+   * rotation about the world point at the viewport center.
+   */
+  function projectWorldPt(
+    x: number,
+    y: number,
+    z = 0,
+  ): readonly [number, number] {
+    const [cwx, cwy] = screenToWorld(
+      view,
+      canvas.clientWidth / 2,
+      canvas.clientHeight / 2,
+    );
+    const dx = x - cwx;
+    const dy = y - cwy;
+    return [
+      cwx + A[0] * dx + A[1] * dy + Zcol[0] * z,
+      cwy + A[2] * dx + A[3] * dy + Zcol[1] * z,
+    ];
+  }
+  function unprojectWorldPt(
+    x: number,
+    y: number,
+    z = 0,
+  ): readonly [number, number] {
+    const [cwx, cwy] = screenToWorld(
+      view,
+      canvas.clientWidth / 2,
+      canvas.clientHeight / 2,
+    );
+    const dx = x - cwx - Zcol[0] * z;
+    const dy = y - cwy - Zcol[1] * z;
+    return [cwx + Ainv[0] * dx + Ainv[1] * dy, cwy + Ainv[2] * dx + Ainv[3] * dy];
+  }
+
+  /** per-frame display graph: center-projected node positions, same ids */
+  let displayNodes = new Map<string, GraphNode>();
+  function displayGraph(): Graph {
+    if (!rotActive) return graph;
+    displayNodes = new Map();
+    const nodes = graph.nodes.map((n) => {
+      const h = nodeHeight(n);
+      const [cx, cy] = projectWorldPt(n.x + n.w / 2, n.y + h / 2, n.z ?? 0);
+      const clone = { ...n, x: cx - n.w / 2, y: cy - h / 2 };
+      displayNodes.set(n.id, clone);
+      return clone;
+    });
+    return { nodes, edges: graph.edges };
+  }
+  let dGraph: Graph = graph;
 
   /** smooth-pan the viewport so the given world point lands center-screen */
   function panTo(cx: number, cy: number, durationMs = 280) {
@@ -377,7 +399,9 @@ export function createRgui(
       ctx.strokeStyle = "#ffd60a";
       ctx.lineWidth = 2;
       for (const id of selection) {
-        const n = graph.nodes.find((m) => m.id === id);
+        const n =
+          (rotActive ? displayNodes.get(id) : undefined) ??
+          graph.nodes.find((m) => m.id === id);
         if (!n) continue;
         const x = n.x * t.k + t.x;
         const y = n.y * t.k + t.y;
@@ -412,19 +436,12 @@ export function createRgui(
     lastIndicators.map((it) => ({ x: it.cx, y: it.cy }));
   const contentLayers: DrawLayer[] = [
     // world layers rotate with the viewport; chrome stays upright
-    ...(options.layers ?? []).map((l) => world(l)),
-    world(
-      (ctx, t) =>
-        (lastRg = drawGraph(
-          ctx,
-          t,
-          graph,
-          rule,
-          options.summarize,
-          rotActive ? A : undefined,
-        )),
-    ),
-    world((ctx, t) => drawSelectionLayer(ctx, t)),
+    ...(options.layers ?? []),
+    (ctx, t) => {
+      dGraph = displayGraph();
+      lastRg = drawGraph(ctx, t, dGraph, rule, options.summarize);
+    },
+    (ctx, t) => drawSelectionLayer(ctx, t),
     (ctx, t, size) => {
       lastIndicators = lastRg
         ? drawOffscreenIndicators(
@@ -433,11 +450,10 @@ export function createRgui(
             lastRg,
             size,
             rule,
-            rotActive ? fromView : undefined,
           )
         : [];
     },
-    world((ctx, t) => drawGhostWire(ctx, t)),
+    (ctx, t) => drawGhostWire(ctx, t),
     (ctx, _t, size) => {
       lastPanelRects = panelLayout(panels, size);
       drawPanels(ctx, lastPanelRects);
@@ -527,7 +543,6 @@ export function createRgui(
     // wheel over an overlay must drive rgui pan/zoom (not scroll the page)
     // unless an inner scrollable control consumes it
     forwardWheelTo: canvas,
-    transformPoint: (x, y) => fromView(x, y),
   });
 
   let raf = 0;
@@ -545,7 +560,7 @@ export function createRgui(
       else if (zArrow < 1) zArrow = Math.min(1, zArrow + 0.05);
       if (rendererKind === "webgpu") gpu?.render(view);
       renderer.render(view);
-      overlays.sync(graph, lastRg?.nodes ?? null, view, rule);
+      overlays.sync(dGraph, lastRg?.nodes ?? null, view, rule);
       if (debugEl) updateDebug();
       options.onFrame?.(view, lastRg);
     });
@@ -596,7 +611,7 @@ export function createRgui(
       if (wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h)
         return { type: "pseudo", pseudo: p };
     }
-    const visible = lastRg?.nodes ?? graph.nodes;
+    const visible = lastRg?.nodes ?? dGraph.nodes;
     for (let i = visible.length - 1; i >= 0; i--) {
       const n = visible[i]!;
       if (
@@ -623,8 +638,8 @@ export function createRgui(
   function portAt(sx: number, sy: number): PortHit | null {
     // only real (expanded) nodes expose wirable ports; positions follow the
     // same direction-aware layout the renderer uses (hidden ports skipped)
-    const nodes = lastRg?.nodes ?? graph.nodes;
-    const layout = computePortLayout(graph, nodes, flushSegments(nodes));
+    const nodes = lastRg?.nodes ?? dGraph.nodes;
+    const layout = computePortLayout(dGraph, nodes, flushSegments(nodes));
     for (const n of nodes) {
       const check = (dir: "in" | "out", ports: typeof n.inputs): PortHit | null => {
         for (const p of ports) {
@@ -653,8 +668,8 @@ export function createRgui(
 
   /** hit-test wires: sample each rendered bezier, ~6px screen tolerance */
   function edgeAt(sx: number, sy: number): Edge | null {
-    const nodes = lastRg?.nodes ?? graph.nodes;
-    const layout = computePortLayout(graph, nodes, flushSegments(nodes));
+    const nodes = lastRg?.nodes ?? dGraph.nodes;
+    const layout = computePortLayout(dGraph, nodes, flushSegments(nodes));
     const byId = new Map(nodes.map((n) => [n.id, n]));
     for (const e of graph.edges) {
       const a = byId.get(e.from.node);
@@ -680,6 +695,10 @@ export function createRgui(
     }
     return null;
   }
+
+  /** hits return DISPLAY clones under rotation — mutate the BASE node */
+  const baseOf = (n: GraphNode): GraphNode =>
+    graph.nodes.find((m) => m.id === n.id) ?? n;
 
   let drag:
     | {
@@ -755,7 +774,7 @@ export function createRgui(
 
   /** resize-grip hit-test: bottom-right corner, ~10px screen radius */
   function gripHitAt(sx: number, sy: number): GraphNode | null {
-    for (const n of lastRg?.nodes ?? graph.nodes) {
+    for (const n of lastRg?.nodes ?? dGraph.nodes) {
       const [px, py] = worldToScreenXY(n.x + n.w, n.y + nodeHeight(n));
       if (Math.hypot(px - sx, py - sy) <= 10) return n;
     }
@@ -764,7 +783,7 @@ export function createRgui(
 
   /** pin-glyph hit-test (screen ~9px around the glyph) */
   function pinHitAt(sx: number, sy: number): GraphNode | null {
-    for (const n of lastRg?.nodes ?? graph.nodes) {
+    for (const n of lastRg?.nodes ?? dGraph.nodes) {
       const [wx, wy] = pinPos(n);
       const [px, py] = worldToScreenXY(wx, wy);
       if (Math.hypot(px - sx, py - sy) <= 9) return n;
@@ -804,15 +823,17 @@ export function createRgui(
       return;
     }
     // bottom-right grip starts a resize
-    const gripNode = gripHitAt(vx0, vy0);
+    const gripHit = gripHitAt(vx0, vy0);
+    const gripNode = gripHit && baseOf(gripHit);
     if (gripNode && !gripNode.pinned) {
       drag = { type: "resize", node: gripNode, moved: false };
       canvas.setPointerCapture(ev.pointerId);
       return;
     }
     // pin glyph toggles pinned state
-    const pinNode = pinHitAt(vx0, vy0);
-    if (pinNode) {
+    const pinHit = pinHitAt(vx0, vy0);
+    if (pinHit) {
+      const pinNode = baseOf(pinHit);
       pinNode.pinned = !pinNode.pinned;
       options.onPinChange?.(pinNode.id, !!pinNode.pinned);
       invalidate();
@@ -848,12 +869,14 @@ export function createRgui(
     }
     const [wx, wy] = screenToWorld(view, vx0, vy0);
     if (hit.type === "node") {
-      const n = hit.node;
+      const disp = hit.node; // display-space geometry
+      const n = baseOf(disp);
       drag = {
         type: "node",
         node: n,
-        dx: wx - n.x,
-        dy: wy - n.y,
+        // offsets measured against the DISPLAY rect the user grabbed
+        dx: wx - disp.x,
+        dy: wy - disp.y,
         downX: ev.offsetX,
         downY: ev.offsetY,
         moved: false,
@@ -906,12 +929,21 @@ export function createRgui(
         drag.toSy = vy0;
       } else if (drag.type === "node") {
         if (drag.node.pinned) return; // pinned nodes do not move
-        // 一格一物: overlap is not allowed — grid-snap first, then push out
-        // to flush contact against whatever the node would cover
+        // pointer works in DISPLAY space; un-project the target into base
+        // space, then apply 一格一物 (snap → flush push-out) as usual
+        const h0 = nodeHeight(drag.node);
+        const [tdx, tdy] = [snap(wx - drag.dx, step), snap(wy - drag.dy, step)];
+        const [bcx, bcy] = rotActive
+          ? unprojectWorldPt(
+              tdx + drag.node.w / 2,
+              tdy + h0 / 2,
+              drag.node.z ?? 0,
+            )
+          : ([tdx + drag.node.w / 2, tdy + h0 / 2] as const);
         const { x: nx, y: ny } = resolveOverlap(
           drag.node,
-          snap(wx - drag.dx, step),
-          snap(wy - drag.dy, step),
+          snap(bcx - drag.node.w / 2, step),
+          snap(bcy - h0 / 2, step),
           graph.nodes,
           { alignSnap: rule.alignSnapPx / view.k, direction: rule.direction },
         );
@@ -927,9 +959,15 @@ export function createRgui(
         const ddx = snap(wx - drag.wx, step);
         const ddy = snap(wy - drag.wy, step);
         if (ddx || ddy) {
-          for (const n of drag.pseudo.members) {
-            n.x += ddx;
-            n.y += ddy;
+          // display-space delta → base-space delta through the inverse map
+          const bdx = rotActive ? Ainv[0] * ddx + Ainv[1] * ddy : ddx;
+          const bdy = rotActive ? Ainv[2] * ddx + Ainv[3] * ddy : ddy;
+          for (const m of drag.pseudo.members) {
+            const n = baseOf(m);
+            n.x += bdx;
+            n.y += bdy;
+            m.x += ddx;
+            m.y += ddy;
             options.onNodeMove?.(n.id, { x: n.x, y: n.y });
           }
           drag.pseudo.cx += ddx;
@@ -995,7 +1033,7 @@ export function createRgui(
       const [wx0, wy0] = screenToWorld(view, Math.min(va0, va1), Math.min(vb0, vb1));
       const [wx1, wy1] = screenToWorld(view, Math.max(va0, va1), Math.max(vb0, vb1));
       const picked = new Set(
-        (lastRg?.nodes ?? graph.nodes)
+        (lastRg?.nodes ?? dGraph.nodes)
           .filter(
             (n) =>
               n.x < wx1 &&
@@ -1039,9 +1077,11 @@ export function createRgui(
         options.onNodeClick?.(drag.node.id, { x: ev.offsetX, y: ev.offsetY });
       }
     } else if (drag.type === "pseudo" && drag.moved) {
-      // pseudo drags report every member's final position
-      for (const n of drag.pseudo.members)
+      // pseudo drags report every member's final BASE position
+      for (const m of drag.pseudo.members) {
+        const n = baseOf(m);
         options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
+      }
     }
     drag = null;
     invalidate();
@@ -1136,13 +1176,12 @@ export function createRgui(
         zoomIdentity.translate(ox - wx * k, oy - wy * k).scale(k),
       );
     } else {
-      // touchpad two-finger scroll pans both axes — deltas arrive in raw
-      // screen space, so map them through the inverse view matrix
-      const dx = Ainv[0] * ev.deltaX + Ainv[1] * ev.deltaY;
-      const dy = Ainv[2] * ev.deltaX + Ainv[3] * ev.deltaY;
+      // touchpad two-finger scroll pans both axes (view is always 2-D)
       sel.call(
         zoomBehavior.transform,
-        zoomIdentity.translate(view.x - dx, view.y - dy).scale(view.k),
+        zoomIdentity
+          .translate(view.x - ev.deltaX, view.y - ev.deltaY)
+          .scale(view.k),
       );
     }
   };
@@ -1346,8 +1385,8 @@ export function createRgui(
       invalidate();
     },
     portScreenPos(nodeId: string, portId: string, side: "in" | "out") {
-      const nodes = lastRg?.nodes ?? graph.nodes;
-      const layout = computePortLayout(graph, nodes, flushSegments(nodes));
+      const nodes = lastRg?.nodes ?? dGraph.nodes;
+      const layout = computePortLayout(dGraph, nodes, flushSegments(nodes));
       const pl = layout.get(`${nodeId}/${side}/${portId}`);
       if (!pl) return null;
       const [x, y] = fromView(...worldToScreenXY(pl.x, pl.y));
@@ -1357,7 +1396,7 @@ export function createRgui(
       from: { node: string; port: string };
       to: { node: string; port: string };
     }) {
-      const nodes = lastRg?.nodes ?? graph.nodes;
+      const nodes = lastRg?.nodes ?? dGraph.nodes;
       const segments = flushSegments(nodes);
       // dissolved into a seam (direct contact) → not drawn as a wire
       if (
