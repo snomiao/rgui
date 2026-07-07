@@ -341,10 +341,17 @@ export function createRgui(
   function displayGraph(): Graph {
     if (!rotActive) return graph;
     displayNodes = new Map();
+    // whatever the rotation, rendered cards sit on the MAIN visible grid:
+    // quantize each projected position to the nearest major grid point
+    const mainStep = gridLevels(view.k, rule.minGridPx, rule.ladder)[0]!.step;
     const nodes = graph.nodes.map((n) => {
       const h = nodeHeight(n);
       const [cx, cy] = projectWorldPt(n.x + n.w / 2, n.y + h / 2, n.z ?? 0);
-      const clone = { ...n, x: cx - n.w / 2, y: cy - h / 2 };
+      const clone = {
+        ...n,
+        x: snap(cx - n.w / 2, mainStep),
+        y: snap(cy - h / 2, mainStep),
+      };
       displayNodes.set(n.id, clone);
       return clone;
     });
@@ -899,8 +906,9 @@ export function createRgui(
     }
     if (drag) {
       const [wx, wy] = screenToWorld(view, vx0, vy0);
-      // rg-ui: every element snaps to the minor readable grid → dense layouts
-      const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[1]!.step;
+      // rg-ui: whatever the zoom or rotation, everything snaps to the MAIN
+      // visible grid — the dots the user can actually see
+      const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[0]!.step;
       if (drag.type === "resize") {
         const n = drag.node;
         // grid-snap the corner, respect minimums, stop at neighbors
