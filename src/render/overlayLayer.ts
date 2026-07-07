@@ -26,15 +26,18 @@ export interface NodeHtmlOverlay {
   offset?: { x: number; y: number };
   /**
    * "fixed" (default): screen-constant size, position glued to the node.
-   * "zoom": the element scales with view.k like part of the node — lay it
-   * out for k=1 (world units); it shrinks/grows with zoom and the
-   * readability rule still auto-hides it when too small.
+   * "zoom": scales with view.k like part of the node (lay out for k=1).
+   * "fit": rgui measures the element's natural size and applies
+   *   scale = min(1, node screen area / natural size) — the control always
+   *   fits the node's on-screen area, whatever the node type's size.
+   * In zoom/fit modes, when the applied scale drops below `minScale` the
+   * overlay hides and the native/summarized content takes over.
    */
-  scale?: "fixed" | "zoom";
+  scale?: "fixed" | "zoom" | "fit";
   /**
-   * zoom mode only: hide when view.k drops below this (default 0.75) —
-   * a scaled-down control that can't be read must yield to the native
-   * summary. Hide always wins over scaling.
+   * zoom/fit modes: hide when the applied scale drops below this
+   * (default 0.75) — an unreadable control yields to the summary.
+   * Hide always wins over scaling.
    */
   minScale?: number;
   /**
@@ -199,11 +202,29 @@ export function createOverlayManager(
       const y0 = n.y * k + view.y;
       const x1 = (n.x + n.w) * k + view.x;
       const y1 = (n.y + h) * k + view.y;
-      // readability gate: zoom-scaled controls hide below their readable
-      // scale; fixed overlays follow the node's field readability
+      // applied scale: zoom follows view.k; fit measures the element and
+      // fills the node's screen area (never upscaling past natural size)
+      const el = m.ov.el;
+      let applied = 1;
+      if (m.ov.scale === "zoom") {
+        applied = k;
+      } else if (m.ov.scale === "fit") {
+        const nw = el.offsetWidth || 1;
+        const nh = el.offsetHeight || 1;
+        const anchor0 = m.ov.anchor ?? "right";
+        applied =
+          anchor0 === "over"
+            ? Math.min(1, (x1 - x0) / nw, (y1 - y0) / nh)
+            : anchor0 === "right"
+              ? Math.min(1, (y1 - y0) / nh)
+              : Math.min(1, (x1 - x0) / nw);
+      }
+      // readability gate: scaled controls hide below their readable scale
+      // (hide wins over scaling → the summarized content takes over);
+      // fixed overlays follow the node's field readability
       const readable =
-        m.ov.scale === "zoom"
-          ? k >= (m.ov.minScale ?? 0.75)
+        m.ov.scale === "zoom" || m.ov.scale === "fit"
+          ? applied >= (m.ov.minScale ?? 0.75)
           : NODE_ROW_H * k >= rule.fieldMinPx;
       const offscreen = x1 < 0 || y1 < 0 || x0 > W || y0 > H;
       const show = visible.has(id) && readable && !offscreen;
@@ -217,16 +238,16 @@ export function createOverlayManager(
           : anchor === "below"
             ? { x: 0, y: 8 }
             : { x: 0, y: 0 });
-      const zoomed = m.ov.scale === "zoom";
-      // zoom mode: offsets are world units and the element scales with k,
-      // anchored at its top-left (origin 0 0)
-      const dx = zoomed ? d.x * k : d.x;
-      const dy = zoomed ? d.y * k : d.y;
+      const scaled = m.ov.scale === "zoom" || m.ov.scale === "fit";
+      // scaled modes: offsets belong to the node's local layout, so they
+      // scale with the element; anchored at its top-left (origin 0 0)
+      const dx = scaled ? d.x * applied : d.x;
+      const dy = scaled ? d.y * applied : d.y;
       const tx = anchor === "right" ? x1 + dx : x0 + dx;
       const ty = anchor === "below" ? y1 + dy : y0 + dy;
       m.wrap.style.transformOrigin = "0 0";
-      m.wrap.style.transform = zoomed
-        ? `translate(${tx}px, ${ty}px) scale(${k})`
+      m.wrap.style.transform = scaled
+        ? `translate(${tx}px, ${ty}px) scale(${applied})`
         : `translate(${tx}px, ${ty}px)`;
       m.wrap.style.zIndex = String(z++);
     }
