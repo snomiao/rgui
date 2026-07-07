@@ -72,6 +72,8 @@ export function createOverlayManager(
      * NOT forwarded when an inner scrollable element can still consume it.
      */
     forwardWheelTo?: HTMLElement;
+    /** map view-space anchor points to raw screen (viewport rotation) */
+    transformPoint?: (x: number, y: number) => readonly [number, number];
   },
 ): OverlayManager {
   let layer: HTMLDivElement | null = null;
@@ -243,8 +245,9 @@ export function createOverlayManager(
       // scale with the element; anchored at its top-left (origin 0 0)
       const dx = scaled ? d.x * applied : d.x;
       const dy = scaled ? d.y * applied : d.y;
-      const tx = anchor === "right" ? x1 + dx : x0 + dx;
-      const ty = anchor === "below" ? y1 + dy : y0 + dy;
+      let tx = anchor === "right" ? x1 + dx : x0 + dx;
+      let ty = anchor === "below" ? y1 + dy : y0 + dy;
+      if (opts?.transformPoint) [tx, ty] = opts.transformPoint(tx, ty);
       m.wrap.style.transformOrigin = "0 0";
       m.wrap.style.transform = scaled
         ? `translate(${tx}px, ${ty}px) scale(${applied})`

@@ -719,6 +719,7 @@ export function offscreenIndicators(
   rg: RenderGraph,
   size: { width: number; height: number },
   rule: RgRule = DEFAULT_RULE,
+  mapPoint?: (x: number, y: number) => readonly [number, number],
 ): OffscreenIndicator[] {
   const { width: W, height: H } = size;
   const m = 18; // edge inset for the markers
@@ -733,18 +734,28 @@ export function offscreenIndicators(
     y1: number,
     color: string,
   ) => {
-    if (x1 < 0 || x0 > W || y1 < 0 || y0 > H) {
-      const sx = (x0 + x1) / 2;
-      const sy = (y0 + y1) / 2;
+    // under viewport rotation, test the mapped center against the viewport
+    // grown by the rect's half-diagonal (a solid approximation)
+    let sx = (x0 + x1) / 2;
+    let sy = (y0 + y1) / 2;
+    let off = x1 < 0 || x0 > W || y1 < 0 || y0 > H;
+    if (mapPoint) {
+      [sx, sy] = mapPoint(sx, sy);
+      const hd = Math.hypot(x1 - x0, y1 - y0) / 2;
+      off = sx + hd < 0 || sx - hd > W || sy + hd < 0 || sy - hd > H;
+    }
+    if (off) {
       const ax = clamp(sx, m, W - m);
       const ay = clamp(sy, m, H - m);
+      const wx = (((x0 + x1) / 2) - t.x) / t.k;
+      const wy = (((y0 + y1) / 2) - t.y) / t.k;
       out.push({
         ax,
         ay,
         angle: Math.atan2(sy - ay, sx - ax),
         color,
-        cx: (sx - t.x) / t.k,
-        cy: (sy - t.y) / t.k,
+        cx: wx,
+        cy: wy,
       });
     }
   };
@@ -775,8 +786,9 @@ export function drawOffscreenIndicators(
   rg: RenderGraph,
   size: { width: number; height: number },
   rule: RgRule = DEFAULT_RULE,
+  mapPoint?: (x: number, y: number) => readonly [number, number],
 ): OffscreenIndicator[] {
-  const items = offscreenIndicators(t, rg, size, rule);
+  const items = offscreenIndicators(t, rg, size, rule, mapPoint);
   for (const it of items) {
     ctx.save();
     ctx.translate(it.ax, it.ay);

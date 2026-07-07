@@ -20,7 +20,10 @@ const STRIDE = 8;
 const WGSL = /* wgsl */ `
 struct Uniforms {
   resolution: vec2f, // CSS px
-  _pad: vec2f,
+  zdir: f32,         // field-arrow z: +1 = at viewer (⊙ purple), -1 = away (⊗ gold cross)
+  _pad: f32,
+  rot: vec2f,        // cos/sin of the viewport rotation (about center)
+  _pad2: vec2f,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -30,14 +33,19 @@ struct Inst {
   @location(2) tail: vec2f,     // tail vector (px), 0 = none
 };
 
-fn toNdc(p: vec2f) -> vec4f {
+fn toNdc(p0: vec2f) -> vec4f {
+  // rotate about the viewport center, then normalize
+  let c = u.resolution * 0.5;
+  let d = p0 - c;
+  let p = c + vec2f(d.x * u.rot.x - d.y * u.rot.y, d.x * u.rot.y + d.y * u.rot.x);
   let ndc = p / u.resolution * 2.0 - 1.0;
   return vec4f(ndc.x, -ndc.y, 0.0, 1.0);
 }
 
-const GOLD = vec3f(1.0, 0.839, 0.039); // #ffd60a
+const GOLD = vec3f(1.0, 0.839, 0.039);   // #ffd60a — arrows into the screen
+const PURPLE = vec3f(0.698, 0.361, 0.878); // #b25ce0 — arrows at the viewer
 
-// --- dots: instanced quad, SDF circle --------------------------------------
+// --- field arrows: instanced quad; SDF circle (⊙) or cross (⊗) --------------
 struct DotOut {
   @builtin(position) pos: vec4f,
   @location(0) local: vec2f,
@@ -50,7 +58,7 @@ fn dotVert(@builtin(vertex_index) vi: u32, in: Inst) -> DotOut {
     select(-1.0, 1.0, (vi & 1u) == 1u),
     select(-1.0, 1.0, (vi >> 1u) == 1u),
   );
-  let ext = in.rAlpha.x + 1.0; // 1px feather
+  let ext = in.rAlpha.x * 1.6 + 1.0; // room for the cross arms + 1px feather
   var out: DotOut;
   out.pos = toNdc(in.center + corner * ext);
   out.local = corner * ext;
@@ -61,8 +69,23 @@ fn dotVert(@builtin(vertex_index) vi: u32, in: Inst) -> DotOut {
 @fragment
 fn dotFrag(in: DotOut) -> @location(0) vec4f {
   let d = length(in.local);
-  let a = in.rAlpha.y * (1.0 - smoothstep(in.rAlpha.x - 0.5, in.rAlpha.x + 0.5, d));
-  return vec4f(GOLD * a, a); // premultiplied
+  var a: f32;
+  if (u.zdir >= 0.0) {
+    // ⊙ arrowhead seen head-on: filled circle
+    a = in.rAlpha.y * (1.0 - smoothstep(in.rAlpha.x - 0.5, in.rAlpha.x + 0.5, d));
+  } else {
+    // ⊗ fletching seen from behind: diagonal cross
+    let arm = min(
+      abs(in.local.x - in.local.y),
+      abs(in.local.x + in.local.y),
+    ) * 0.7071;
+    let reach = in.rAlpha.x * 1.4;
+    a = in.rAlpha.y
+      * (1.0 - smoothstep(0.5, 1.0, arm))
+      * (1.0 - smoothstep(reach - 0.5, reach + 0.5, d));
+  }
+  let col = select(GOLD, PURPLE, u.zdir >= 0.0);
+  return vec4f(col * a, a); // premultiplied
 }
 
 // --- tails: instanced quad along the field vector ---------------------------
@@ -91,7 +114,8 @@ fn tailVert(@builtin(vertex_index) vi: u32, in: Inst) -> TailOut {
 
 @fragment
 fn tailFrag(in: TailOut) -> @location(0) vec4f {
-  return vec4f(GOLD * in.alpha, in.alpha);
+  let col = select(GOLD, PURPLE, u.zdir >= 0.0);
+  return vec4f(col * in.alpha, in.alpha);
 }
 `;
 
@@ -107,6 +131,9 @@ export function createWebGPUGridRenderer(
   canvas: HTMLCanvasElement,
   rule: RgRule = DEFAULT_RULE,
   field?: () => FieldSource[],
+  /** z of the field arrows: +1 = at the viewer (⊙), -1 = into the screen (⊗) */
+  zDir?: () => number,
+  getAngle?: () => number,
 ): WebGPUGridRenderer {
   let device: GPUDevice | null = null;
   let ctx: GPUCanvasContext | null = null;
@@ -147,7 +174,7 @@ export function createWebGPUGridRenderer(
         entries: [
           {
             binding: 0,
-            visibility: GPUShaderStage.VERTEX,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
             buffer: { type: "uniform" },
           },
         ],
@@ -184,7 +211,7 @@ export function createWebGPUGridRenderer(
       dots = mk("dotVert", "dotFrag");
       tails = mk("tailVert", "tailFrag");
       uniformBuf = device.createBuffer({
-        size: 16,
+        size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       bind = device.createBindGroup({
@@ -207,13 +234,20 @@ export function createWebGPUGridRenderer(
       y: a.y * t.k + t.y,
     }));
     const out: number[] = [];
+    // rotated viewport → cover the half-diagonal AABB so corners stay filled
+    const rot = getAngle?.() ?? 0;
+    const hd = rot ? Math.hypot(width, height) / 2 : 0;
+    const bx0 = rot ? width / 2 - hd : 0;
+    const bx1 = rot ? width / 2 + hd : width;
+    const by0 = rot ? height / 2 - hd : 0;
+    const by1 = rot ? height / 2 + hd : height;
     for (const level of [...levels].reverse()) {
       if (level.alpha <= 0.01) continue;
       const major = level.step === levels[0]!.step;
       const r = major ? 2.5 : 1.5;
       const alpha = level.alpha * (major ? 0.55 : 0.3);
-      const { start: x0, end: x1 } = gridRange(t, 0, width, t.x, level.step);
-      const { start: y0, end: y1 } = gridRange(t, 0, height, t.y, level.step);
+      const { start: x0, end: x1 } = gridRange(t, bx0, bx1, t.x, level.step);
+      const { start: y0, end: y1 } = gridRange(t, by0, by1, t.y, level.step);
       for (let wx = x0; wx <= x1; wx += level.step) {
         const sx = wx * t.k + t.x;
         for (let wy = y0; wy <= y1; wy += level.step) {
@@ -261,10 +295,21 @@ export function createWebGPUGridRenderer(
       });
     }
     if (count) device.queue.writeBuffer(instBuf, 0, data);
+    const z = Math.max(-1, Math.min(1, zDir?.() ?? 1));
+    const ang = getAngle?.() ?? 0;
     device.queue.writeBuffer(
       uniformBuf,
       0,
-      new Float32Array([width, height, 0, 0]),
+      new Float32Array([
+        width,
+        height,
+        z,
+        0,
+        Math.cos(ang),
+        Math.sin(ang),
+        0,
+        0,
+      ]),
     );
 
     const enc = device.createCommandEncoder();
