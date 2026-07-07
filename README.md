@@ -21,10 +21,12 @@ behind the same interface next. The only runtime dependencies are `d3-zoom` and 
 rgui is a framework-agnostic library that carries one principle through the whole UI:
 the **readable grid**. The principle reduces to two rules.
 
-1. **Every element snaps to a screen-adaptive readable grid.** The major grid spacing is
-   continuously re-chosen on a 1-2-5 ladder so that it always keeps a constant readable pixel
-   width, and nodes and ports snap to the finest grid. However far you zoom in or out, the
-   spacing between elements never leaves "readable density".
+1. **Every element snaps to a screen-adaptive, radix-layered grid.** Grid scales are powers
+   of a configurable radix (default 8): one higher-order cell spans radix sub-steps per axis.
+   The major spacing is continuously re-chosen so it always keeps a readable pixel width, and
+   **sizes obey the node-size law**: a node spans an integer 1..radix grids at *some* layer —
+   needing more promotes it to the next layer, snapped up (9 grids at layer *s* → 2 grids at
+   layer *s+1*). Positions snap to the finer of the visible grid and the node's own layer.
 2. **The view is readable at every zoom — because zoom is a renormalization-group flow.**
    The moment an element can no longer be drawn readably at the current scale, it does not
    vanish; it is replaced by a readable abstraction. This is semantic-zoom LOD: just before
@@ -61,16 +63,17 @@ const graph: Graph = {
       id: "src",
       title: "Camera",
       category: "source",
-      x: -240, y: -80, w: 200,
+      x: -256, y: -64, w: 256, h: 128, // on the radix-8 lattice (64 wu at k=1)
       inputs: [],
       outputs: [{ id: "image", label: "image", kind: "image" }],
       fields: [["device", "Default camera"]],
+      fieldRules: { device: "set" }, // how this field MERGES when renormalized
     },
     {
       id: "sink",
       title: "Vision model",
       category: "model",
-      x: 80, y: -80, w: 220,
+      x: 64, y: -64, w: 256, h: 128,
       inputs: [{ id: "image", label: "image", kind: "image" }],
       outputs: [{ id: "labels", label: "labels", kind: "text" }],
       fields: [["model", "YOLOS-tiny"]],
@@ -106,17 +109,50 @@ partial object as `options.rule`; unspecified fields fall back to the defaults.
 | Property | Default | Meaning |
 | --- | --- | --- |
 | `minGridPx` | `48` | Minimum on-screen spacing of major grid points (px). The basis of the readable grid. |
-| `ladder` | `[1, 2, 5]` | Step ladder within a decade. Must be ascending divisors of 10. |
+| `radix` | `8` | Grid layers are radixⁿ; one higher-order cell spans radix sub-steps per axis. 4/5/8/10/16… |
 | `collapsePx` | `56` | A node collapses into a pseudo-node when its screen height falls below this (px). |
+| `collapseSnappedPx` | `84` | Members of a flush-snapped stack collapse earlier (snap beats location) — and the whole stack RGs together. |
 | `fieldMinPx` | `9` | Hide a node's field text when the row height falls below this (px). |
 | `portLabelMinPx` | `6` | Hide port labels when the row height falls below this (px). |
 | `clusterGapPx` | `24` | Screen-space gap budget for position-based cluster merging (px). |
 | `clusterGapConnectedPx` | `40` | Connected nodes merge across a larger gap (px). |
 | `pseudo` | `{ w: 200, headerH: 26, rowH: 18, pad: 8 }` | Pseudo-node screen dimensions in px (constant size on screen). |
 | `declutterMarginPx` | `10` | Minimum gap kept between pseudo-nodes after decluttering (px). |
+| `alignSnapPx` | `40` | Snap-align magnet: flush-snapping nodes align at the readable start point (tops / reading edge). |
+| `direction` | `"ltr"` | Reading direction — decides the vertical-snap alignment edge. |
+| `portShape` | `"chevron"` | Ports read the data flow (inputs point in, outputs out); `"dot"` restores circles. |
 
 `DEFAULT_RULE` and `resolveRule(partial)` are exported so you can inspect the defaults or
 resolve partial rules independently.
+
+## The rules of the canvas
+
+Everything above zoom is governed by a small set of composable laws:
+
+- **One cell, one thing (一格一物)** — rendered overlap is never allowed: a dragged (or
+  projected) node that would cover another pushes out to flush contact instead.
+- **Boundary dissolution (辺界消融)** — flush-contact edges fuse: the shared border, the
+  internal ports, and the wire between touching nodes dissolve; the connection condenses
+  into a flow chevron on the seam. Snapped nodes stay independent — drag one away to split.
+- **Snap beats location; stacks RG together** — a fused stack collapses earlier than loose
+  neighbors, and as one unit: when any member crosses the threshold, the whole stack becomes
+  one block, sized as its members' enclosure (and itself an integer-grid citizen).
+- **Chain contraction** — interior nodes of a linear chain (in/out degree 1) contract into a
+  compact `⋯ ×N` link while the endpoints stay, regardless of distance.
+- **Cascading RG** — if a merged block ends up overlapping anything, they merge too; the
+  build runs to a fixed point. Overlap cannot survive a frame.
+- **Data merges with structure** — field values aggregate under per-field rules (`max`,
+  `min`, `sum`, `mean`, `median`, `range`, `mode` 众数, `set` 集合, `same`, `any`/`all`,
+  `first`/`last`/`count`, or custom), declared on the node via `fieldRules`, on the host via
+  `fieldSummarize()`, or defaulting to mode. Booleans are ordered — OR ≡ max, AND ≡ min.
+  Advanced combinators: `ordered()` (severity/latest), `topK()` (histogram), `quantile()`.
+- **Selection is RG-level aware** — blocks containing selected members render selected;
+  zooming out and back restores the exact original multi-selection; modifying selection at
+  a higher level acts on the whole block. Double-click selects a snapped stack.
+- **3-D billboard position space** — `viewer.setRotation3({yaw, pitch, roll})` rotates node
+  *positions* in 3-D (plus `GraphNode.z` depth) while every node renders as an upright 2-D
+  card; the view stays strictly 2-D and all the laws above keep holding. The background
+  field arrows lean with the rotation (180° shows the field pointing away: gold crosses).
 
 ## API overview
 
@@ -124,21 +160,36 @@ The default export is `createRgui` (alias `rgui`). Named exports additionally ex
 math, model, and rendering pieces for standalone use without building the full UI. Everything
 is framework-agnostic pure functions and plain data.
 
-- **High level**: `createRgui`, types `Rgui`, `RguiOptions`
-- **Grid math** (`core/grid`): `readableStep`, `gridLevels`, `finerStep`, `gridRange`, `snap`, `worldToScreen`, `screenToWorld`, types `ViewTransform`, `GridLevel`
+- **High level**: `createRgui` — interaction callbacks (`onNodeMove(End)`, `onConnect` +
+  `isValidConnection`, `onNodeClick`/`onNodeContextMenu`, `onEdgeClick`/`onEdgeContextMenu`,
+  `onConnectEnd`, `onSelectionChange`, `onPinChange`, `onNodeResize(End)`,
+  `onCanvasContextMenu`), viewer methods (`setGraph`, `snapGraph`, `autoLayout`, `fitView`,
+  `setView`, `setRotation3`, `setSelection`, `setPanels`, `setNodeOverlay`, `resizeNode`,
+  `setTheme`, e2e accessors `portScreenPos`/`edgeMidScreen`), options (`rule`, `summarize`,
+  `panels`, `input: "figma" | "classic"`, `renderer: "auto" | "canvas2d" | "webgpu"`,
+  `maxDpr`, `background`, `theme`)
+- **Grid math** (`core/grid`): `readableStep`, `gridLevels`, `finerStep`, `gridRange`,
+  `snap`, `snapSizeRadix`, `sizeLayerStep`, `worldToScreen`, `screenToWorld`
 - **Rules** (`core/rule`): `DEFAULT_RULE`, `resolveRule`, type `RgRule`
-- **Graph model** (`core/graph`): `demoGraph`, `nodeHeight`, `inputPortPos`, `outputPortPos`, constants `NODE_HEADER_H` / `NODE_ROW_H` / `NODE_PAD` / `PORT_R`, types `Graph`, `GraphNode`, `Edge`, `Port`, `SignalKind`, `NodeCategory`
-- **Semantic-zoom LOD** (`core/lod`): `buildRenderGraph`, `pseudoRect`, `pseudoPortPos`, `endpointPos`, types `RenderGraph`, `PseudoNode`, `RenderEdge`, `EndpointRef`
-- **Renderer** (`render`): `createCanvas2DRenderer`, `createGridDotsLayer`, `gridDotsLayer`, `drawGraph`, `KIND_COLOR`, types `DrawLayer`, `GridRenderer`
+- **Graph model** (`core/graph`): `demoGraph`, `nodeHeight`, `bodyRect`, port positions,
+  types `Graph`, `GraphNode` (incl. `z`, `pinned`, `fieldRules`, `body`, `draw`, `overlay`)
+- **Semantic-zoom LOD** (`core/lod`): `buildRenderGraph`, `pseudoRect`, `pseudoPortPos`
+- **Packing** (`core/pack`): `resolveOverlap`, `flushSegments`, `flushComponents`,
+  `computePortLayout`, `clampSize`
+- **Data merge** (`core/aggregate`): `aggregate`, `fieldSummarize`, `defaultSummarize`,
+  `ordered`, `topK`, `quantile`, type `MergeRule`
+- **Layout** (`core/layout`): `layoutGraph`
+- **Renderers** (`render`): Canvas 2D layers, `createWebGPUGridRenderer` (grid underlay),
+  panels (`panelLayout`/`drawPanels`), HTML overlays (`createOverlayManager`), `KIND_COLOR`
 
 TypeScript type definitions are bundled. To read the source directly, the raw TypeScript is
 available from the `@snomiao/rgui/src` subpath.
 
 ## Roadmap
 
-- **WebGPU renderer** — a drop-in rendering backend behind the same interface as the current Canvas 2D.
-- **Auto layout** — initial placement and re-layout of node graphs.
-- Richer LOD merging strategies and scaling to much larger graphs.
+- **WebGPU** — the grid/field underlay already renders on WebGPU (`renderer: "auto"`, with a
+  quiet canvas2d fallback); wires and node blocks move behind the same seam next.
+- Scaling the LOD pipeline to much larger graphs (spatial indexing).
 - i18n for docs (English-first for now).
 
 ## Mascot — Royal Gramma

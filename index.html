@@ -10,13 +10,46 @@
       name="description"
       content="rgui — a framework-agnostic readable-grid UI library. Zoom is a renormalization-group flow: at every scale, only the relevant couplings survive."
     />
+    <script>
+      // set the theme BEFORE first paint (no flash): saved choice, else OS
+      document.documentElement.dataset.theme =
+        localStorage.getItem("rgui-theme") ??
+        (matchMedia("(prefers-color-scheme: light)").matches
+          ? "light"
+          : "dark");
+    </script>
     <style>
+      /* page chrome palette — the canvas side lives in src/core/theme.ts */
+      :root {
+        --bg: #1c2126;
+        --text: #e6e9ec;
+        --text-dim: #aeb6bf;
+        --text-muted: #8b949e;
+        --text-faint: #5c6570;
+        --border: #3a4048;
+        --panel: rgba(20, 22, 26, 0.85);
+        --panel-strong: rgba(20, 22, 26, 0.9);
+        --accent: #ffd60a;
+        --hero-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+      }
+      :root[data-theme="light"] {
+        --bg: #f3f1ea;
+        --text: #22262b;
+        --text-dim: #4c545c;
+        --text-muted: #69737d;
+        --text-faint: #98a1aa;
+        --border: #cfc9bc;
+        --panel: rgba(252, 251, 247, 0.88);
+        --panel-strong: rgba(252, 251, 247, 0.92);
+        --accent: #c8860a;
+        --hero-shadow: 0 1px 6px rgba(255, 255, 255, 0.65);
+      }
       html,
       body {
         margin: 0;
         height: 100%;
         overflow: hidden;
-        background: #1c2126;
+        background: var(--bg);
       }
       #viewer {
         position: relative;
@@ -32,17 +65,17 @@
         top: 8px;
         left: 8px;
         padding: 6px 8px;
-        background: rgba(20, 22, 26, 0.85);
-        border: 1px solid #3a4048;
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: 4px;
-        color: #e6e9ec;
+        color: var(--text);
         font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
         white-space: pre;
         pointer-events: none;
         user-select: none;
       }
-      #debug .dim { color: #8b949e; }
-      #debug .hi { color: #ffd60a; }
+      #debug .dim { color: var(--text-muted); }
+      #debug .hi { color: var(--accent); }
 
       /* ── Hero overlay ─────────────────────────────────────────────
          Sits on top of the live rgui canvas without stealing pointer
@@ -64,8 +97,8 @@
         user-select: none;
         text-align: center;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        color: #e6e9ec;
-        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+        color: var(--text);
+        text-shadow: var(--hero-shadow);
       }
       #hero .title {
         margin: 0;
@@ -91,7 +124,7 @@
       #hero .title::after {
         content: "·rg";
         font-size: 0.28em;
-        color: #8b949e;
+        color: var(--text-muted);
         vertical-align: super;
         letter-spacing: 0;
       }
@@ -103,7 +136,7 @@
         font-size: clamp(15px, 3.6vw, 30px);
         font-weight: 600;
         letter-spacing: 0.02em;
-        color: #e6e9ec;
+        color: var(--text);
       }
       #hero .subtitle .word {
         display: inline-block;
@@ -124,10 +157,10 @@
         margin: 4px 0 0;
         font-size: clamp(12px, 2vw, 16px);
         line-height: 1.6;
-        color: #aeb6bf;
+        color: var(--text-dim);
         font-weight: 400;
       }
-      #hero .tagline b { color: #ffd60a; font-weight: 600; }
+      #hero .tagline b { color: var(--accent); font-weight: 600; }
       #hero .links {
         display: flex;
         gap: 14px;
@@ -141,29 +174,52 @@
         align-items: center;
         gap: 6px;
         padding: 8px 16px;
-        border: 1px solid #3a4048;
+        border: 1px solid var(--border);
         border-radius: 6px;
-        background: rgba(20, 22, 26, 0.7);
+        background: var(--panel);
         /* backdrop-filter removed: re-blurs every frame over a live canvas */
-        color: #e6e9ec;
+        color: var(--text);
         text-decoration: none;
         font-size: 14px;
         font-weight: 600;
         transition: border-color 120ms, color 120ms, background 120ms;
       }
       #hero .links a:hover {
-        border-color: #ffd60a;
-        color: #ffd60a;
-        background: rgba(20, 22, 26, 0.9);
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--panel-strong);
       }
       #hero .hint {
         margin-top: 2px;
         font-size: 11px;
-        color: #5c6570;
+        color: var(--text-faint);
         letter-spacing: 0.04em;
       }
       @media (prefers-reduced-motion: reduce) {
         #hero .subtitle .word.flash { animation: none; }
+      }
+
+      /* light/dark toggle — flips page vars AND viewer.setTheme() */
+      #theme-toggle {
+        position: fixed;
+        top: 10px;
+        right: 12px;
+        z-index: 40;
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--border);
+        border-radius: 50%;
+        background: var(--panel);
+        color: var(--text-dim);
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+        transition: border-color 120ms, color 120ms, transform 120ms;
+      }
+      #theme-toggle:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        transform: rotate(-15deg);
       }
     </style>
   </head>
@@ -184,10 +240,11 @@
           npm · @snomiao/rgui ↗
         </a>
       </nav>
-      <div class="hint">drag · scroll to zoom · the graph is live behind this</div>
+      <div class="hint">drag = select · two-finger = pan · pinch = zoom · space+drag = pan · drag the cube to rotate — the graph is live</div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/theme-toggle.ts"></script>
     <script type="module" src="/src/hero.ts"></script>
     <script type="module" src="/src/title.ts"></script>
     <script type="module" src="/src/cube.ts"></script>

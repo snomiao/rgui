@@ -75,7 +75,7 @@ cv.height = CSS * devicePixelRatio;
 cv.style.cssText = `width:${CSS}px;height:${CSS}px;`;
 const cap = document.createElement("div");
 cap.style.cssText =
-  "font:11px ui-monospace,monospace;color:#5c6570;letter-spacing:.06em;transition:color 150ms;";
+  "font:11px ui-monospace,monospace;color:var(--text-faint,#5c6570);letter-spacing:.06em;transition:color 150ms;";
 wrap.append(cv, cap);
 document.body.appendChild(wrap);
 const ctx = cv.getContext("2d")!;
@@ -94,8 +94,8 @@ function draw(tMs: number) {
   if (N !== lastN) {
     lastN = N;
     cap.textContent = `${N}³ block-spin · zoom to renormalize`;
-    cap.style.color = "#ffd60a";
-    setTimeout(() => (cap.style.color = "#5c6570"), 400);
+    cap.style.color = "var(--accent, #ffd60a)";
+    setTimeout(() => (cap.style.color = "var(--text-faint, #5c6570)"), 400);
   }
   // gizmo contract: when the viewer has a 3-D orientation, the cube SHOWS
   // it (drag the cube → the canvas and the cube rotate together); otherwise
