@@ -1,0 +1,43 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # semantic-release: tags + GitHub releases
+  issues: write # semantic-release: comment on released issues
+  pull-requests: write # semantic-release: comment on released PRs
+  id-token: write # npm OIDC trusted publishing (no NPM_TOKEN)
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # semantic-release needs full history + tags
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # npm >= 11.5.1 required for OIDC trusted publishing
+
+      - run: bun install --frozen-lockfile
+
+      - run: bunx tsgo --noEmit
+      - run: bun test
+      - run: bun run build:lib
+
+      - name: semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # no NPM_TOKEN on purpose — npm auth comes from the OIDC exchange
+        run: npx --yes semantic-release
