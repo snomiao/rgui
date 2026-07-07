@@ -21,6 +21,7 @@ import {
   type Port,
 } from "./graph.js";
 import { flushSegments } from "./pack.js";
+import { gridLevels, snap } from "./grid.js";
 import { DEFAULT_RULE, type RgRule } from "./rule.js";
 
 export interface PseudoNode {
@@ -279,6 +280,15 @@ export function buildRenderGraph(
   }
 
   const pseudo = collapsed;
+  // higher-order nodes sit on the higher-order lattice: snap each merged
+  // box to the CURRENT main grid step (declutter afterwards — contact
+  // beats grid, exactly like drags)
+  const mainStep = gridLevels(k, rule.minGridPx, rule.ladder)[0]!.step;
+  for (const p of pseudo) {
+    const r = pseudoRect(p, k, rule);
+    p.cx += snap(r.x, mainStep) - r.x;
+    p.cy += snap(r.y, mainStep) - r.y;
+  }
   const expanded = graph.nodes.filter((n) => !nodeToPseudo.has(n.id));
   declutter(pseudo, k, rule, expanded);
 
