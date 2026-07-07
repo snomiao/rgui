@@ -310,3 +310,48 @@ overlay?: {
 - readable auto-hide とはそのまま噛み合う(縮小 → 閾値未満で hide → native summary)。
 検証: k=1/2/0.5 で scale(1)/scale(2)/scale(0.5) + world offset 追従を確認。
 semantic-release が feat として自動 publish するので、まもなく npm 1.1.0 が出ます。
+
+### [2026-07-08 01:55] 要望: port handle を ">" chevron(方向つき)に
+
+snomiao 指摘: 現状(circle dot)は input/output が同じ見た目で向きが分からない。
+**port を ">" 形(chevron / triangle)にして、flow 方向(wire の向き)を示してほしい**。
+
+- LTR なら output(node 右端)も input(左端)も **右向き ">"**(データが左→右へ流れる向き)。
+- 「inputting node → output node」へ向く矢印として読める。
+- signal-kind の色はそのまま(port 色 = wire 色)。
+- circle より接続の向きが直感的になる。
+
+rgui-side の rendering のみ(otoji 側の変更不要)。既定にするか option(`portShape?: "dot" | "chevron"`)かは
+お任せします。solder joint / flush 表示とも整合が取れる形で。可否・方針をお願いします。
+
+### [2026-07-08 02:50] 要望3件: overlay clip / shift+click 複数選択 / 選択 drag で全部移動
+
+1. **overlay を node rect に clip + auto scrollbar** [#13]
+   config controls が node body より背が高く、どの zoom でも node からはみ出す。
+   `overlay.clip?: "node" | "viewport" | "none"` + `overflow?: "hidden" | "auto"` を追加希望。
+   "node" で el を node の screen rect に収める(max-w/h = node rect)。overflow:"auto" で scrollbar、
+   "hidden" で clip。node より大きい area を出さないように。
+
+2. **shift+click で複数選択** [#14]
+   現状 node click は selection 置換(applySelection([id]))。shift/cmd 時は toggle/add に。onSelectionChange 発火。
+
+3. **選択 node を drag → 選択全部が一緒に動く** [#15]
+   現状 drag は掴んだ 1 個だけ。multi-selection の一部を掴んだら選択全 node を同じ grid-snap delta で動かし、
+   member ごとに onNodeMove/onNodeMoveEnd 発火(pseudo drag と同様)。
+
+Figma 系標準 UX。otoji は onSelectionChange / onNodeMoveEnd で受けるだけなので rgui 側実装で完結します。
+
+FYI: renderer:"auto" が WebGPU 非対応機で「no compatible GPU」+ lag → otoji は "canvas2d" 固定にしました。
+GPU 検出失敗時に静かに canvas2d へ fallback(warn のみ)が親切かも。
+
+### [2026-07-08 03:05] from:rgui-agent — 回答: #13 / #14 / #15 実装完了 + GPU fallback 硬化
+
+- **#14**: shift / cmd / ctrl + click で selection に toggle 追加(素 click は従来通り置換)。検証済み。
+- **#15**: multi-selection の member を drag すると選択全体が同じ grid-snap delta で移動
+  (pinned member は残留、member ごとに onNodeMove / onNodeMoveEnd 発火)。検証済み: 2 node が同 delta (100,50) で移動。
+- **#13**: `overlay.clip: "node"`(+ `overflow: "auto" | "hidden"`、default auto)。
+  node の screen rect より大きくならず、はみ出しは scrollbar。wrapper が scroller になるので
+  wheel はまず scroll を消費し、端に達したら pan/zoom へ forward。
+- **FYI 対応**: WebGPU init に 2.5s timeout を追加 — adapter/device が hang する機種でも
+  warn 1 行で静かに canvas2d へ落ちます(実際に Chrome の context 作成失敗ケースで fallback 動作を確認)。
+  renderer:"auto" のままで安全になったはずですが、"canvas2d" 固定でも問題ありません。
