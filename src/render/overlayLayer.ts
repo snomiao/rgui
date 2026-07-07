@@ -19,8 +19,18 @@ export interface NodeHtmlOverlay {
   el: HTMLElement;
   /** where to glue relative to the node rect (default "right") */
   anchor?: "right" | "below" | "over";
-  /** screen-px offset from the anchor point */
+  /**
+   * offset from the anchor point — screen px in "fixed" mode, WORLD units
+   * in "zoom" mode (it belongs to the node's local layout, so it scales)
+   */
   offset?: { x: number; y: number };
+  /**
+   * "fixed" (default): screen-constant size, position glued to the node.
+   * "zoom": the element scales with view.k like part of the node — lay it
+   * out for k=1 (world units); it shrinks/grows with zoom and the
+   * readability rule still auto-hides it when too small.
+   */
+  scale?: "fixed" | "zoom";
   /**
    * pointer-events mode (default true). When true, only actual CONTROLS
    * inside the element receive pointer events (inputs, selects, buttons,
@@ -196,9 +206,17 @@ export function createOverlayManager(
           : anchor === "below"
             ? { x: 0, y: 8 }
             : { x: 0, y: 0 });
-      const tx = anchor === "right" ? x1 + d.x : x0 + d.x;
-      const ty = anchor === "below" ? y1 + d.y : y0 + d.y;
-      m.wrap.style.transform = `translate(${tx}px, ${ty}px)`;
+      const zoomed = m.ov.scale === "zoom";
+      // zoom mode: offsets are world units and the element scales with k,
+      // anchored at its top-left (origin 0 0)
+      const dx = zoomed ? d.x * k : d.x;
+      const dy = zoomed ? d.y * k : d.y;
+      const tx = anchor === "right" ? x1 + dx : x0 + dx;
+      const ty = anchor === "below" ? y1 + dy : y0 + dy;
+      m.wrap.style.transformOrigin = "0 0";
+      m.wrap.style.transform = zoomed
+        ? `translate(${tx}px, ${ty}px) scale(${k})`
+        : `translate(${tx}px, ${ty}px)`;
       m.wrap.style.zIndex = String(z++);
     }
   }
