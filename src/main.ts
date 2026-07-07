@@ -58,6 +58,7 @@ const viewer = rgui(canvas, {
   onEdgeContextMenu: (e) => console.log("[rgui] edgeMenu", e.from, e.to),
   onConnectEnd: (from, at) => console.log("[rgui] connectEnd", from, at.world),
   onNodeContextMenu: (id, at) => console.log("[rgui] context", id, at),
+  onCanvasContextMenu: (at, world) => console.log("[rgui] canvasMenu", at, world),
   onPinChange: (id, pinned) => console.log("[rgui] pin", id, pinned),
   panels: [
     {

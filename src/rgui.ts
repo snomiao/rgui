@@ -101,6 +101,18 @@ export interface RguiOptions {
    * click-to-add (Panel.onItemClick) and drag-onto-canvas (Panel.onItemDrop)
    */
   panels?: Panel[];
+  /** right-click (no drag) on empty canvas */
+  onCanvasContextMenu?: (
+    screen: { x: number; y: number },
+    world: { x: number; y: number },
+  ) => void;
+  /**
+   * input preset (default "figma"):
+   * - figma: 2-finger scroll = pan · pinch / ctrl+wheel / mouse wheel = zoom ·
+   *   plain or right drag on empty = box select · space+drag / middle drag = pan
+   * - classic: wheel = zoom · plain drag on empty = pan · shift+drag = box select
+   */
+  input?: "figma" | "classic";
   /** plain click on a wire */
   onEdgeClick?: (edge: Edge, screen: { x: number; y: number }) => void;
   /** right-click / context-menu on a wire */
@@ -453,7 +465,14 @@ export function createRgui(
       }
     | { type: "pseudo"; pseudo: PseudoNode; wx: number; wy: number; moved: boolean }
     | { type: "wire"; from: PortHit; toSx: number; toSy: number }
-    | { type: "marquee"; x0: number; y0: number; x1: number; y1: number }
+    | {
+        type: "marquee";
+        x0: number;
+        y0: number;
+        x1: number;
+        y1: number;
+        button: number;
+      }
     | { type: "resize"; node: GraphNode; moved: boolean }
     | {
         type: "panelItem";
@@ -526,6 +545,7 @@ export function createRgui(
   }
 
   const onPointerDown = (ev: PointerEvent) => {
+    if (spaceHeld && input === "figma") return; // space+drag = pan (d3 owns it)
     // panels are the topmost chrome
     const ph2 = panelHitAt(lastPanelRects, ev.offsetX, ev.offsetY);
     if (ph2) {
@@ -577,15 +597,20 @@ export function createRgui(
     }
     const hit = hitAt(ev.offsetX, ev.offsetY);
     if (!hit) {
-      emptyDown = { x: ev.offsetX, y: ev.offsetY };
-      if (ev.shiftKey) {
-        // box select
+      // figma preset: plain / right drag on empty = box select (space or
+      // middle button pans via d3); classic: shift+drag only
+      const marquee =
+        input === "figma"
+          ? !spaceHeld && (ev.button === 0 || ev.button === 2)
+          : ev.shiftKey;
+      if (marquee) {
         drag = {
           type: "marquee",
           x0: ev.offsetX,
           y0: ev.offsetY,
           x1: ev.offsetX,
           y1: ev.offsetY,
+          button: ev.button,
         };
         canvas.setPointerCapture(ev.pointerId);
       }
@@ -690,20 +715,10 @@ export function createRgui(
     invalidate();
   };
 
-  let emptyDown: { x: number; y: number } | null = null;
+  /** set when a right-button marquee actually moved (suppresses the menu) */
+  let rightDragMoved = false;
 
   const onPointerUp = (ev: PointerEvent) => {
-    if (!drag && emptyDown) {
-      // click (not pan) on empty canvas: wire click or clear selection
-      if (Math.hypot(ev.offsetX - emptyDown.x, ev.offsetY - emptyDown.y) < 4) {
-        const e = edgeAt(ev.offsetX, ev.offsetY);
-        if (e) options.onEdgeClick?.(e, { x: ev.offsetX, y: ev.offsetY });
-        else if (selection.size) applySelection(new Set());
-      }
-      emptyDown = null;
-      return;
-    }
-    emptyDown = null;
     if (!drag) return;
     if (drag.type === "resize") {
       if (drag.moved)
@@ -731,6 +746,21 @@ export function createRgui(
       return;
     }
     if (drag.type === "marquee") {
+      const moved =
+        Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) >= 4;
+      if (!moved) {
+        // empty-canvas CLICK: wire click, else clear selection; right-button
+        // click falls through to the contextmenu event
+        if (drag.button === 0) {
+          const e = edgeAt(ev.offsetX, ev.offsetY);
+          if (e) options.onEdgeClick?.(e, { x: ev.offsetX, y: ev.offsetY });
+          else if (selection.size) applySelection(new Set());
+        }
+        drag = null;
+        invalidate();
+        return;
+      }
+      if (drag.button === 2) rightDragMoved = true;
       const [wx0, wy0] = screenToWorld(view, Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1));
       const [wx1, wy1] = screenToWorld(view, Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1));
       const picked = new Set(
@@ -786,6 +816,12 @@ export function createRgui(
   };
 
   const onContextMenu = (ev: MouseEvent) => {
+    if (rightDragMoved) {
+      // a right-button box select just ended — not a menu
+      rightDragMoved = false;
+      ev.preventDefault();
+      return;
+    }
     const hit = hitAt(ev.offsetX, ev.offsetY);
     if (hit?.type === "node" && options.onNodeContextMenu) {
       ev.preventDefault();
@@ -795,11 +831,20 @@ export function createRgui(
       });
       return;
     }
-    if (!hit && options.onEdgeContextMenu) {
+    if (!hit) {
       const e = edgeAt(ev.offsetX, ev.offsetY);
-      if (e) {
+      if (e && options.onEdgeContextMenu) {
         ev.preventDefault();
         options.onEdgeContextMenu(e, { x: ev.offsetX, y: ev.offsetY });
+        return;
+      }
+      if (!e && options.onCanvasContextMenu) {
+        ev.preventDefault();
+        const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
+        options.onCanvasContextMenu(
+          { x: ev.offsetX, y: ev.offsetY },
+          { x: wx, y: wy },
+        );
       }
     }
   };
@@ -809,14 +854,73 @@ export function createRgui(
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("contextmenu", onContextMenu);
 
-  // --- pan / zoom (d3) ----------------------------------------------------
+  // --- pan / zoom (figma-style input by default) --------------------------
+
+  const input = options.input ?? "figma";
+  let spaceHeld = false;
+  const onKeyDown = (ev: KeyboardEvent) => {
+    if (ev.code === "Space" && !ev.repeat) {
+      const t = ev.target as HTMLElement | null;
+      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      spaceHeld = true;
+      canvas.style.cursor = "grab";
+    }
+  };
+  const onKeyUp = (ev: KeyboardEvent) => {
+    if (ev.code === "Space") spaceHeld = false;
+  };
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+
+  /** figma wheel: ctrl/pinch + discrete mouse wheel = zoom; 2-finger = pan */
+  const onWheel = (ev: WheelEvent) => {
+    if (input !== "figma") return; // classic: d3 handles wheel
+    ev.preventDefault();
+    const isZoom =
+      ev.ctrlKey || // pinch gesture or ctrl+wheel
+      ev.deltaMode !== 0 || // line/page mode = real mouse wheel
+      (ev.deltaX === 0 &&
+        Number.isInteger(ev.deltaY) &&
+        Math.abs(ev.deltaY) >= 50); // discrete integer steps = mouse wheel
+    if (isZoom) {
+      const factor = Math.exp(
+        -ev.deltaY * (ev.deltaMode === 0 ? 0.005 : 0.12) * (ev.ctrlKey ? 2 : 1),
+      );
+      const k = Math.min(1e6, Math.max(1e-6, view.k * factor));
+      // keep the world point under the cursor invariant
+      const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity
+          .translate(ev.offsetX - wx * k, ev.offsetY - wy * k)
+          .scale(k),
+      );
+    } else {
+      // touchpad two-finger scroll pans both axes
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity
+          .translate(view.x - ev.deltaX, view.y - ev.deltaY)
+          .scale(view.k),
+      );
+    }
+  };
+  canvas.addEventListener("wheel", onWheel, { passive: false });
 
   const zoomBehavior = zoom<HTMLCanvasElement, unknown>()
     .scaleExtent([1e-6, 1e6])
-    // let node drags win over panning; wheel-zoom always allowed
     .filter((ev: MouseEvent | WheelEvent) => {
-      if (ev.type === "wheel") return true;
+      if (ev.type === "wheel")
+        // figma: wheel fully custom (see onWheel); classic: d3 zooms
+        return input !== "figma";
       const me = ev as MouseEvent;
+      if (input === "figma" && me.type === "mousedown") {
+        // pan only via middle button or space+left-drag
+        if (me.button === 1) return true;
+        if (me.button === 0 && spaceHeld)
+          return !panelHitAt(lastPanelRects, me.offsetX, me.offsetY);
+        return false;
+      }
       if (me.shiftKey) return false; // shift+drag = box select
       if (indicatorAt(me.offsetX, me.offsetY)) return false; // indicator click
       if (panelHitAt(lastPanelRects, me.offsetX, me.offsetY)) return false;
@@ -835,6 +939,7 @@ export function createRgui(
 
   const sel = select(canvas);
   sel.call(zoomBehavior);
+  if (input === "figma") sel.on("dblclick.zoom", null);
   sel.call(
     zoomBehavior.transform,
     options.view
@@ -1018,6 +1123,9 @@ export function createRgui(
     destroy() {
       destroyed = true;
       overlays.destroy();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      canvas.removeEventListener("wheel", onWheel);
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
       sel.on(".zoom", null);
