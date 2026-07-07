@@ -221,9 +221,15 @@ export interface Rgui {
   /**
    * auto-layout by connection optimization (layered + barycenter). Pinned
    * nodes stay put. Animates ~300ms, then fires onNodeMoveEnd per moved node
-   * so hosts can broadcast the new positions.
+   so hosts can broadcast the new positions.
    */
   autoLayout(opts?: LayoutOptions & { animate?: boolean }): void;
+  /**
+   * snap every node to the MAIN visible grid at the current scale —
+   * one call makes a generated/imported graph obey the snap rule.
+   * Fires onNodeMoveEnd per moved node (host broadcast) unless silent.
+   */
+  snapGraph(opts?: { silent?: boolean }): void;
   /**
    * screen midpoint of a wire's bezier as currently drawn — null if the
    * wire is dissolved (inside a flush stack) or an endpoint is collapsed.
@@ -1483,6 +1489,19 @@ export function createRgui(
           ? { el: overlay }
           : overlay
         : undefined;
+      invalidate();
+    },
+    snapGraph(opts?: { silent?: boolean }) {
+      const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[0]!.step;
+      for (const n of graph.nodes) {
+        const nx = snap(n.x, step);
+        const ny = snap(n.y, step);
+        if (nx !== n.x || ny !== n.y) {
+          n.x = nx;
+          n.y = ny;
+          if (!opts?.silent) options.onNodeMoveEnd?.(n.id, { x: nx, y: ny });
+        }
+      }
       invalidate();
     },
     autoLayout(opts?: LayoutOptions & { animate?: boolean }) {

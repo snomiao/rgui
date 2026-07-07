@@ -165,6 +165,8 @@ export function outputPortPos(n: GraphNode, i: number): [number, number] {
 }
 
 // --- demo graph: our take on the otoji jolly-finch-ibni pipeline ------
+// positions sit ON the main-scale grid (50 wu at k=1) — the default graph
+// obeys the snap rule it preaches
 
 export function demoGraph(): Graph {
   const nodes: GraphNode[] = [
@@ -172,8 +174,8 @@ export function demoGraph(): Graph {
       id: "cam",
       title: "Camera",
       category: "source",
-      x: -560,
-      y: -180,
+      x: -550,
+      y: -200,
       w: 200,
       inputs: [],
       outputs: [{ id: "image", label: "image", kind: "image" }],
@@ -186,8 +188,8 @@ export function demoGraph(): Graph {
       id: "mic",
       title: "Mic + VAD",
       category: "source",
-      x: -560,
-      y: 60,
+      x: -550,
+      y: 50,
       w: 200,
       inputs: [],
       outputs: [{ id: "audio", label: "audio", kind: "audio" }],
@@ -200,8 +202,8 @@ export function demoGraph(): Graph {
       id: "vision",
       title: "Vision model",
       category: "model",
-      x: -240,
-      y: -220,
+      x: -250,
+      y: -250,
       w: 240,
       inputs: [{ id: "image", label: "image", kind: "image" }],
       outputs: [
@@ -220,8 +222,8 @@ export function demoGraph(): Graph {
       id: "stt",
       title: "SenseVoice STT",
       category: "model",
-      x: -240,
-      y: 80,
+      x: -250,
+      y: 100,
       w: 240,
       inputs: [{ id: "audio", label: "audio", kind: "audio" }],
       outputs: [{ id: "transcript", label: "transcript", kind: "text" }],
@@ -231,8 +233,8 @@ export function demoGraph(): Graph {
       id: "voice",
       title: "Voice sink",
       category: "sink",
-      x: 140,
-      y: -80,
+      x: 150,
+      y: -100,
       w: 220,
       inputs: [
         { id: "transcript", label: "transcript", kind: "text" },
