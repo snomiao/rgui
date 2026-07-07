@@ -1,5 +1,5 @@
 /**
- * rgui core — 一格一物 + 辺界消融 (one-cell-one-thing + boundary dissolution).
+ * rgui core — one-cell-one-thing + boundary dissolution.
  *
  * Rule 1: nodes never overlap. A dragged node that would overlap another is
  * pushed out along the axis of least penetration until the edges are FLUSH —
@@ -10,7 +10,12 @@
  * fully standalone (drag one away to split) — this is visual fusion only,
  * distinct from rg-merge (LOD pseudo-node), which moves as a single unit.
  */
-import { nodeHeight, type GraphNode } from "./graph.js";
+import {
+  inputPortPos,
+  nodeHeight,
+  type Graph,
+  type GraphNode,
+} from "./graph.js";
 
 const EPS = 0.01;
 
@@ -31,7 +36,7 @@ const rectOf = (n: GraphNode): Rect => ({
 /**
  * Resolve overlaps for a node being dragged to (x, y): push it out along the
  * axis of least penetration until it sits flush against whatever it hit.
- * Contact beats grid snap — 一格一物 is the invariant.
+ * Contact beats grid snap — one-cell-one-thing is the invariant.
  */
 export function resolveOverlap(
   node: GraphNode,
@@ -120,4 +125,156 @@ export function flushPairKeys(segments: FlushSegment[]): Set<string> {
   for (const seg of segments)
     s.add([seg.a.id, seg.b.id].sort().join("|"));
   return s;
+}
+
+// --- flush components + side coverage ----------------------------------
+
+export interface Interval {
+  from: number;
+  to: number;
+}
+
+export type Side = "top" | "right" | "bottom" | "left";
+
+export type SideCoverage = Record<Side, Interval[]>;
+
+/** subtract covered intervals from a span, returning the uncovered pieces */
+export function subtractIntervals(
+  span: Interval,
+  covered: Interval[],
+): Interval[] {
+  let pieces: Interval[] = [span];
+  for (const c of covered) {
+    const next: Interval[] = [];
+    for (const p of pieces) {
+      if (c.to <= p.from || c.from >= p.to) {
+        next.push(p);
+        continue;
+      }
+      if (c.from > p.from) next.push({ from: p.from, to: c.from });
+      if (c.to < p.to) next.push({ from: c.to, to: p.to });
+    }
+    pieces = next;
+  }
+  return pieces.filter((p) => p.to - p.from > EPS);
+}
+
+/** per-node covered intervals on each side, from flush segments */
+export function sideCoverage(
+  segments: FlushSegment[],
+): Map<string, SideCoverage> {
+  const map = new Map<string, SideCoverage>();
+  const get = (id: string): SideCoverage => {
+    let c = map.get(id);
+    if (!c) map.set(id, (c = { top: [], right: [], bottom: [], left: [] }));
+    return c;
+  };
+  for (const seg of segments) {
+    const iv = { from: seg.from, to: seg.to };
+    const ra = rectOf(seg.a);
+    const rb = rectOf(seg.b);
+    if (seg.axis === "v") {
+      // shared vertical edge at x=seg.at: it is one rect's right, other's left
+      get(seg.a.id)[Math.abs(ra.x + ra.w - seg.at) < EPS ? "right" : "left"].push(iv);
+      get(seg.b.id)[Math.abs(rb.x + rb.w - seg.at) < EPS ? "right" : "left"].push(iv);
+    } else {
+      get(seg.a.id)[Math.abs(ra.y + ra.h - seg.at) < EPS ? "bottom" : "top"].push(iv);
+      get(seg.b.id)[Math.abs(rb.y + rb.h - seg.at) < EPS ? "bottom" : "top"].push(iv);
+    }
+  }
+  return map;
+}
+
+/** union-find flush components: nodeId -> component root id */
+export function flushComponents(
+  nodes: GraphNode[],
+  segments: FlushSegment[],
+): Map<string, string> {
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    const p = parent.get(id) ?? id;
+    if (p === id) return id;
+    const r = find(p);
+    parent.set(id, r);
+    return r;
+  };
+  for (const seg of segments) parent.set(find(seg.a.id), find(seg.b.id));
+  const out = new Map<string, string>();
+  for (const n of nodes) out.set(n.id, find(n.id));
+  return out;
+}
+
+// --- direction-aware port layout ----------------------------------------
+
+export interface PortPlacement {
+  x: number;
+  y: number;
+  /** which edge the port sits on (chosen by wire direction) */
+  edge: "left" | "right";
+  /** true when every wire of this port stays inside one flush component */
+  hidden: boolean;
+}
+
+/** key: `${nodeId}/${"in"|"out"}/${portId}` */
+export function computePortLayout(
+  graph: Graph,
+  nodes: GraphNode[],
+  segments: FlushSegment[],
+): Map<string, PortPlacement> {
+  const comp = flushComponents(nodes, segments);
+  const cover = sideCoverage(segments);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const layout = new Map<string, PortPlacement>();
+
+  const coveredAt = (id: string, side: Side, v: number) =>
+    (cover.get(id)?.[side] ?? []).some((c) => v >= c.from - EPS && v <= c.to + EPS);
+
+  for (const n of nodes) {
+    const place = (dir: "in" | "out", ports: GraphNode["inputs"]) => {
+      for (let i = 0; i < ports.length; i++) {
+        const p = ports[i]!;
+        const y = portRowY(n, i);
+        const wires = graph.edges.filter((e) =>
+          dir === "out"
+            ? e.from.node === n.id && e.from.port === p.id
+            : e.to.node === n.id && e.to.port === p.id,
+        );
+        const others = wires
+          .map((e) => byId.get(dir === "out" ? e.to.node : e.from.node))
+          .filter((o): o is GraphNode => !!o);
+        const external = others.filter(
+          (o) => comp.get(o.id) !== comp.get(n.id),
+        );
+        const hidden = wires.length > 0 && external.length === 0;
+
+        // edge choice: follow where the wires actually go; default in→left,
+        // out→right; never sit on a dissolved (covered) boundary
+        let edge: "left" | "right";
+        if (external.length) {
+          const mean =
+            external.reduce((s, o) => s + o.x + o.w / 2, 0) / external.length;
+          edge = mean >= n.x + n.w / 2 ? "right" : "left";
+        } else {
+          edge = dir === "in" ? "left" : "right";
+        }
+        if (coveredAt(n.id, edge, y))
+          edge = edge === "left" ? "right" : "left";
+
+        layout.set(`${n.id}/${dir}/${p.id}`, {
+          x: edge === "left" ? n.x : n.x + n.w,
+          y,
+          edge,
+          hidden,
+        });
+      }
+    };
+    place("in", n.inputs);
+    place("out", n.outputs);
+  }
+  return layout;
+}
+
+/** world y of a node's i-th port row (matches inputPortPos/outputPortPos) */
+export function portRowY(n: GraphNode, i: number): number {
+  return inputPortPos(n, i)[1];
 }

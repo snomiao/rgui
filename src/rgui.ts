@@ -20,7 +20,11 @@ import {
   type Port,
 } from "./core/graph.js";
 import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
-import { resolveOverlap } from "./core/pack.js";
+import {
+  computePortLayout,
+  flushSegments,
+  resolveOverlap,
+} from "./core/pack.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
 import {
   gridLevels,
@@ -182,30 +186,28 @@ export function createRgui(
   }
 
   function portAt(sx: number, sy: number): PortHit | null {
-    // only real (expanded) nodes expose wirable ports
-    for (const n of lastRg?.nodes ?? graph.nodes) {
-      for (let i = 0; i < n.inputs.length; i++) {
-        const [wx, wy] = inputPortPos(n, i);
-        const [px, py] = worldToScreenXY(wx, wy);
-        if (Math.hypot(px - sx, py - sy) <= PORT_HIT_PX)
-          return {
-            ref: { node: n.id, port: n.inputs[i]!.id, side: "in" },
-            port: n.inputs[i]!,
-            wx,
-            wy,
-          };
-      }
-      for (let i = 0; i < n.outputs.length; i++) {
-        const [wx, wy] = outputPortPos(n, i);
-        const [px, py] = worldToScreenXY(wx, wy);
-        if (Math.hypot(px - sx, py - sy) <= PORT_HIT_PX)
-          return {
-            ref: { node: n.id, port: n.outputs[i]!.id, side: "out" },
-            port: n.outputs[i]!,
-            wx,
-            wy,
-          };
-      }
+    // only real (expanded) nodes expose wirable ports; positions follow the
+    // same direction-aware layout the renderer uses (hidden ports skipped)
+    const nodes = lastRg?.nodes ?? graph.nodes;
+    const layout = computePortLayout(graph, nodes, flushSegments(nodes));
+    for (const n of nodes) {
+      const check = (dir: "in" | "out", ports: typeof n.inputs): PortHit | null => {
+        for (const p of ports) {
+          const pl = layout.get(`${n.id}/${dir}/${p.id}`);
+          if (!pl || pl.hidden) continue;
+          const [px, py] = worldToScreenXY(pl.x, pl.y);
+          if (Math.hypot(px - sx, py - sy) <= PORT_HIT_PX)
+            return {
+              ref: { node: n.id, port: p.id, side: dir },
+              port: p,
+              wx: pl.x,
+              wy: pl.y,
+            };
+        }
+        return null;
+      };
+      const hit = check("in", n.inputs) ?? check("out", n.outputs);
+      if (hit) return hit;
     }
     return null;
   }

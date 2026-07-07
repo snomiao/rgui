@@ -53,7 +53,16 @@ export {
   resolveOverlap,
   flushSegments,
   flushPairKeys,
+  flushComponents,
+  sideCoverage,
+  subtractIntervals,
+  computePortLayout,
+  portRowY,
   type FlushSegment,
+  type Interval,
+  type Side,
+  type SideCoverage,
+  type PortPlacement,
 } from "./core/pack.js";
 
 // renderers (Canvas 2D first impl)

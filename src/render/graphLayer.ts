@@ -27,7 +27,15 @@ import {
   type RenderGraph,
 } from "../core/lod.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
-import { flushPairKeys, flushSegments } from "../core/pack.js";
+import {
+  computePortLayout,
+  flushComponents,
+  flushSegments,
+  sideCoverage,
+  subtractIntervals,
+  type PortPlacement,
+  type SideCoverage,
+} from "../core/pack.js";
 import type { ViewTransform } from "../core/grid.js";
 
 export const KIND_COLOR: Record<SignalKind, string> = {
@@ -58,49 +66,47 @@ export function drawGraph(
   ctx.translate(t.x, t.y);
   ctx.scale(t.k, t.k);
 
-  for (const n of rg.nodes) drawNode(ctx, n, t.k, rule);
-
-  // 辺界消融: flush-contact boundaries dissolve — erase the shared border
-  // segment so snapped nodes render as one fused shape (yet stay standalone)
+  // 辺界消融: flush-contact boundaries dissolve. Borders are drawn only on
+  // UNCOVERED segments; corners at a junction lose their radius; ports whose
+  // wires all stay inside one flush component vanish (the stack itself
+  // renders the connection); external ports sit on the edge their wire
+  // actually leaves from.
   const segments = flushSegments(rg.nodes);
-  const flushPairs = flushPairKeys(segments);
-  for (const seg of segments) {
-    ctx.strokeStyle = "#2b3036"; // node body color paints over the border
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    const inset = 6; // keep the rounded outer corners intact
-    if (seg.axis === "v") {
-      ctx.moveTo(seg.at, seg.from + inset);
-      ctx.lineTo(seg.at, seg.to - inset);
-    } else {
-      ctx.moveTo(seg.from + inset, seg.at);
-      ctx.lineTo(seg.to - inset, seg.at);
-    }
-    if (seg.to - seg.from > 2 * inset) ctx.stroke();
-  }
+  const comp = flushComponents(rg.nodes, segments);
+  const cover = sideCoverage(segments);
+  const layout = computePortLayout(graph, rg.nodes, segments);
 
+  for (const n of rg.nodes)
+    drawNode(ctx, n, t.k, rule, cover.get(n.id), layout);
   for (const p of rg.pseudo) drawPseudoNode(ctx, p, t.k, rule);
 
   // wires draw ON TOP of nodes: connections carry the meaning of the graph
   // and cost far fewer pixels than nodes — never hide them.
-  // Exception (辺界消融): a wire between flush-snapped nodes dissolves —
-  // physical contact renders the connection.
+  // Exception (辺界消融): wires inside one flush component dissolve —
+  // physical stacking renders the connection.
   for (const e of rg.edges) {
     if (
       e.from.at === "node" &&
       e.to.at === "node" &&
-      flushPairs.has([e.from.node.id, e.to.node.id].sort().join("|"))
+      comp.get(e.from.node.id) === comp.get(e.to.node.id)
     )
       continue;
-    const [x0, y0] = endpointPos(e.from, t.k, rule);
-    const [x1, y1] = endpointPos(e.to, t.k, rule);
+    const from = endpointPlaced(e.from, layout, t.k, rule);
+    const to = endpointPlaced(e.to, layout, t.k, rule);
     ctx.strokeStyle = KIND_COLOR[e.kind];
     ctx.lineWidth = Math.min(2, 2 / t.k); // keep wires <= ~2px on screen
     ctx.setLineDash(e.dashed ? [6 / t.k, 5 / t.k] : []);
-    const dx = Math.max(40, Math.abs(x1 - x0) * 0.5);
+    const dx = Math.max(40, Math.abs(to.x - from.x) * 0.5);
     ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.bezierCurveTo(x0 + dx, y0, x1 - dx, y1, x1, y1);
+    ctx.moveTo(from.x, from.y);
+    ctx.bezierCurveTo(
+      from.x + from.dir * dx,
+      from.y,
+      to.x + to.dir * dx,
+      to.y,
+      to.x,
+      to.y,
+    );
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -109,27 +115,96 @@ export function drawGraph(
   return rg;
 }
 
+/** wire endpoint position + outgoing direction, honoring port layout */
+function endpointPlaced(
+  ref: Parameters<typeof endpointPos>[0],
+  layout: Map<string, PortPlacement>,
+  k: number,
+  rule: RgRule,
+): { x: number; y: number; dir: 1 | -1 } {
+  if (ref.at === "node") {
+    const dir = ref.side === "in" ? "in" : "out";
+    const list = dir === "in" ? ref.node.inputs : ref.node.outputs;
+    const port = list[ref.index];
+    const pl = port && layout.get(`${ref.node.id}/${dir}/${port.id}`);
+    if (pl) return { x: pl.x, y: pl.y, dir: pl.edge === "right" ? 1 : -1 };
+  }
+  const [x, y] = endpointPos(ref, k, rule);
+  return { x, y, dir: ref.side === "out" ? 1 : -1 };
+}
+
 function drawNode(
   ctx: CanvasRenderingContext2D,
   n: GraphNode,
   k: number,
   rule: RgRule,
+  cover: SideCoverage | undefined,
+  layout: Map<string, PortPlacement>,
 ) {
   const h = nodeHeight(n);
   const r = 8;
+  const cov: SideCoverage = cover ?? {
+    top: [],
+    right: [],
+    bottom: [],
+    left: [],
+  };
 
-  // body
+  // a corner squares off when a flush junction reaches it
+  const near = (ivs: { from: number; to: number }[], v: number) =>
+    ivs.some((iv) => iv.from <= v + r && iv.to >= v - r);
+  const tl = near(cov.top, n.x) || near(cov.left, n.y) ? 0 : r;
+  const tr = near(cov.top, n.x + n.w) || near(cov.right, n.y) ? 0 : r;
+  const br = near(cov.bottom, n.x + n.w) || near(cov.right, n.y + h) ? 0 : r;
+  const bl = near(cov.bottom, n.x) || near(cov.left, n.y + h) ? 0 : r;
+
+  // body fill (fills butt together squarely at junctions)
   ctx.beginPath();
-  ctx.roundRect(n.x, n.y, n.w, h, r);
+  ctx.roundRect(n.x, n.y, n.w, h, [tl, tr, br, bl]);
   ctx.fillStyle = "#2b3036";
   ctx.fill();
+
+  // border: stroke only the uncovered pieces of each side + live corners
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = "#14161a";
+  ctx.beginPath();
+  for (const seg of subtractIntervals(
+    { from: n.x + tl, to: n.x + n.w - tr },
+    cov.top,
+  )) {
+    ctx.moveTo(seg.from, n.y);
+    ctx.lineTo(seg.to, n.y);
+  }
+  for (const seg of subtractIntervals(
+    { from: n.y + tr, to: n.y + h - br },
+    cov.right,
+  )) {
+    ctx.moveTo(n.x + n.w, seg.from);
+    ctx.lineTo(n.x + n.w, seg.to);
+  }
+  for (const seg of subtractIntervals(
+    { from: n.x + bl, to: n.x + n.w - br },
+    cov.bottom,
+  )) {
+    ctx.moveTo(seg.from, n.y + h);
+    ctx.lineTo(seg.to, n.y + h);
+  }
+  for (const seg of subtractIntervals(
+    { from: n.y + tl, to: n.y + h - bl },
+    cov.left,
+  )) {
+    ctx.moveTo(n.x, seg.from);
+    ctx.lineTo(n.x, seg.to);
+  }
+  if (tl) ctx.moveTo(n.x, n.y + tl), ctx.arc(n.x + tl, n.y + tl, tl, Math.PI, 1.5 * Math.PI);
+  if (tr) ctx.moveTo(n.x + n.w - tr, n.y), ctx.arc(n.x + n.w - tr, n.y + tr, tr, 1.5 * Math.PI, 2 * Math.PI);
+  if (br) ctx.moveTo(n.x + n.w, n.y + h - br), ctx.arc(n.x + n.w - br, n.y + h - br, br, 0, 0.5 * Math.PI);
+  if (bl) ctx.moveTo(n.x + bl, n.y + h), ctx.arc(n.x + bl, n.y + h - bl, bl, 0.5 * Math.PI, Math.PI);
   ctx.stroke();
 
   // header strip
   ctx.beginPath();
-  ctx.roundRect(n.x, n.y, n.w, NODE_HEADER_H, [r, r, 0, 0]);
+  ctx.roundRect(n.x, n.y, n.w, NODE_HEADER_H, [tl, tr, 0, 0]);
   ctx.fillStyle = CATEGORY_COLOR[n.category];
   ctx.fill();
 
@@ -155,25 +230,29 @@ function drawNode(
     }
   }
 
-  // ports
+  // ports — layout-driven: internal ports vanish (辺界消融), external ports
+  // sit on the edge their wire leaves from
   const labels = NODE_ROW_H * k >= rule.portLabelMinPx;
   ctx.font = "10px system-ui, sans-serif";
-  for (let i = 0; i < n.inputs.length; i++) {
-    const p = n.inputs[i]!;
-    const [x, y] = inputPortPos(n, i);
-    drawPort(ctx, x, y, KIND_COLOR[p.kind], PORT_R);
-  }
-  for (let i = 0; i < n.outputs.length; i++) {
-    const p = n.outputs[i]!;
-    const [x, y] = outputPortPos(n, i);
-    drawPort(ctx, x, y, KIND_COLOR[p.kind], PORT_R);
-    if (labels) {
-      // outputs get labels outside the node (bitwig-ish signal tags)
-      ctx.fillStyle = KIND_COLOR[p.kind];
-      ctx.textAlign = "left";
-      ctx.fillText(p.label, x + PORT_R + 4, y);
+  const drawPorts = (dir: "in" | "out", ports: typeof n.inputs) => {
+    for (const p of ports) {
+      const pl = layout.get(`${n.id}/${dir}/${p.id}`);
+      if (!pl || pl.hidden) continue;
+      drawPort(ctx, pl.x, pl.y, KIND_COLOR[p.kind], PORT_R);
+      if (dir === "out" && labels) {
+        ctx.fillStyle = KIND_COLOR[p.kind];
+        if (pl.edge === "right") {
+          ctx.textAlign = "left";
+          ctx.fillText(p.label, pl.x + PORT_R + 4, pl.y);
+        } else {
+          ctx.textAlign = "right";
+          ctx.fillText(p.label, pl.x - PORT_R - 4, pl.y);
+        }
+      }
     }
-  }
+  };
+  drawPorts("in", n.inputs);
+  drawPorts("out", n.outputs);
 }
 
 /**
