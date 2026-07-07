@@ -59,6 +59,38 @@ const viewer = rgui(canvas, {
   onConnectEnd: (from, at) => console.log("[rgui] connectEnd", from, at.world),
   onNodeContextMenu: (id, at) => console.log("[rgui] context", id, at),
   onCanvasContextMenu: (at, world) => console.log("[rgui] canvasMenu", at, world),
+  // summarize rule: hosts know what nodes MEAN — compact content for small
+  // nodes and merged groups
+  summarize: (nodes, info) => {
+    if (info.level === "pseudo") {
+      return {
+        kind: "text",
+        lines: [
+          nodes.map((n) => n.title).join(" → "),
+          `${nodes.length} nodes · rusty-fox`,
+        ],
+      };
+    }
+    const n = nodes[0]!;
+    if (n.id === "mic") {
+      return {
+        kind: "canvas",
+        height: 22,
+        draw: (ctx, rect) => {
+          ctx.strokeStyle = "#fb923c";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for (let x = 0; x <= rect.width; x += 2) {
+            const y = rect.height / 2 + Math.sin(x / 6 + phase) * rect.height * 0.4;
+            x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        },
+      };
+    }
+    const key = n.fields[0];
+    return key ? { kind: "kv", rows: [[key[0], key[1]]] } : null;
+  },
   onPinChange: (id, pinned) => console.log("[rgui] pin", id, pinned),
   panels: [
     {

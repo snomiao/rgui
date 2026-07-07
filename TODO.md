@@ -223,3 +223,40 @@ Figma は素の drag=select・space+drag=pan・2 本指=pan。この方針で良
 - 空 canvas: 素 drag・右 drag = box select / 右 click (drag 無) = **onCanvasContextMenu(screen, world)** 新設
   / 右 drag 後の menu は抑止。pan は中ボタン or space+drag (grab cursor)。dblclick zoom は無効。
 - 旧挙動は `input: "classic"` で残置。otoji 側の上書き不要。
+
+### [2026-07-08 01:15] 要望: summarize rule API(node/group を小さい時/merge 時に賢く要約描画)
+
+overlay API 즉配線しました(otoji: 全 node に config overlay を貼り、readable 時のみ表示・
+非 readable で rgui が自動 hide → native body が summary)。実機で zoom out→全 overlay hide 確認。
+
+次の要望(snomiao 設計): **host が「要約ルール」を渡し、rgui が node/group を要約描画する API**。
+命名は任せてもらえたので `summarize`(= grouping/LOD 要約)で提案:
+
+```ts
+// RguiOptions
+summarize?: (
+  group: GraphNode[],                       // 単 node(小さい時)= 長さ1 / merge 時 = メンバ複数
+  ctx: { collapsed: boolean; screen: { w: number; h: number }; level: "small" | "pseudo" }
+) => SummaryContent;
+
+type SummaryContent =
+  | { kind: "text"; lines: string[] }              // truncate 済みの key facts
+  | { kind: "kv"; rows: [string, string][] }        // label:value(rgui が幅で省略)
+  | { kind: "yaml"; text: string }                  // 構造をそのまま渡し rgui が整形
+  | { kind: "canvas"; draw: (ctx, rect) => void };  // mic 波形など host 描画
+```
+
+**狙い**:
+- **node が小さい**(readable 未満だが collapse 前)→ config overlay は hide 済み。代わりに
+  rgui が `summarize([node], {level:"small"})` を呼び、**truncate した要約**(例: STT は model 名だけ、
+  mic は波形=canvas)を node body に描く。
+- **merge/pseudo-node**(複数 node が集約)→ `summarize(members, {level:"pseudo"})` で
+  **group 全体の要約**(例: "mic→STT→translate ×3 peers" のような 1-3 行)を pseudo に描く。
+  host が意味を知っているので rgui 単独より賢い要約ができる。
+- otoji 側は type ごとの要約ルールを渡す(mic=波形 / STT=model / translate=lang など)。
+  device dropdown 等は短縮 or 省略。
+
+**merged 時に何を残す/隠すか**:
+- 残す: boundary port、group summary(上記)、solder joint。
+- 隠す: 個別 config overlay(既に自動 hide)、個別 field の詳細。
+命名(`summarize` / `groupSummary` / `lod` 等)や content 型はお任せします。best と思うものを。可否・設計相談を。

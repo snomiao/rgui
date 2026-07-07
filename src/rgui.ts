@@ -54,6 +54,7 @@ import {
 } from "./core/pack.js";
 import { layoutGraph, type LayoutOptions } from "./core/layout.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
+import type { SummarizeFn } from "./core/summary.js";
 import {
   gridLevels,
   screenToWorld,
@@ -105,6 +106,13 @@ export interface RguiOptions {
    * click-to-add (Panel.onItemClick) and drag-onto-canvas (Panel.onItemDrop)
    */
   panels?: Panel[];
+  /**
+   * summarize rule: when a node is too small for its fields ("small") or
+   * nodes merge into a pseudo-node ("pseudo"), rgui asks for compact
+   * host-defined content and renders it screen-constant. Return null to
+   * fall back to defaults.
+   */
+  summarize?: SummarizeFn;
   /** right-click (no drag) on empty canvas */
   onCanvasContextMenu?: (
     screen: { x: number; y: number },
@@ -301,7 +309,8 @@ export function createRgui(
     lastIndicators.map((it) => ({ x: it.cx, y: it.cy }));
   const contentLayers: DrawLayer[] = [
     ...(options.layers ?? []),
-    (ctx, t) => (lastRg = drawGraph(ctx, t, graph, rule)),
+    (ctx, t) =>
+      (lastRg = drawGraph(ctx, t, graph, rule, options.summarize)),
     (ctx, t) => drawSelectionLayer(ctx, t),
     (ctx, t, size) => {
       lastIndicators = lastRg
@@ -946,9 +955,13 @@ export function createRgui(
         Number.isInteger(ev.deltaY) &&
         Math.abs(ev.deltaY) >= 50); // discrete integer steps = mouse wheel
     if (isZoom) {
-      const factor = Math.exp(
-        -ev.deltaY * (ev.deltaMode === 0 ? 0.005 : 0.12) * (ev.ctrlKey ? 2 : 1),
+      // clamp per-event delta so pinch (small fractional deltas) stays
+      // smooth while discrete mouse-wheel ticks (±120) don't explode
+      const d = Math.max(
+        -40,
+        Math.min(40, ev.deltaY * (ev.deltaMode === 0 ? 1 : 20)),
       );
+      const factor = Math.exp(-d * 0.012);
       const k = Math.min(1e6, Math.max(1e-6, view.k * factor));
       // keep the world point under the cursor invariant
       const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);

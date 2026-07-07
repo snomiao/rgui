@@ -28,6 +28,7 @@ import {
   type RenderGraph,
 } from "../core/lod.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
+import type { SummarizeFn, SummaryContent } from "../core/summary.js";
 import {
   computePortLayout,
   flushPairKeys,
@@ -60,6 +61,7 @@ export function drawGraph(
   t: ViewTransform,
   graph: Graph,
   rule: RgRule = DEFAULT_RULE,
+  summarize?: SummarizeFn,
 ): RenderGraph {
   const rg = buildRenderGraph(graph, t.k, rule);
 
@@ -79,8 +81,8 @@ export function drawGraph(
   const layout = computePortLayout(graph, rg.nodes, segments);
 
   for (const n of rg.nodes)
-    drawNode(ctx, n, t.k, rule, cover.get(n.id), layout);
-  for (const p of rg.pseudo) drawPseudoNode(ctx, p, t.k, rule);
+    drawNode(ctx, n, t.k, rule, cover.get(n.id), layout, summarize);
+  for (const p of rg.pseudo) drawPseudoNode(ctx, p, t.k, rule, summarize);
 
   // wires draw ON TOP of nodes: connections carry the meaning of the graph
   // and cost far fewer pixels than nodes — never hide them.
@@ -228,6 +230,7 @@ function drawNode(
   rule: RgRule,
   cover: SideCoverage | undefined,
   layout: Map<string, PortPlacement>,
+  summarize?: SummarizeFn,
 ) {
   const h = nodeHeight(n);
   const r = 8;
@@ -285,6 +288,29 @@ function drawNode(
   ctx.fillText(n.title, n.x + NODE_PAD, n.y + NODE_HEADER_H / 2 + 0.5);
 
   drawNodePin(ctx, n);
+
+  // small-level summary: fields are below readability — ask the host for a
+  // compact screen-constant summary instead of showing nothing
+  if (NODE_ROW_H * k < rule.fieldMinPx && summarize) {
+    const sw = n.w * k;
+    const sh = h * k;
+    const content = summarize([n], {
+      collapsed: false,
+      level: "small",
+      screen: { w: sw, h: sh },
+    });
+    if (content) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(n.x, n.y, n.w, h, 8);
+      ctx.clip();
+      ctx.translate(n.x, n.y);
+      ctx.scale(1 / k, 1 / k); // screen px
+      const top = Math.min(NODE_HEADER_H * k, 16) + 2;
+      drawSummaryContent(ctx, content, 6, top, sw - 12, sh - top - 4);
+      ctx.restore();
+    }
+  }
 
   // field rows — skip when they would render unreadably small
   if (NODE_ROW_H * k >= rule.fieldMinPx) {
@@ -446,6 +472,7 @@ function drawPseudoNode(
   p: PseudoNode,
   k: number,
   rule: RgRule,
+  summarize?: SummarizeFn,
 ) {
   const PSEUDO = rule.pseudo;
   const rect = pseudoRect(p, k, rule);
@@ -500,7 +527,99 @@ function drawPseudoNode(
     ctx.textAlign = "right";
     ctx.fillText(port.label, w - PORT_R - 4, y);
   }
+
+  // group summary: host-provided, drawn as a footer band attached under the
+  // block (hit-rect stays pseudoRect; the band is visual)
+  const content = summarize?.(p.members, {
+    collapsed: true,
+    level: "pseudo",
+    screen: { w, h: 999 },
+  });
+  if (content) {
+    const bandH = summaryHeight(ctx, content) + 8;
+    ctx.beginPath();
+    ctx.roundRect(0, h, w, bandH, [0, 0, r, r]);
+    ctx.fillStyle = "#22262b";
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = accent;
+    ctx.stroke();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, h, w, bandH);
+    ctx.clip();
+    drawSummaryContent(ctx, content, PSEUDO.pad, h + 4, w - 2 * PSEUDO.pad, bandH - 8);
+    ctx.restore();
+  }
   ctx.restore();
+}
+
+const SUMMARY_LINE_H = 14;
+
+function summaryHeight(
+  ctx: CanvasRenderingContext2D,
+  c: SummaryContent,
+): number {
+  if (c.kind === "text") return Math.min(c.lines.length, 4) * SUMMARY_LINE_H;
+  if (c.kind === "kv") return Math.min(c.rows.length, 4) * SUMMARY_LINE_H;
+  return c.height ?? 36;
+}
+
+/** truncate a string to fit a pixel width (current ctx font) */
+function fitText(ctx: CanvasRenderingContext2D, s: string, w: number): string {
+  if (ctx.measureText(s).width <= w) return s;
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(s.slice(0, mid) + "…").width <= w) lo = mid;
+    else hi = mid - 1;
+  }
+  return s.slice(0, lo) + "…";
+}
+
+/** draw summary content in SCREEN px at (x, y), clipped by the caller */
+function drawSummaryContent(
+  ctx: CanvasRenderingContext2D,
+  c: SummaryContent,
+  x: number,
+  y: number,
+  w: number,
+  maxH: number,
+) {
+  if (c.kind === "canvas") {
+    ctx.save();
+    ctx.translate(x, y);
+    try {
+      c.draw(ctx, { width: w, height: Math.min(c.height ?? 36, maxH) });
+    } catch (err) {
+      console.error("[rgui] summary draw failed:", err);
+    }
+    ctx.restore();
+    return;
+  }
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  const rows = Math.min(
+    Math.floor(maxH / SUMMARY_LINE_H),
+    c.kind === "text" ? Math.min(c.lines.length, 4) : Math.min(c.rows.length, 4),
+  );
+  for (let i = 0; i < rows; i++) {
+    const cy = y + (i + 0.5) * SUMMARY_LINE_H;
+    if (c.kind === "text") {
+      ctx.fillStyle = "#aeb6bf";
+      ctx.textAlign = "left";
+      ctx.fillText(fitText(ctx, c.lines[i]!, w), x, cy);
+    } else {
+      const [key, v] = c.rows[i]!;
+      ctx.fillStyle = "#8b949e";
+      ctx.textAlign = "left";
+      ctx.fillText(fitText(ctx, key, w * 0.4), x, cy);
+      ctx.fillStyle = "#e6e9ec";
+      ctx.textAlign = "right";
+      ctx.fillText(fitText(ctx, v, w * 0.55), x + w, cy);
+    }
+  }
 }
 
 function drawPort(
