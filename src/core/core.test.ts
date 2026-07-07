@@ -8,7 +8,7 @@ import {
   snapSizeRadix,
 } from "./grid";
 import { demoGraph, nodeHeight, type GraphNode } from "./graph";
-import { buildRenderGraph } from "./lod";
+import { buildRenderGraph, pseudoRect } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
 import { DEFAULT_RULE } from "./rule";
@@ -196,6 +196,22 @@ describe("chain contraction", () => {
     // wiring: A → link → E
     const kinds = rg.edges.map((e) => `${e.from.at}->${e.to.at}`).sort();
     expect(kinds).toEqual(["node->pseudo", "pseudo->node"]);
+  });
+});
+
+describe("pseudo size law", () => {
+  test("merged blocks snap their size to their scale's grid", () => {
+    const g = demoGraph();
+    const rg = buildRenderGraph(g, 0.05); // one big block
+    const p = rg.pseudo[0]!;
+    const r = pseudoRect(p, 0.05);
+    const stepW = sizeLayerStep(r.w, 8);
+    const stepH = sizeLayerStep(r.h, 8);
+    expect(Math.abs(r.w % stepW)).toBeCloseTo(0, 6);
+    expect(Math.abs(r.h % stepH)).toBeCloseTo(0, 6);
+    // integer 1..8 grids at its own layer
+    expect(r.w / stepW).toBeGreaterThanOrEqual(1);
+    expect(r.w / stepW).toBeLessThanOrEqual(8);
   });
 });
 

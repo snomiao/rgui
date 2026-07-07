@@ -21,7 +21,7 @@ import {
   type Port,
 } from "./graph.js";
 import { flushSegments } from "./pack.js";
-import { gridLevels, sizeLayerStep, snap } from "./grid.js";
+import { gridLevels, sizeLayerStep, snap, snapSizeRadix } from "./grid.js";
 import { DEFAULT_RULE, type RgRule } from "./rule.js";
 
 export interface PseudoNode {
@@ -68,8 +68,11 @@ export function pseudoRect(p: PseudoNode, k: number, rule = DEFAULT_RULE) {
   const m = rule.pseudo;
   const rows = Math.max(p.inputs.length, p.outputs.length, 1);
   const minHpx = m.headerH + m.pad + rows * m.rowH + m.pad;
-  const w = Math.max(p.bw, m.w / k);
-  const h = Math.max(p.bh, minHpx / k);
+  // merged blocks obey the node-size law too: the enclosure (clamped to
+  // the readable minimum) rounds UP to an integer 1..radix grids at its
+  // own scale layer — RG nodes are grid citizens in size, not just position
+  const w = snapSizeRadix(Math.max(p.bw, m.w / k), rule.radix);
+  const h = snapSizeRadix(Math.max(p.bh, minHpx / k), rule.radix);
   return { x: p.cx - w / 2, y: p.cy - h / 2, w, h };
 }
 

@@ -862,7 +862,14 @@ export function createRgui(
         downY: number;
         moved: boolean;
       }
-    | { type: "pseudo"; pseudo: PseudoNode; wx: number; wy: number; moved: boolean }
+    | {
+        type: "pseudo";
+        pseudo: PseudoNode;
+        wx0: number; // pointer anchor at drag start (display world)
+        wy0: number;
+        starts: Map<string, { x: number; y: number }>; // base positions
+        moved: boolean;
+      }
     | {
         type: "group";
         nodes: GraphNode[]; // base nodes of the selection (non-pinned)
@@ -1053,8 +1060,23 @@ export function createRgui(
       graph.nodes.splice(graph.nodes.indexOf(n), 1);
       graph.nodes.push(n);
     } else {
-      // dragging a collapsed group moves all its members together
-      drag = { type: "pseudo", pseudo: hit.pseudo, wx, wy, moved: false };
+      // dragging a collapsed group moves all its members together —
+      // anchored ABSOLUTELY from the start positions: the block is rebuilt
+      // and lattice-snapped every frame, and incremental deltas would
+      // compound with that re-snap (block outruns the cursor)
+      drag = {
+        type: "pseudo",
+        pseudo: hit.pseudo,
+        wx0: wx,
+        wy0: wy,
+        starts: new Map(
+          hit.pseudo.members.map((m) => {
+            const b = baseOf(m);
+            return [b.id, { x: b.x, y: b.y }] as const;
+          }),
+        ),
+        moved: false,
+      };
     }
     canvas.setPointerCapture(ev.pointerId);
   };
@@ -1153,26 +1175,27 @@ export function createRgui(
         // a cluster with a pinned member is bolted down
         if (drag.pseudo.members.some((n) => n.pinned)) return;
         const pstep = nodeSnapStep(step, ...drag.pseudo.members.map(baseOf));
-        const ddx = snap(wx - drag.wx, pstep);
-        const ddy = snap(wy - drag.wy, pstep);
-        if (ddx || ddy) {
-          // display-space delta → base-space delta through the inverse map
-          const bdx = rotActive ? Ainv[0] * ddx + Ainv[1] * ddy : ddx;
-          const bdy = rotActive ? Ainv[2] * ddx + Ainv[3] * ddy : ddy;
-          for (const m of drag.pseudo.members) {
-            const n = baseOf(m);
-            n.x += bdx;
-            n.y += bdy;
-            m.x += ddx;
-            m.y += ddy;
+        // TOTAL offset from the drag anchor, quantized once — immune to the
+        // per-frame rebuild + lattice re-snap of the block
+        const tdx = snap(wx - drag.wx0, pstep);
+        const tdy = snap(wy - drag.wy0, pstep);
+        const bdx = rotActive ? Ainv[0] * tdx + Ainv[1] * tdy : tdx;
+        const bdy = rotActive ? Ainv[2] * tdx + Ainv[3] * tdy : tdy;
+        let changed = false;
+        for (const m of drag.pseudo.members) {
+          const n = baseOf(m);
+          const s0 = drag.starts.get(n.id);
+          if (!s0) continue;
+          const nx = s0.x + bdx;
+          const ny = s0.y + bdy;
+          if (nx !== n.x || ny !== n.y) {
+            n.x = nx;
+            n.y = ny;
+            changed = true;
             options.onNodeMove?.(n.id, { x: n.x, y: n.y });
           }
-          drag.pseudo.cx += ddx;
-          drag.pseudo.cy += ddy;
-          drag.wx += ddx;
-          drag.wy += ddy;
-          drag.moved = true;
         }
+        if (changed) drag.moved = true;
       }
     }
     invalidate();
