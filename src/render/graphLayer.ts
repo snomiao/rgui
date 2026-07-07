@@ -139,6 +139,11 @@ export function drawGraph(
   return rg;
 }
 
+/** world position of a node's header pin glyph (toggle target) */
+export function pinPos(n: GraphNode): [number, number] {
+  return [n.x + n.w - 14, n.y + NODE_HEADER_H / 2];
+}
+
 /** wire endpoint position + outgoing direction, honoring port layout */
 function endpointPlaced(
   ref: Parameters<typeof endpointPos>[0],
@@ -238,6 +243,27 @@ function drawNode(
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   ctx.fillText(n.title, n.x + NODE_PAD, n.y + NODE_HEADER_H / 2 + 0.5);
+
+  // pin glyph (header right): solid when pinned, faint affordance otherwise
+  {
+    const [px, py] = pinPos(n);
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(Math.PI / 4);
+    ctx.globalAlpha = n.pinned ? 1 : 0.28;
+    ctx.fillStyle = n.pinned ? "#ffd60a" : "#101215";
+    ctx.strokeStyle = "#101215";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(0, -3, 3.2, 0, Math.PI * 2); // head
+    ctx.fill();
+    if (n.pinned) ctx.stroke();
+    ctx.beginPath(); // needle
+    ctx.moveTo(0, -0.5);
+    ctx.lineTo(0, 5.5);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   // field rows — skip when they would render unreadably small
   if (NODE_ROW_H * k >= rule.fieldMinPx) {

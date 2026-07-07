@@ -78,9 +78,20 @@ export {
   drawGraph,
   drawOffscreenIndicators,
   offscreenIndicators,
+  pinPos,
   KIND_COLOR,
   type OffscreenIndicator,
 } from "./render/graphLayer.js";
+export {
+  panelLayout,
+  drawPanels,
+  panelHitAt,
+  PANEL,
+  type Panel,
+  type PanelItem,
+  type PanelRect,
+  type PanelHit,
+} from "./render/panelLayer.js";
 
 import { createRgui } from "./rgui.js";
 export default createRgui;

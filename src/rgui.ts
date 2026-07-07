@@ -13,9 +13,19 @@ import {
 import {
   drawGraph,
   drawOffscreenIndicators,
+  pinPos,
   KIND_COLOR,
   type OffscreenIndicator,
 } from "./render/graphLayer.js";
+import {
+  drawPanelDragGhost,
+  drawPanels,
+  panelHitAt,
+  panelLayout,
+  type Panel,
+  type PanelItem,
+  type PanelRect,
+} from "./render/panelLayer.js";
 import {
   inputPortPos,
   nodeHeight,
@@ -73,6 +83,13 @@ export interface RguiOptions {
   ) => void;
   /** selection changed (click select, shift+drag box select, setSelection) */
   onSelectionChange?: (nodeIds: string[]) => void;
+  /** a node's pin was toggled via the header glyph */
+  onPinChange?: (nodeId: string, pinned: boolean) => void;
+  /**
+   * screen-anchored palettes/panels drawn as canvas chrome — items support
+   * click-to-add (Panel.onItemClick) and drag-onto-canvas (Panel.onItemDrop)
+   */
+  panels?: Panel[];
   /** plain click on a wire */
   onEdgeClick?: (edge: Edge, screen: { x: number; y: number }) => void;
   /** right-click / context-menu on a wire */
@@ -117,6 +134,8 @@ export interface Rgui {
     portId: string,
     side: "in" | "out",
   ): { x: number; y: number; edge: "left" | "right"; hidden: boolean } | null;
+  /** replace the panel set (host mutates panels + calls this or invalidate) */
+  setPanels(panels: Panel[]): void;
   /**
    * screen midpoint of a wire's bezier as currently drawn — null if the
    * wire is dissolved (inside a flush stack) or an endpoint is collapsed.
@@ -143,6 +162,8 @@ export function createRgui(
   let lastRg: RenderGraph | null = null;
 
   let lastIndicators: OffscreenIndicator[] = [];
+  let panels: Panel[] = options.panels ?? [];
+  let lastPanelRects: PanelRect[] = [];
 
   /** smooth-pan the viewport so the given world point lands center-screen */
   function panTo(cx: number, cy: number, durationMs = 280) {
@@ -233,6 +254,12 @@ export function createRgui(
         : [];
     },
     (ctx, t) => drawGhostWire(ctx, t),
+    (ctx, _t, size) => {
+      lastPanelRects = panelLayout(panels, size);
+      drawPanels(ctx, lastPanelRects);
+      if (drag?.type === "panelItem" && drag.moved)
+        drawPanelDragGhost(ctx, view, drag.item, drag.sx, drag.sy);
+    },
   ]);
 
   let view: ViewTransform = options.view ?? { x: 0, y: 0, k: 1 };
@@ -391,6 +418,16 @@ export function createRgui(
     | { type: "pseudo"; pseudo: PseudoNode; wx: number; wy: number; moved: boolean }
     | { type: "wire"; from: PortHit; toSx: number; toSy: number }
     | { type: "marquee"; x0: number; y0: number; x1: number; y1: number }
+    | {
+        type: "panelItem";
+        panel: Panel;
+        item: PanelItem;
+        sx: number;
+        sy: number;
+        downX: number;
+        downY: number;
+        moved: boolean;
+      }
     | null = null;
 
   function drawGhostWire(ctx: CanvasRenderingContext2D, t: ViewTransform) {
@@ -432,11 +469,50 @@ export function createRgui(
     return from.port.kind === to.port.kind;
   }
 
+  /** pin-glyph hit-test (screen ~9px around the glyph) */
+  function pinHitAt(sx: number, sy: number): GraphNode | null {
+    for (const n of lastRg?.nodes ?? graph.nodes) {
+      const [wx, wy] = pinPos(n);
+      const [px, py] = worldToScreenXY(wx, wy);
+      if (Math.hypot(px - sx, py - sy) <= 9) return n;
+    }
+    return null;
+  }
+
   const onPointerDown = (ev: PointerEvent) => {
+    // panels are the topmost chrome
+    const ph2 = panelHitAt(lastPanelRects, ev.offsetX, ev.offsetY);
+    if (ph2) {
+      if (ph2.type === "header") {
+        ph2.rect.panel.collapsed = !ph2.rect.panel.collapsed;
+        invalidate();
+      } else if (ph2.type === "item") {
+        drag = {
+          type: "panelItem",
+          panel: ph2.rect.panel,
+          item: ph2.item,
+          sx: ev.offsetX,
+          sy: ev.offsetY,
+          downX: ev.offsetX,
+          downY: ev.offsetY,
+          moved: false,
+        };
+        canvas.setPointerCapture(ev.pointerId);
+      }
+      return; // body clicks are consumed (panel blocks the canvas below)
+    }
     // off-screen indicators are UI chrome on top: click = go to the node
     const ind = indicatorAt(ev.offsetX, ev.offsetY);
     if (ind) {
       panTo(ind.cx, ind.cy);
+      return;
+    }
+    // pin glyph toggles pinned state
+    const pinNode = pinHitAt(ev.offsetX, ev.offsetY);
+    if (pinNode) {
+      pinNode.pinned = !pinNode.pinned;
+      options.onPinChange?.(pinNode.id, !!pinNode.pinned);
+      invalidate();
       return;
     }
     // ports win over node bodies (they overlap the node edge)
@@ -490,13 +566,21 @@ export function createRgui(
       const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
       // rg-ui: every element snaps to the minor readable grid → dense layouts
       const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[1]!.step;
-      if (drag.type === "marquee") {
+      if (drag.type === "panelItem") {
+        drag.sx = ev.offsetX;
+        drag.sy = ev.offsetY;
+        if (
+          Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4
+        )
+          drag.moved = true;
+      } else if (drag.type === "marquee") {
         drag.x1 = ev.offsetX;
         drag.y1 = ev.offsetY;
       } else if (drag.type === "wire") {
         drag.toSx = ev.offsetX;
         drag.toSy = ev.offsetY;
       } else if (drag.type === "node") {
+        if (drag.node.pinned) return; // pinned nodes do not move
         // 一格一物: overlap is not allowed — grid-snap first, then push out
         // to flush contact against whatever the node would cover
         const { x: nx, y: ny } = resolveOverlap(
@@ -513,6 +597,8 @@ export function createRgui(
           options.onNodeMove?.(drag.node.id, { x: nx, y: ny });
         }
       } else {
+        // a cluster with a pinned member is bolted down
+        if (drag.pseudo.members.some((n) => n.pinned)) return;
         const ddx = snap(wx - drag.wx, step);
         const ddy = snap(wy - drag.wy, step);
         if (ddx || ddy) {
@@ -547,6 +633,21 @@ export function createRgui(
     }
     emptyDown = null;
     if (!drag) return;
+    if (drag.type === "panelItem") {
+      const overPanel = panelHitAt(lastPanelRects, ev.offsetX, ev.offsetY);
+      if (!drag.moved) {
+        drag.panel.onItemClick?.(drag.item, { x: ev.offsetX, y: ev.offsetY });
+      } else if (!overPanel) {
+        const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
+        drag.panel.onItemDrop?.(drag.item, {
+          world: { x: wx, y: wy },
+          screen: { x: ev.offsetX, y: ev.offsetY },
+        });
+      }
+      drag = null;
+      invalidate();
+      return;
+    }
     if (drag.type === "marquee") {
       const [wx0, wy0] = screenToWorld(view, Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1));
       const [wx1, wy1] = screenToWorld(view, Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1));
@@ -636,6 +737,7 @@ export function createRgui(
       const me = ev as MouseEvent;
       if (me.shiftKey) return false; // shift+drag = box select
       if (indicatorAt(me.offsetX, me.offsetY)) return false; // indicator click
+      if (panelHitAt(lastPanelRects, me.offsetX, me.offsetY)) return false;
       if (
         (options.onConnect || options.isValidConnection) &&
         portAt(me.offsetX, me.offsetY)
@@ -693,6 +795,10 @@ export function createRgui(
     },
     setSelection(nodeIds: string[]) {
       applySelection(new Set(nodeIds));
+    },
+    setPanels(next: Panel[]) {
+      panels = next;
+      invalidate();
     },
     portScreenPos(nodeId: string, portId: string, side: "in" | "out") {
       const nodes = lastRg?.nodes ?? graph.nodes;

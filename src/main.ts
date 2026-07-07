@@ -58,6 +58,46 @@ const viewer = rgui(canvas, {
   onEdgeContextMenu: (e) => console.log("[rgui] edgeMenu", e.from, e.to),
   onConnectEnd: (from, at) => console.log("[rgui] connectEnd", from, at.world),
   onNodeContextMenu: (id, at) => console.log("[rgui] context", id, at),
+  onPinChange: (id, pinned) => console.log("[rgui] pin", id, pinned),
+  panels: [
+    {
+      id: "palette",
+      title: "INPUT NODES",
+      anchor: "left",
+      items: [
+        { id: "mic", label: "Mic + VAD", color: "#fb923c" },
+        { id: "cam", label: "Camera", color: "#2dd4bf" },
+        { id: "file", label: "Audio file", color: "#fb923c" },
+        { id: "text", label: "Text (in)", color: "#60a5fa" },
+      ],
+      onItemClick: (item, at) => console.log("[rgui] palette click", item.id, at),
+      onItemDrop: (item, at) => {
+        console.log("[rgui] palette drop", item.id, at.world);
+        graph.nodes.push({
+          id: `${item.id}-${graph.nodes.length}`,
+          title: item.label,
+          category: "source",
+          x: at.world.x,
+          y: at.world.y,
+          w: 200,
+          inputs: [],
+          outputs: [{ id: "out", label: "out", kind: "audio" }],
+          fields: [["via", "palette"]],
+        });
+        viewer.invalidate();
+      },
+    },
+    {
+      id: "templates",
+      title: "WORKFLOWS",
+      anchor: "left",
+      items: [
+        { id: "live-captions", label: "Live captions" },
+        { id: "translate", label: "Live translate" },
+      ],
+      onItemClick: (item) => console.log("[rgui] template", item.id),
+    },
+  ],
 });
 
 // expose for host debugging / e2e

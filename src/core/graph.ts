@@ -27,6 +27,11 @@ export interface GraphNode {
   /** label: value rows shown in the node body */
   fields: [string, string][];
   /**
+   * pinned: excluded from dragging (and future auto-layout) — an immovable
+   * anchor other nodes snap around. Toggled via the header pin glyph.
+   */
+  pinned?: boolean;
+  /**
    * Reserved live-body rows below the field rows (row height NODE_ROW_H).
    * The `body` hook draws inside this region.
    */
