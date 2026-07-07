@@ -30,10 +30,11 @@ import {
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
 import {
   computePortLayout,
-  flushComponents,
+  flushPairKeys,
   flushSegments,
   sideCoverage,
   subtractIntervals,
+  type FlushSegment,
   type PortPlacement,
   type SideCoverage,
 } from "../core/pack.js";
@@ -73,7 +74,7 @@ export function drawGraph(
   // renders the connection); external ports sit on the edge their wire
   // actually leaves from.
   const segments = flushSegments(rg.nodes);
-  const comp = flushComponents(rg.nodes, segments);
+  const touching = flushPairKeys(segments);
   const cover = sideCoverage(segments);
   const layout = computePortLayout(graph, rg.nodes, segments);
 
@@ -83,15 +84,18 @@ export function drawGraph(
 
   // wires draw ON TOP of nodes: connections carry the meaning of the graph
   // and cost far fewer pixels than nodes — never hide them.
-  // Exception (辺界消融): wires inside one flush component dissolve —
-  // physical stacking renders the connection.
+  // Exception (辺界消融): a wire between DIRECTLY touching nodes dissolves
+  // into the seam — marked by a solder joint so "snapped + connected" stays
+  // distinguishable from merely "snapped".
   for (const e of rg.edges) {
     if (
       e.from.at === "node" &&
       e.to.at === "node" &&
-      comp.get(e.from.node.id) === comp.get(e.to.node.id)
-    )
+      touching.has([e.from.node.id, e.to.node.id].sort().join("|"))
+    ) {
+      drawSolderJoint(ctx, e.from.node, e.to.node, e, segments, t.k);
       continue;
+    }
     const from = endpointPlaced(e.from, layout, t.k, rule);
     const to = endpointPlaced(e.to, layout, t.k, rule);
     const style = e.source.style;
@@ -137,6 +141,61 @@ export function drawGraph(
 
   ctx.restore();
   return rg;
+}
+
+/**
+ * Solder joint: a small kind-colored pill on the dissolved seam between two
+ * snapped-and-wired nodes — the indicator that the contact IS a connection.
+ */
+function drawSolderJoint(
+  ctx: CanvasRenderingContext2D,
+  a: GraphNode,
+  b: GraphNode,
+  e: RenderEdgeLike,
+  segments: FlushSegment[],
+  k: number,
+) {
+  const seg = segments.find(
+    (s) =>
+      (s.a === a && s.b === b) || (s.a === b && s.b === a),
+  );
+  if (!seg) return;
+  // place the joint near the connected ports' rows, clamped into the seam
+  const oi = a.outputs.findIndex((p) => p.id === e.source.from.port);
+  const ii = b.inputs.findIndex((p) => p.id === e.source.to.port);
+  const py =
+    ((oi >= 0 ? outputPortPos(a, oi)[1] : seg.from) +
+      (ii >= 0 ? inputPortPos(b, ii)[1] : seg.to)) /
+    2;
+  const px =
+    ((oi >= 0 ? outputPortPos(a, oi)[0] : seg.from) +
+      (ii >= 0 ? inputPortPos(b, ii)[0] : seg.to)) /
+    2;
+  const half = 8;
+  const width = 5;
+  ctx.save();
+  ctx.fillStyle = KIND_COLOR[e.kind];
+  ctx.globalAlpha = 0.95;
+  ctx.beginPath();
+  if (seg.axis === "v") {
+    const y = Math.min(seg.to - half, Math.max(seg.from + half, py));
+    ctx.roundRect(seg.at - width / 2, y - half, width, half * 2, width / 2);
+  } else {
+    const x = Math.min(seg.to - half, Math.max(seg.from + half, px));
+    ctx.roundRect(x - half, seg.at - width / 2, half * 2, width, width / 2);
+  }
+  ctx.fill();
+  // hairline notch so the joint reads at low zoom too
+  ctx.globalAlpha = 0.5;
+  ctx.lineWidth = Math.min(1.5, 1.5 / k);
+  ctx.strokeStyle = "#14161a";
+  ctx.stroke();
+  ctx.restore();
+}
+
+interface RenderEdgeLike {
+  kind: keyof typeof KIND_COLOR;
+  source: { from: { port: string }; to: { port: string } };
 }
 
 /** world position of a node's header pin glyph (toggle target) */

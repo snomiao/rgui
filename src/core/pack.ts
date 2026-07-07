@@ -283,7 +283,7 @@ export function computePortLayout(
   nodes: GraphNode[],
   segments: FlushSegment[],
 ): Map<string, PortPlacement> {
-  const comp = flushComponents(nodes, segments);
+  const touching = flushPairKeys(segments);
   const cover = sideCoverage(segments);
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const layout = new Map<string, PortPlacement>();
@@ -304,8 +304,10 @@ export function computePortLayout(
         const others = wires
           .map((e) => byId.get(dir === "out" ? e.to.node : e.from.node))
           .filter((o): o is GraphNode => !!o);
+        // a wire dissolves only when its two nodes TOUCH (direct flush
+        // contact) — being in the same stack without touching still draws
         const external = others.filter(
-          (o) => comp.get(o.id) !== comp.get(n.id),
+          (o) => !touching.has([n.id, o.id].sort().join("|")),
         );
         const hidden = wires.length > 0 && external.length === 0;
 

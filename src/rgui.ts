@@ -40,7 +40,7 @@ import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
 import {
   clampSize,
   computePortLayout,
-  flushComponents,
+  flushPairKeys,
   flushSegments,
   resolveOverlap,
 } from "./core/pack.js";
@@ -935,9 +935,13 @@ export function createRgui(
     }) {
       const nodes = lastRg?.nodes ?? graph.nodes;
       const segments = flushSegments(nodes);
-      const comp = flushComponents(nodes, segments);
-      // dissolved inside one flush stack → not drawn (matches the renderer)
-      if (comp.get(edge.from.node) === comp.get(edge.to.node)) return null;
+      // dissolved into a seam (direct contact) → not drawn as a wire
+      if (
+        flushPairKeys(segments).has(
+          [edge.from.node, edge.to.node].sort().join("|"),
+        )
+      )
+        return null;
       const layout = computePortLayout(graph, nodes, segments);
       const pf = layout.get(`${edge.from.node}/out/${edge.from.port}`);
       const pt = layout.get(`${edge.to.node}/in/${edge.to.port}`);
