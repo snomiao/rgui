@@ -21,7 +21,13 @@ export interface NodeHtmlOverlay {
   anchor?: "right" | "below" | "over";
   /** screen-px offset from the anchor point */
   offset?: { x: number; y: number };
-  /** pointer-events on the element (default true) */
+  /**
+   * pointer-events mode (default true). When true, only actual CONTROLS
+   * inside the element receive pointer events (inputs, selects, buttons,
+   * links, [contenteditable], [data-rgui-interactive]) — the background is
+   * click-through so node drag / canvas pan keep working underneath.
+   * Mark custom widgets with data-rgui-interactive.
+   */
   interactive?: boolean;
   /** called when the overlay is unmounted (replaced, node gone, destroy) */
   destroy?: () => void;
@@ -40,12 +46,63 @@ export interface OverlayManager {
 
 export function createOverlayManager(
   canvas: HTMLCanvasElement,
+  opts?: {
+    /**
+     * re-dispatch wheel events here (usually the rgui canvas) so pan/zoom
+     * keeps working over overlays instead of scrolling the page. A wheel is
+     * NOT forwarded when an inner scrollable element can still consume it.
+     */
+    forwardWheelTo?: HTMLElement;
+  },
 ): OverlayManager {
   let layer: HTMLDivElement | null = null;
   const mounted = new Map<
     string,
-    { ov: NodeHtmlOverlay; wrap: HTMLDivElement }
+    { ov: NodeHtmlOverlay; wrap: HTMLDivElement; mo?: MutationObserver }
   >();
+
+  const CONTROLS =
+    'input,select,textarea,button,a,label,[contenteditable="true"],[data-rgui-interactive]';
+
+  /**
+   * click-through background: the element ignores pointers, its controls
+   * receive them — so pressing overlay whitespace drags the node beneath
+   */
+  function applyControlPassthrough(el: HTMLElement) {
+    el.style.pointerEvents = "none";
+    if (el.matches?.(CONTROLS)) el.style.pointerEvents = "auto";
+    for (const c of el.querySelectorAll<HTMLElement>(CONTROLS))
+      c.style.pointerEvents = "auto";
+  }
+
+  /** can any scrollable between target and the layer consume this wheel? */
+  function scrollableConsumes(ev: WheelEvent): boolean {
+    let el = ev.target as HTMLElement | null;
+    while (el && el !== layer) {
+      const style = getComputedStyle(el);
+      const oy = style.overflowY;
+      if (
+        (oy === "auto" || oy === "scroll") &&
+        el.scrollHeight > el.clientHeight + 1
+      ) {
+        const down = ev.deltaY > 0;
+        const canScroll = down
+          ? el.scrollTop + el.clientHeight < el.scrollHeight - 1
+          : el.scrollTop > 0;
+        if (canScroll) return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  }
+
+  const onLayerWheel = (ev: WheelEvent) => {
+    if (!opts?.forwardWheelTo) return;
+    if (scrollableConsumes(ev)) return; // let the control scroll natively
+    ev.preventDefault(); // never scroll/zoom the page
+    ev.stopPropagation();
+    opts.forwardWheelTo.dispatchEvent(new WheelEvent("wheel", ev));
+  };
 
   function ensureLayer(): HTMLDivElement | null {
     if (layer) return layer;
@@ -55,9 +112,11 @@ export function createOverlayManager(
       parent.style.position = "relative";
     layer = document.createElement("div");
     layer.className = "rgui-overlay-layer";
-    // viewport clip by default; wrapper is a pass-through
+    // viewport clip by default; wrapper is a pass-through. overscroll
+    // containment stops scroll chaining out of overlay controls.
     layer.style.cssText =
-      "position:absolute;inset:0;overflow:hidden;pointer-events:none;";
+      "position:absolute;inset:0;overflow:hidden;pointer-events:none;overscroll-behavior:contain;";
+    layer.addEventListener("wheel", onLayerWheel, { passive: false });
     parent.appendChild(layer);
     return layer;
   }
@@ -65,6 +124,7 @@ export function createOverlayManager(
   function unmount(id: string) {
     const m = mounted.get(id);
     if (!m) return;
+    m.mo?.disconnect();
     m.wrap.remove();
     try {
       m.ov.destroy?.();
@@ -103,11 +163,18 @@ export function createOverlayManager(
         wrap.dataset["nodeId"] = id;
         wrap.style.cssText =
           "position:absolute;left:0;top:0;pointer-events:none;will-change:transform;";
-        ov.el.style.pointerEvents =
-          ov.interactive === false ? "none" : "auto";
         wrap.appendChild(ov.el);
         layer!.appendChild(wrap);
         m = { ov, wrap };
+        if (ov.interactive === false) {
+          ov.el.style.pointerEvents = "none";
+        } else {
+          applyControlPassthrough(ov.el);
+          // hosts re-render controls dynamically (e.g. React) — keep the
+          // control passthrough fresh
+          m.mo = new MutationObserver(() => applyControlPassthrough(ov.el));
+          m.mo.observe(ov.el, { childList: true, subtree: true });
+        }
         mounted.set(id, m);
       }
       const k = view.k;
@@ -140,6 +207,7 @@ export function createOverlayManager(
     sync,
     destroy() {
       for (const id of [...mounted.keys()]) unmount(id);
+      layer?.removeEventListener("wheel", onLayerWheel);
       layer?.remove();
       layer = null;
     },

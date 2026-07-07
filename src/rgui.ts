@@ -379,7 +379,11 @@ export function createRgui(
 
   let view: ViewTransform = options.view ?? { x: 0, y: 0, k: 1 };
 
-  const overlays = createOverlayManager(canvas);
+  const overlays = createOverlayManager(canvas, {
+    // wheel over an overlay must drive rgui pan/zoom (not scroll the page)
+    // unless an inner scrollable control consumes it
+    forwardWheelTo: canvas,
+  });
 
   let raf = 0;
   let destroyed = false;
@@ -948,6 +952,12 @@ export function createRgui(
   const onWheel = (ev: WheelEvent) => {
     if (input !== "figma") return; // classic: d3 handles wheel
     ev.preventDefault();
+    // client-rect math, not offsetX: forwarded clones from the overlay
+    // layer must zoom at the true cursor point (offsetX would be relative
+    // to the overlay element — and synthetic events mangle it by dpr)
+    const rect = canvas.getBoundingClientRect();
+    const ox = ev.clientX - rect.left;
+    const oy = ev.clientY - rect.top;
     const isZoom =
       ev.ctrlKey || // pinch gesture or ctrl+wheel
       ev.deltaMode !== 0 || // line/page mode = real mouse wheel
@@ -964,12 +974,10 @@ export function createRgui(
       const factor = Math.exp(-d * 0.012);
       const k = Math.min(1e6, Math.max(1e-6, view.k * factor));
       // keep the world point under the cursor invariant
-      const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
+      const [wx, wy] = screenToWorld(view, ox, oy);
       sel.call(
         zoomBehavior.transform,
-        zoomIdentity
-          .translate(ev.offsetX - wx * k, ev.offsetY - wy * k)
-          .scale(k),
+        zoomIdentity.translate(ox - wx * k, oy - wy * k).scale(k),
       );
     } else {
       // touchpad two-finger scroll pans both axes
