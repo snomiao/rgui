@@ -6,6 +6,11 @@ const debug = document.querySelector<HTMLDivElement>("#debug")!;
 
 const graph = demoGraph();
 
+// edge styling demo: label + custom width on the labels wire
+const labelsEdge = graph.edges.find((e) => e.from.port === "labels")!;
+labelsEdge.label = "labels.txt";
+labelsEdge.style = { width: 2.5 };
+
 // live-body demo: fake waveform on the STT node (dogfoods GraphNode.body)
 const stt = graph.nodes.find((n) => n.id === "stt")!;
 stt.bodyRows = 2;
@@ -49,5 +54,11 @@ const viewer = rgui(canvas, {
   },
   onNodeClick: (id, at) => console.log("[rgui] click", id, at),
   onSelectionChange: (ids) => console.log("[rgui] selection", ids),
+  onEdgeClick: (e, at) => console.log("[rgui] edgeClick", e.from, e.to, at),
+  onEdgeContextMenu: (e) => console.log("[rgui] edgeMenu", e.from, e.to),
+  onConnectEnd: (from, at) => console.log("[rgui] connectEnd", from, at.world),
   onNodeContextMenu: (id, at) => console.log("[rgui] context", id, at),
 });
+
+// expose for host debugging / e2e
+(window as unknown as { viewer: typeof viewer }).viewer = viewer;

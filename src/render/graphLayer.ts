@@ -94,9 +94,13 @@ export function drawGraph(
       continue;
     const from = endpointPlaced(e.from, layout, t.k, rule);
     const to = endpointPlaced(e.to, layout, t.k, rule);
-    ctx.strokeStyle = KIND_COLOR[e.kind];
-    ctx.lineWidth = Math.min(2, 2 / t.k); // keep wires <= ~2px on screen
-    ctx.setLineDash(e.dashed ? [6 / t.k, 5 / t.k] : []);
+    const style = e.source.style;
+    const color = style?.color ?? KIND_COLOR[e.kind];
+    const width = style?.width ?? 2;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.min(width, width / t.k); // cap at `width` screen px
+    const dash = style?.dash ?? (e.dashed ? [6, 5] : []);
+    ctx.setLineDash(dash.map((d) => d / t.k));
     const dx = Math.max(40, Math.abs(to.x - from.x) * 0.5);
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
@@ -110,6 +114,25 @@ export function drawGraph(
     );
     ctx.stroke();
     ctx.setLineDash([]);
+    if (e.source.label) {
+      // label at the bezier midpoint (t=0.5), kept readable on screen
+      const mx =
+        0.125 * (from.x + to.x) +
+        0.375 * (from.x + from.dir * dx + (to.x + to.dir * dx));
+      const my = 0.125 * (from.y + to.y) + 0.375 * (from.y + to.y);
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.scale(1 / t.k, 1 / t.k);
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(e.source.label).width;
+      ctx.fillStyle = "rgba(28, 33, 38, 0.85)";
+      ctx.fillRect(-tw / 2 - 4, -8, tw + 8, 16);
+      ctx.fillStyle = color;
+      ctx.fillText(e.source.label, 0, 0);
+      ctx.restore();
+    }
   }
 
   ctx.restore();

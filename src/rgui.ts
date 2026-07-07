@@ -19,6 +19,7 @@ import {
   inputPortPos,
   nodeHeight,
   outputPortPos,
+  type Edge,
   type Graph,
   type GraphNode,
   type Port,
@@ -70,6 +71,18 @@ export interface RguiOptions {
   ) => void;
   /** selection changed (click select, shift+drag box select, setSelection) */
   onSelectionChange?: (nodeIds: string[]) => void;
+  /** plain click on a wire */
+  onEdgeClick?: (edge: Edge, screen: { x: number; y: number }) => void;
+  /** right-click / context-menu on a wire */
+  onEdgeContextMenu?: (edge: Edge, screen: { x: number; y: number }) => void;
+  /**
+   * wire drag released on empty canvas (no valid target port) — open a
+   * "create node here" palette and wire it up yourself
+   */
+  onConnectEnd?: (
+    from: PortRef,
+    at: { screen: { x: number; y: number }; world: { x: number; y: number } },
+  ) => void;
 }
 
 /** reference to one port of one node */
@@ -88,6 +101,10 @@ export interface Rgui {
   /** selected node ids (click to select, shift+drag to box-select) */
   readonly selection: string[];
   setSelection(nodeIds: string[]): void;
+  /** programmatic viewport control (syncs d3-zoom state) */
+  setView(view: ViewTransform): void;
+  /** fit all nodes into the viewport with the given screen-px padding */
+  fitView(paddingPx?: number): void;
   /** request a re-render on the next animation frame */
   invalidate(): void;
   destroy(): void;
@@ -279,6 +296,36 @@ export function createRgui(
     return [wx * view.k + view.x, wy * view.k + view.y];
   }
 
+  /** hit-test wires: sample each rendered bezier, ~6px screen tolerance */
+  function edgeAt(sx: number, sy: number): Edge | null {
+    const nodes = lastRg?.nodes ?? graph.nodes;
+    const layout = computePortLayout(graph, nodes, flushSegments(nodes));
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    for (const e of graph.edges) {
+      const a = byId.get(e.from.node);
+      const b = byId.get(e.to.node);
+      if (!a || !b) continue; // endpoint collapsed or missing → wire not drawn
+      const pf = layout.get(`${a.id}/out/${e.from.port}`);
+      const pt = layout.get(`${b.id}/in/${e.to.port}`);
+      if (!pf || !pt || pf.hidden || pt.hidden) continue;
+      const [x0, y0] = worldToScreenXY(pf.x, pf.y);
+      const [x1, y1] = worldToScreenXY(pt.x, pt.y);
+      const dx = Math.max(40 * view.k, Math.abs(x1 - x0) * 0.5);
+      const d0 = pf.edge === "right" ? 1 : -1;
+      const d1 = pt.edge === "right" ? 1 : -1;
+      const cx0 = x0 + d0 * dx;
+      const cx1 = x1 + d1 * dx;
+      for (let i = 0; i <= 24; i++) {
+        const u = i / 24;
+        const v = 1 - u;
+        const bx = v * v * v * x0 + 3 * v * v * u * cx0 + 3 * v * u * u * cx1 + u * u * u * x1;
+        const by = v * v * v * y0 + 3 * v * v * u * y0 + 3 * v * u * u * y1 + u * u * u * y1;
+        if (Math.hypot(bx - sx, by - sy) <= 6) return e;
+      }
+    }
+    return null;
+  }
+
   let drag:
     | {
         type: "node";
@@ -343,6 +390,7 @@ export function createRgui(
     }
     const hit = hitAt(ev.offsetX, ev.offsetY);
     if (!hit) {
+      emptyDown = { x: ev.offsetX, y: ev.offsetY };
       if (ev.shiftKey) {
         // box select
         drag = {
@@ -425,7 +473,20 @@ export function createRgui(
     invalidate();
   };
 
+  let emptyDown: { x: number; y: number } | null = null;
+
   const onPointerUp = (ev: PointerEvent) => {
+    if (!drag && emptyDown) {
+      // click (not pan) on empty canvas: wire click or clear selection
+      if (Math.hypot(ev.offsetX - emptyDown.x, ev.offsetY - emptyDown.y) < 4) {
+        const e = edgeAt(ev.offsetX, ev.offsetY);
+        if (e) options.onEdgeClick?.(e, { x: ev.offsetX, y: ev.offsetY });
+        else if (selection.size) applySelection(new Set());
+      }
+      emptyDown = null;
+      return;
+    }
+    emptyDown = null;
     if (!drag) return;
     if (drag.type === "marquee") {
       const [wx0, wy0] = screenToWorld(view, Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1));
@@ -453,6 +514,13 @@ export function createRgui(
             ? [drag.from.ref, target.ref]
             : [target.ref, drag.from.ref];
         options.onConnect?.(from, to);
+      } else if (!target) {
+        // released on empty canvas — let the host offer "create node here"
+        const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
+        options.onConnectEnd?.(drag.from.ref, {
+          screen: { x: ev.offsetX, y: ev.offsetY },
+          world: { x: wx, y: wy },
+        });
       }
     } else if (drag.type === "node") {
       if (drag.moved) {
@@ -483,6 +551,14 @@ export function createRgui(
         x: ev.offsetX,
         y: ev.offsetY,
       });
+      return;
+    }
+    if (!hit && options.onEdgeContextMenu) {
+      const e = edgeAt(ev.offsetX, ev.offsetY);
+      if (e) {
+        ev.preventDefault();
+        options.onEdgeContextMenu(e, { x: ev.offsetX, y: ev.offsetY });
+      }
     }
   };
 
@@ -557,6 +633,32 @@ export function createRgui(
     },
     setSelection(nodeIds: string[]) {
       applySelection(new Set(nodeIds));
+    },
+    setView(v: ViewTransform) {
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity.translate(v.x, v.y).scale(v.k),
+      );
+    },
+    fitView(paddingPx = 48) {
+      if (!graph.nodes.length) return;
+      const x0 = Math.min(...graph.nodes.map((n) => n.x));
+      const y0 = Math.min(...graph.nodes.map((n) => n.y));
+      const x1 = Math.max(...graph.nodes.map((n) => n.x + n.w));
+      const y1 = Math.max(...graph.nodes.map((n) => n.y + nodeHeight(n)));
+      const W = canvas.clientWidth;
+      const H = canvas.clientHeight;
+      const k = Math.min(
+        (W - 2 * paddingPx) / (x1 - x0),
+        (H - 2 * paddingPx) / (y1 - y0),
+        1e6,
+      );
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity.translate(W / 2 - cx * k, H / 2 - cy * k).scale(k),
+      );
     },
     invalidate,
     destroy() {

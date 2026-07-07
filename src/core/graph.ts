@@ -50,6 +50,16 @@ export interface Edge {
   to: { node: string; port: string };
   /** dashed = event/stream-style wire */
   dashed?: boolean;
+  /** per-edge style overrides (defaults come from the signal kind) */
+  style?: {
+    color?: string;
+    /** screen px */
+    width?: number;
+    /** canvas dash pattern in screen px, e.g. [6, 5] */
+    dash?: number[];
+  };
+  /** short label drawn at the wire midpoint */
+  label?: string;
 }
 
 export interface Graph {

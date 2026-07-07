@@ -15,6 +15,7 @@ import {
   inputPortPos,
   nodeHeight,
   outputPortPos,
+  type Edge,
   type Graph,
   type GraphNode,
   type Port,
@@ -43,6 +44,8 @@ export interface RenderEdge {
   to: EndpointRef;
   kind: Port["kind"];
   dashed?: boolean;
+  /** the original graph edge this render edge represents */
+  source: Edge;
 }
 
 export interface RenderGraph {
@@ -212,7 +215,13 @@ export function buildRenderGraph(
     const to: EndpointRef = pb
       ? { at: "pseudo", pseudo: pb, side: "in", index: openPort(pb, "in", b.inputs[ii]!) }
       : { at: "node", node: b, side: "in", index: ii };
-    edges.push({ from, to, kind: a.outputs[oi]!.kind, dashed: e.dashed });
+    edges.push({
+      from,
+      to,
+      kind: a.outputs[oi]!.kind,
+      dashed: e.dashed,
+      source: e,
+    });
   }
 
   // unconnected ports of members are open too — expose them on the pseudo
