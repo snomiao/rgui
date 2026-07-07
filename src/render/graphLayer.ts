@@ -66,7 +66,7 @@ export function drawGraph(
   ctx.translate(t.x, t.y);
   ctx.scale(t.k, t.k);
 
-  // 辺界消融: flush-contact boundaries dissolve. Borders are drawn only on
+  // boundary dissolution: flush-contact boundaries dissolve. Borders are drawn only on
   // UNCOVERED segments; corners at a junction lose their radius; ports whose
   // wires all stay inside one flush component vanish (the stack itself
   // renders the connection); external ports sit on the edge their wire
