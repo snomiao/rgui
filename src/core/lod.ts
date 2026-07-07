@@ -20,6 +20,7 @@ import {
   type GraphNode,
   type Port,
 } from "./graph.js";
+import { flushSegments } from "./pack.js";
 import { DEFAULT_RULE, type RgRule } from "./rule.js";
 
 export interface PseudoNode {
@@ -124,10 +125,21 @@ export function buildRenderGraph(
   const px = (gx: number, gy: number) =>
     Math.hypot(xa * gx + xb * gy, xc * gx + xd * gy) * k;
   const kH = Math.hypot(xb, xd) * k; // apparent vertical scale
+  // SNAP BEATS LOCATION: members of a flush-contact stack use the more
+  // generous collapseSnappedPx threshold — a fused block becomes one
+  // pseudo-node before loose neighbors merge by proximity
+  const segments = flushSegments(graph.nodes);
+  const snapped = new Set<string>();
+  for (const seg of segments) {
+    snapped.add(seg.a.id);
+    snapped.add(seg.b.id);
+  }
   // the render rule applies to EVERY element: nodes that would render
   // unreadably small degrade into readable pseudo-nodes
   const unreadable = graph.nodes.filter(
-    (n) => nodeHeight(n) * kH < rule.collapsePx,
+    (n) =>
+      nodeHeight(n) * kH <
+      (snapped.has(n.id) ? rule.collapseSnappedPx : rule.collapsePx),
   );
 
   // high-order rg nodes emerge from location + connection logic:
@@ -149,6 +161,12 @@ export function buildRenderGraph(
     connected.add(`${a}|${b}`);
   }
 
+  const eligible = new Set(unreadable.map((n) => n.id));
+  // 1) flush contact unions FIRST and unconditionally (snap > location)
+  for (const seg of segments)
+    if (eligible.has(seg.a.id) && eligible.has(seg.b.id))
+      union(seg.a.id, seg.b.id);
+  // 2) then proximity/connection with their pixel budgets
   for (let i = 0; i < unreadable.length; i++) {
     for (let j = i + 1; j < unreadable.length; j++) {
       const a = unreadable[i]!;

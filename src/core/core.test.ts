@@ -110,6 +110,22 @@ describe("semantic-zoom LOD", () => {
   });
 });
 
+describe("snap beats location (merge priority)", () => {
+  test("a flush stack collapses earlier than loose nodes", () => {
+    const a = mkNode("a", 0, 0);
+    const b = mkNode("b", 0, nodeHeight(mkNode("a", 0, 0))); // flush under a
+    const far = mkNode("far", 900, 0); // isolated
+    const g = { nodes: [a, b, far], edges: [] };
+    // between collapsePx/h (~0.62) and collapseSnappedPx/h (~0.93):
+    const rg = buildRenderGraph(g, 0.8);
+    const pseudoIds = rg.pseudo.map((p) => p.id).join(",");
+    expect(pseudoIds).toContain("a");
+    expect(pseudoIds).toContain("b");
+    expect(rg.nodes.map((n) => n.id)).toEqual(["far"]); // loose node stays
+    expect(rg.pseudo.length).toBe(1); // one merged stack
+  });
+});
+
 describe("auto-layout", () => {
   test("layers follow connections; pinned stays put", () => {
     const g = demoGraph();

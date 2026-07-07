@@ -11,6 +11,13 @@ export interface RgRule {
   ladder: number[];
   /** a node collapses into a pseudo-node below this screen height (px) */
   collapsePx: number;
+  /**
+   * SNAPPED nodes merge with priority: members of a flush-contact stack
+   * collapse below this (more generous) height — they already render as
+   * one fused block, so they become one pseudo-node earlier than loose
+   * neighbors governed by the location rule
+   */
+  collapseSnappedPx: number;
   /** hide node field text below this row height (px) */
   fieldMinPx: number;
   /** hide port labels below this row height (px) */
@@ -43,6 +50,7 @@ export const DEFAULT_RULE: RgRule = {
   minGridPx: 48,
   ladder: [1, 2, 5],
   collapsePx: 56,
+  collapseSnappedPx: 84,
   fieldMinPx: 9,
   portLabelMinPx: 6,
   clusterGapPx: 24,
