@@ -40,4 +40,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # no NPM_TOKEN on purpose — npm auth comes from the OIDC exchange
-        run: npx --yes semantic-release
+        # conventionalcommits preset isn't bundled with semantic-release — provide it to the npx sandbox
+        run: npx --yes -p semantic-release -p conventional-changelog-conventionalcommits semantic-release
