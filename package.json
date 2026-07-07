@@ -1,6 +1,6 @@
 {
   "name": "@snomiao/rgui",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework-agnostic readable-grid UI library — screen-adaptive grid, snap-everything, semantic-zoom LOD node graphs. Canvas 2D now, WebGPU next.",
   "type": "module",
   "license": "MIT",
