@@ -44,6 +44,8 @@ export {
   aggregate,
   fieldSummarize,
   defaultSummarize,
+  ordered,
+  topK,
   type MergeRule,
 } from "./core/aggregate.js";
 export {

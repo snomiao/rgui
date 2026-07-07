@@ -12,7 +12,7 @@ import { buildRenderGraph } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
 import { DEFAULT_RULE } from "./rule";
-import { aggregate, fieldSummarize } from "./aggregate";
+import { aggregate, fieldSummarize, ordered, topK } from "./aggregate";
 
 const mkNode = (
   id: string,
@@ -225,6 +225,26 @@ describe("data merge rules", () => {
     const f = fieldSummarize({ score: "max" });
     const out = f([a, b], { collapsed: true, level: "pseudo", screen: { w: 200, h: 100 } });
     expect(out).toEqual({ kind: "kv", rows: [["lang", "ja ×2"], ["score", "0.8"]] });
+  });
+});
+
+describe("merge combinators extend the simple rules", () => {
+  test("ordered: severity 'worst' and time 'latest' are just max", () => {
+    const worst = ordered(["ok", "warn", "error"]);
+    expect(aggregate(["ok", "error", "warn"], worst)).toBe("error");
+    const latest = ordered((v) => Date.parse(v), "max");
+    expect(
+      aggregate(["2026-01-01", "2026-07-08", "2025-12-31"], latest),
+    ).toBe("2026-07-08");
+  });
+  test("median: plain rule, robust middle", () => {
+    expect(aggregate(["1", "9", "5"], "median")).toBe("5");
+    expect(aggregate(["1", "9"], "median")).toBe("5");
+  });
+  test("topK: histogram generalizes mode", () => {
+    const vals = ["en", "ja", "en", "de", "ja", "en"];
+    expect(aggregate(vals, topK(2))).toBe("en ×3, ja ×2");
+    expect(aggregate(vals, topK(1))).toBe(aggregate(vals, "mode"));
   });
 });
 

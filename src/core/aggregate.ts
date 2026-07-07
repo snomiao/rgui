@@ -19,6 +19,7 @@ export type MergeRule =
   | "range" // "min–max" spread display
   | "mode" // 众数 — most frequent (numbers and texts)
   | "set" // 集合 — distinct values, comma-joined
+  | "median" // middle numeric value — robust against outliers
   | "same" // all equal → the value; else "mixed (N)" (Figma-style)
   | "any" // alias of "max" — boolean OR IS max over {0,1}
   | "all" // alias of "min" — boolean AND IS min over {0,1}
@@ -65,6 +66,13 @@ export function aggregate(values: string[], rule: MergeRule): string {
       if (!ns.length) return "";
       const m = ns.reduce((a, b) => a + b, 0) / ns.length;
       return String(Math.round(m * 100) / 100);
+    }
+    case "median": {
+      const ns = nums().sort((a, b) => a - b);
+      if (!ns.length) return "";
+      const mid = (ns.length - 1) / 2;
+      const m = (ns[Math.floor(mid)]! + ns[Math.ceil(mid)]!) / 2;
+      return String(m);
     }
     case "range": {
       const ns = nums();
@@ -140,3 +148,53 @@ export function fieldSummarize(
 
 /** rgui's default data-merge summary (mode for every field) */
 export const defaultSummarize: SummarizeFn = fieldSummarize();
+
+// --- combinators: the "new" rules are parameterizations of the old ones ----
+
+/**
+ * Extremum under an ordering — the generalization behind max/min/any/all.
+ * Give an enum order (["ok","warn","error"] → severity) or a key function
+ * (Date.parse → latest). dir "max" picks the greatest.
+ *
+ *   fieldSummarize({ status: ordered(["ok","warn","error"]) })   // worst
+ *   fieldSummarize({ updated: ordered(Date.parse, "max") })      // latest
+ */
+export function ordered(
+  order: string[] | ((v: string) => number),
+  dir: "max" | "min" = "max",
+): (values: string[]) => string {
+  const key =
+    typeof order === "function"
+      ? order
+      : (v: string) => order.indexOf(v);
+  return (values) => {
+    let best = values[0]!;
+    let bestK = key(best);
+    for (const v of values) {
+      const kv = key(v);
+      if (Number.isNaN(kv)) continue;
+      if (dir === "max" ? kv > bestK : kv < bestK) {
+        best = v;
+        bestK = kv;
+      }
+    }
+    return best;
+  };
+}
+
+
+/**
+ * Top-k histogram — mode generalized: topK(1) ≡ "mode",
+ * topK(2)(["en","ja","en","de","ja","en"]) → "en ×3, ja ×2".
+ */
+export function topK(k: number): (values: string[]) => string {
+  return (values) => {
+    const counts = new Map<string, number>();
+    for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, k)
+      .map(([v, c]) => (c > 1 ? `${v} ×${c}` : v))
+      .join(", ");
+  };
+}
