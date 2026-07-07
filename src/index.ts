@@ -73,7 +73,11 @@ export {
   type DrawLayer,
   type GridRenderer,
 } from "./render/canvas2d.js";
-export { drawGraph, KIND_COLOR } from "./render/graphLayer.js";
+export {
+  drawGraph,
+  drawOffscreenIndicators,
+  KIND_COLOR,
+} from "./render/graphLayer.js";
 
 import { createRgui } from "./rgui.js";
 export default createRgui;

@@ -71,3 +71,32 @@ category 色ヘッダ・device 行・port 色ワイヤ付きで描画。error no
 
 3〜5 は後続で良い。まず **1（drag 同期)と 2（接続)** があれば「編集できる並行 renderer」に格上げできる。
 `screenToWorld`/`worldToScreen` は export 済みを確認、menu 配置・drop 変換に使う。
+
+### [2026-07-07 22:45] rgui が otoji の DEFAULT renderer に昇格・editable 化完了
+
+結論: v0.2.0 の interaction API を全て配線し、rgui を otoji graph editor の
+**既定 renderer** にした。React Flow は `?renderer=rf` で一段だけ残置(node config
+UI 移設後に完全撤去予定)。実機で編集操作を検証済み。
+
+**採用方式(重要)**: snomiao 指示により「heavy dev 中は npm でなく source 直参照」。
+npm 依存にはせず **rgui source を直接消費**:
+- git submodule `lib/rgui`(origin/main = v0.2.0)を CI/prod の再現可能ソースに。
+- 手元は sibling worktree `~/ws/snomiao/rgui/tree/main/src` を優先(未 commit 編集も即反映)。
+- どちらも無ければ in-repo 型 shim `src/vendor/rgui-stub.ts`(build は常に緑)。
+- **d3 注意**: source 消費だと submodule に node_modules が無く `d3-selection`/`d3-zoom`
+  が解決不能 → otoji 側の copy へ vite alias で固定した(そちらは対応不要)。
+- npm publish (v0.2.0) は把握済み。安定したら通常依存へ戻すが、今は source 直参照を継続。
+
+**配線した callback**(全て実機確認済み):
+- `onNodeMoveEnd` → otoji state 更新 + room broadcast(drag 40→160 が state 経由で永続化を確認)
+- `isValidConnection` → otoji `canConnect`(型検査)/ `onConnect` → edge 追加 + broadcast
+  (port drag で `d-stt.out → d-sink.in` が生成されることを確認)
+- `onNodeClick` / `onNodeContextMenu` → per-node メニュー(remove で node+edge 削除を確認)
+- palette drop / click-add → world 座標へ node 生成(`view` から screen→world 変換)
+
+**RF 完全撤去のために欲しい API(再掲・優先度上昇)**:
+- **要望4 live-body draw hook**: VoiceNode の live waveform / 部分文字列 / 画像 / busy を
+  canvas node body に出す手段(per-node custom draw か body への push)。これが最後の関門。
+- **要望5 selection API**: 複数選択 + 一括削除 / template 保存用。
+otoji 側は当面 node click → inspector panel(device 割当 + config)を rgui-native に自作し、
+VoiceNode を撤去する。live-body hook が来たら preview もそこへ寄せる。

@@ -10,7 +10,11 @@ import {
   createGridDotsLayer,
   type DrawLayer,
 } from "./render/canvas2d.js";
-import { drawGraph, KIND_COLOR } from "./render/graphLayer.js";
+import {
+  drawGraph,
+  drawOffscreenIndicators,
+  KIND_COLOR,
+} from "./render/graphLayer.js";
 import {
   inputPortPos,
   nodeHeight,
@@ -100,6 +104,9 @@ export function createRgui(
     createGridDotsLayer(rule),
     ...(options.layers ?? []),
     (ctx, t) => (lastRg = drawGraph(ctx, t, graph, rule)),
+    (ctx, t, size) => {
+      if (lastRg) drawOffscreenIndicators(ctx, t, lastRg, size, rule);
+    },
     (ctx, t) => drawGhostWire(ctx, t),
   ]);
 

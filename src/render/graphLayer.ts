@@ -340,3 +340,71 @@ function drawPort(
   ctx.strokeStyle = "#14161a";
   ctx.stroke();
 }
+
+/**
+ * Game-style off-screen indicators: for every node fully outside the
+ * viewport, draw an arrow pinned to the viewport edge pointing at it —
+ * zoomed in close, you stay aware of what lies outside.
+ */
+export function drawOffscreenIndicators(
+  ctx: CanvasRenderingContext2D,
+  t: ViewTransform,
+  rg: RenderGraph,
+  size: { width: number; height: number },
+  rule: RgRule = DEFAULT_RULE,
+) {
+  const { width: W, height: H } = size;
+  const m = 18; // edge inset for the markers
+  const clamp = (v: number, lo: number, hi: number) =>
+    Math.min(hi, Math.max(lo, v));
+
+  const items: { x: number; y: number; color: string }[] = [];
+  for (const n of rg.nodes) {
+    const x0 = n.x * t.k + t.x;
+    const y0 = n.y * t.k + t.y;
+    const x1 = (n.x + n.w) * t.k + t.x;
+    const y1 = (n.y + nodeHeight(n)) * t.k + t.y;
+    if (x1 < 0 || x0 > W || y1 < 0 || y0 > H)
+      items.push({
+        x: (x0 + x1) / 2,
+        y: (y0 + y1) / 2,
+        color: CATEGORY_COLOR[n.category],
+      });
+  }
+  for (const p of rg.pseudo) {
+    const r = pseudoRect(p, t.k, rule);
+    const x0 = r.x * t.k + t.x;
+    const y0 = r.y * t.k + t.y;
+    const x1 = (r.x + r.w) * t.k + t.x;
+    const y1 = (r.y + r.h) * t.k + t.y;
+    if (x1 < 0 || x0 > W || y1 < 0 || y0 > H)
+      items.push({
+        x: (x0 + x1) / 2,
+        y: (y0 + y1) / 2,
+        color: p.category ? CATEGORY_COLOR[p.category] : PSEUDO_HEADER,
+      });
+  }
+
+  for (const it of items) {
+    const ax = clamp(it.x, m, W - m);
+    const ay = clamp(it.y, m, H - m);
+    const ang = Math.atan2(it.y - ay, it.x - ax);
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.rotate(ang);
+    // chevron pointing toward the off-screen node
+    ctx.beginPath();
+    ctx.moveTo(9, 0);
+    ctx.lineTo(-5, 5.5);
+    ctx.lineTo(-2, 0);
+    ctx.lineTo(-5, -5.5);
+    ctx.closePath();
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = it.color;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#14161a";
+    ctx.stroke();
+    ctx.restore();
+  }
+}
