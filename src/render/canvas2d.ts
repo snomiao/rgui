@@ -25,9 +25,14 @@ export interface GridRenderer {
 export function createCanvas2DRenderer(
   canvas: HTMLCanvasElement,
   layers: DrawLayer[],
+  opts?: {
+    /** background fill; false = transparent (compositing over an underlay) */
+    background?: string | false;
+  },
 ): GridRenderer {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2d context unavailable");
+  const background = opts?.background ?? "#1c2126";
 
   let width = 0;
   let height = 0;
@@ -44,8 +49,12 @@ export function createCanvas2DRenderer(
   function render(t: ViewTransform) {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#1c2126";
-    ctx.fillRect(0, 0, width, height);
+    if (background === false) {
+      ctx.clearRect(0, 0, width, height);
+    } else {
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, width, height);
+    }
     for (const layer of layers) layer(ctx, t, { width, height });
   }
 

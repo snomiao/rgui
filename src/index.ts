@@ -85,6 +85,10 @@ export {
   type OffscreenIndicator,
 } from "./render/graphLayer.js";
 export {
+  createWebGPUGridRenderer,
+  type WebGPUGridRenderer,
+} from "./render/webgpu.js";
+export {
   createOverlayManager,
   type NodeHtmlOverlay,
   type OverlayManager,

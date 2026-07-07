@@ -10,7 +10,8 @@
     "moduleDetection": "force",
     "types": [
       "vite/client",
-      "bun"
+      "bun",
+      "@webgpu/types"
     ],
     "moduleResolution": "bundler",
     "verbatimModuleSyntax": true,

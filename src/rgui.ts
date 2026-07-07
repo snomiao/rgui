@@ -31,6 +31,10 @@ import {
   type NodeHtmlOverlay,
 } from "./render/overlayLayer.js";
 import {
+  createWebGPUGridRenderer,
+  type WebGPUGridRenderer,
+} from "./render/webgpu.js";
+import {
   inputPortPos,
   nodeHeight,
   nodeMinHeight,
@@ -107,6 +111,12 @@ export interface RguiOptions {
     world: { x: number; y: number },
   ) => void;
   /**
+   * rendering backend (default "auto"): "webgpu" renders the background +
+   * grid field on a GPU underlay canvas (graph content stays 2D on top);
+   * falls back to "canvas2d" when WebGPU is unavailable
+   */
+  renderer?: "auto" | "canvas2d" | "webgpu";
+  /**
    * input preset (default "figma"):
    * - figma: 2-finger scroll = pan · pinch / ctrl+wheel / mouse wheel = zoom ·
    *   plain or right drag on empty = box select · space+drag / middle drag = pan
@@ -138,6 +148,8 @@ export interface Rgui {
   canvas: HTMLCanvasElement;
   readonly view: ViewTransform;
   readonly rule: RgRule;
+  /** active backend ("webgpu" once the GPU pipeline is live) */
+  readonly rendererKind: "canvas2d" | "webgpu";
   graph: Graph;
   setGraph(g: Graph): void;
   /** selected node ids (click to select, shift+drag to box-select) */
@@ -285,11 +297,9 @@ export function createRgui(
     }
   }
 
-  const renderer = createCanvas2DRenderer(canvas, [
-    // grid field: dots grow tails pulling toward off-screen nodes
-    createGridDotsLayer(rule, () =>
-      lastIndicators.map((it) => ({ x: it.cx, y: it.cy })),
-    ),
+  const fieldProvider = () =>
+    lastIndicators.map((it) => ({ x: it.cx, y: it.cy }));
+  const contentLayers: DrawLayer[] = [
     ...(options.layers ?? []),
     (ctx, t) => (lastRg = drawGraph(ctx, t, graph, rule)),
     (ctx, t) => drawSelectionLayer(ctx, t),
@@ -305,7 +315,58 @@ export function createRgui(
       if (drag?.type === "panelItem" && drag.moved)
         drawPanelDragGhost(ctx, view, drag.item, drag.sx, drag.sy);
     },
-  ]);
+  ];
+  const gridLayer = createGridDotsLayer(rule, fieldProvider);
+
+  // backend selection: GPU underlay canvas for bg+grid, 2D content on top
+  const wantGpu =
+    (options.renderer ?? "auto") !== "canvas2d" &&
+    typeof navigator !== "undefined" &&
+    !!navigator.gpu;
+  if ((options.renderer ?? "auto") === "webgpu" && !wantGpu)
+    console.warn("[rgui] WebGPU requested but unavailable; using canvas2d");
+
+  let rendererKind: "canvas2d" | "webgpu" = "canvas2d";
+  let gpu: WebGPUGridRenderer | null = null;
+  let underlay: HTMLCanvasElement | null = null;
+  let renderer = createCanvas2DRenderer(
+    canvas,
+    wantGpu ? contentLayers : [gridLayer, ...contentLayers],
+    { background: wantGpu ? false : undefined },
+  );
+  if (wantGpu) {
+    underlay = document.createElement("canvas");
+    underlay.className = "rgui-gpu-underlay";
+    underlay.style.cssText =
+      "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
+    const parent = canvas.parentElement;
+    if (parent) {
+      if (getComputedStyle(parent).position === "static")
+        parent.style.position = "relative";
+      if (getComputedStyle(canvas).position === "static")
+        canvas.style.position = "relative";
+      if (!canvas.style.zIndex) canvas.style.zIndex = "1";
+      parent.insertBefore(underlay, canvas);
+    }
+    gpu = createWebGPUGridRenderer(underlay, rule, fieldProvider);
+    gpu.ready.then((ok) => {
+      if (destroyed) return;
+      if (ok) {
+        rendererKind = "webgpu";
+      } else {
+        // GPU init failed: tear down the underlay and go pure canvas2d
+        underlay?.remove();
+        underlay = null;
+        gpu = null;
+        renderer = createCanvas2DRenderer(
+          canvas,
+          [gridLayer, ...contentLayers],
+        );
+        renderer.resize();
+      }
+      invalidate();
+    });
+  }
 
   let view: ViewTransform = options.view ?? { x: 0, y: 0, k: 1 };
 
@@ -317,6 +378,7 @@ export function createRgui(
     if (raf || destroyed) return;
     raf = requestAnimationFrame(() => {
       raf = 0;
+      if (rendererKind === "webgpu") gpu?.render(view);
       renderer.render(view);
       overlays.sync(graph, lastRg?.nodes ?? null, view, rule);
       if (debugEl) updateDebug();
@@ -346,7 +408,8 @@ export function createRgui(
     );
     debugEl.innerHTML =
       `<span class="dim">scale </span><span class="hi">${fmt(view.k, 3)}×</span>` +
-      `<span class="dim"> dpr </span>${devicePixelRatio}\n` +
+      `<span class="dim"> dpr </span>${devicePixelRatio}` +
+      `<span class="dim"> · ${rendererKind}</span>\n` +
       `<span class="dim">grid  major </span><span class="hi">${fmt(major!.px, 1)}px</span>` +
       `<span class="dim"> (${fmt(major!.px / rem)}rem) = ${fmt(major!.step)} wu</span>\n` +
       `<span class="dim">      minor </span>${fmt(minor!.px, 1)}px` +
@@ -955,6 +1018,7 @@ export function createRgui(
 
   const ro = new ResizeObserver(() => {
     renderer.resize();
+    gpu?.resize();
     invalidate();
   });
   ro.observe(canvas);
@@ -965,6 +1029,9 @@ export function createRgui(
     canvas,
     get view() {
       return view;
+    },
+    get rendererKind() {
+      return rendererKind;
     },
     rule,
     get graph() {
@@ -1122,6 +1189,8 @@ export function createRgui(
     invalidate,
     destroy() {
       destroyed = true;
+      gpu?.destroy();
+      underlay?.remove();
       overlays.destroy();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
