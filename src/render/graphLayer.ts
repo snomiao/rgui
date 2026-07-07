@@ -62,8 +62,9 @@ export function drawGraph(
   graph: Graph,
   rule: RgRule = DEFAULT_RULE,
   summarize?: SummarizeFn,
+  xform?: readonly [number, number, number, number],
 ): RenderGraph {
-  const rg = buildRenderGraph(graph, t.k, rule);
+  const rg = buildRenderGraph(graph, t.k, rule, xform);
 
   ctx.save();
   // draw in world space; regular strokes/text zoom with the world

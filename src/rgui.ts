@@ -158,10 +158,21 @@ export interface Rgui {
   readonly rule: RgRule;
   /** active backend ("webgpu" once the GPU pipeline is live) */
   readonly rendererKind: "canvas2d" | "webgpu";
-  /** viewport rotation in radians (about the viewport center) */
+  /** viewport roll in radians (about the viewport center) */
   readonly rotation: number;
-  /** rotate the whole viewport (world content; panels stay upright) */
+  /** full 3-D orientation of the graph plane */
+  readonly rotation3: { yaw: number; pitch: number; roll: number };
+  /** rotate the whole viewport in-plane (roll only; see setRotation3) */
   setRotation(rad: number, opts?: { animate?: boolean }): void;
+  /**
+   * orient the graph plane in 3-D (orthographic): yaw/pitch tilt it,
+   * foreshortened nodes visually converge and the LOD merges them —
+   * a pure rendering trick, base positions never change
+   */
+  setRotation3(
+    target: { yaw?: number; pitch?: number; roll?: number },
+    opts?: { animate?: boolean },
+  ): void;
   graph: Graph;
   setGraph(g: Graph): void;
   /** selected node ids (click to select, shift+drag to box-select) */
@@ -231,32 +242,89 @@ export function createRgui(
   let panels: Panel[] = options.panels ?? [];
   let lastPanelRects: PanelRect[] = [];
 
-  // --- viewport rotation (about the viewport center) ----------------------
-  let rotation = 0; // radians
-  function rotAbout(
+  // --- viewport 3-D rotation (orthographic, about the viewport center) ----
+  // The graph plane rotates in 3-D (yaw/pitch/roll); its orthographic
+  // projection onto the screen is a plain 2x2 affine matrix A, so both
+  // renderers and (inverted) pointer input stay exact. Foreshortening makes
+  // nodes visually converge, and the LOD metric sees it — merging is a pure
+  // rendering trick; base node positions never change.
+  const rot3 = { yaw: 0, pitch: 0, roll: 0 };
+  let A: readonly [number, number, number, number] = [1, 0, 0, 1];
+  let Ainv: readonly [number, number, number, number] = [1, 0, 0, 1];
+  let rotActive = false;
+  function updateRotation() {
+    const { yaw, pitch, roll } = rot3;
+    rotActive = !!(yaw || pitch || roll);
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+    const cx = Math.cos(pitch);
+    const sx = Math.sin(pitch);
+    const cz = Math.cos(roll);
+    const sz = Math.sin(roll);
+    // R = Rz(roll) · Rx(pitch) · Ry(yaw); screen linear part = rows 0,1 ×
+    // cols 0,1 (graph plane is z = 0)
+    const a = cz * cy - sz * sx * sy; // R00
+    const b = -sz * cx; // R01
+    const c = sz * cy + cz * sx * sy; // R10
+    const d = cz * cx; // R11
+    A = [a, b, c, d];
+    const det = a * d - b * c;
+    const inv = Math.abs(det) < 0.05 ? (det < 0 ? -20 : 20) : 1 / det;
+    Ainv = [d * inv, -b * inv, -c * inv, a * inv];
+  }
+  const applyMat = (
+    m: readonly [number, number, number, number],
     x: number,
     y: number,
-    ang: number,
-  ): readonly [number, number] {
-    if (!ang) return [x, y];
+  ): readonly [number, number] => {
     const cx = canvas.clientWidth / 2;
     const cy = canvas.clientHeight / 2;
-    const c = Math.cos(ang);
-    const sn = Math.sin(ang);
     const dx = x - cx;
     const dy = y - cy;
-    return [cx + dx * c - dy * sn, cy + dx * sn + dy * c];
-  }
+    return [cx + m[0] * dx + m[1] * dy, cy + m[2] * dx + m[3] * dy];
+  };
   /** raw screen → view space (undo the viewport rotation) */
-  const toView = (sx: number, sy: number) => rotAbout(sx, sy, -rotation);
+  const toView = (sx: number, sy: number) =>
+    rotActive ? applyMat(Ainv, sx, sy) : ([sx, sy] as const);
   /** view space → raw screen */
-  const fromView = (vx: number, vy: number) => rotAbout(vx, vy, rotation);
+  const fromView = (vx: number, vy: number) =>
+    rotActive ? applyMat(A, vx, vy) : ([vx, vy] as const);
+  /** coverage inflation for grid layers (0 = axis-aligned viewport) */
+  const coverage = () => {
+    if (!rotActive) return 0;
+    // min singular value of A → how much the inverse can stretch bounds
+    const [a, b, c, d] = A;
+    const t1 = a * a + b * b + c * c + d * d;
+    const det = Math.abs(a * d - b * c);
+    const s2 = Math.sqrt(Math.max(0, t1 * t1 / 4 - det * det));
+    const minSv = Math.sqrt(Math.max(1e-4, t1 / 2 - s2));
+    return 1 / Math.max(0.25, Math.min(1, minSv));
+  };
+  /**
+   * the grid field's 3-D base vector = R · (0,0,1): dots keep their screen
+   * positions, arrows lean along the lateral part; z < 0 flips ⊙ → ⊗
+   */
+  function fieldVec3(): { x: number; y: number; z: number } {
+    const { yaw, pitch, roll } = rot3;
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+    const cx = Math.cos(pitch);
+    const sx = Math.sin(pitch);
+    const cz = Math.cos(roll);
+    const sz = Math.sin(roll);
+    // Rz(roll) · Rx(pitch) · Ry(yaw) · e3
+    const x0 = sy;
+    const y0 = -sx * cy;
+    const z0 = cx * cy;
+    return { x: x0 * cz - y0 * sz, y: x0 * sz + y0 * cz, z: z0 };
+  }
+
   /** wrap a draw layer so it renders inside the rotated world frame */
   const world = (layer: DrawLayer): DrawLayer => (ctx, t, size) => {
-    if (!rotation) return layer(ctx, t, size);
+    if (!rotActive) return layer(ctx, t, size);
     ctx.save();
     ctx.translate(size.width / 2, size.height / 2);
-    ctx.rotate(rotation);
+    ctx.transform(A[0], A[2], A[1], A[3], 0, 0);
     ctx.translate(-size.width / 2, -size.height / 2);
     layer(ctx, t, size);
     ctx.restore();
@@ -347,7 +415,14 @@ export function createRgui(
     ...(options.layers ?? []).map((l) => world(l)),
     world(
       (ctx, t) =>
-        (lastRg = drawGraph(ctx, t, graph, rule, options.summarize)),
+        (lastRg = drawGraph(
+          ctx,
+          t,
+          graph,
+          rule,
+          options.summarize,
+          rotActive ? A : undefined,
+        )),
     ),
     world((ctx, t) => drawSelectionLayer(ctx, t)),
     (ctx, t, size) => {
@@ -358,7 +433,7 @@ export function createRgui(
             lastRg,
             size,
             rule,
-            rotation ? fromView : undefined,
+            rotActive ? fromView : undefined,
           )
         : [];
     },
@@ -376,8 +451,18 @@ export function createRgui(
   let zArrow = 1;
   let zLastK: number | null = null;
   const zDirProvider = () => zArrow;
-  const gridLayer = world(
-    createGridDotsLayer(rule, fieldProvider, zDirProvider, () => rotation),
+  const fieldTiltProvider = () => {
+    const v = fieldVec3();
+    return [v.x, v.y] as const;
+  };
+  const zComposed = () => zArrow * (rotActive ? fieldVec3().z : 1);
+  // NOTE: the grid layer is NOT world-rotated — dots keep their positions,
+  // only the field direction follows the box rotation
+  const gridLayer = createGridDotsLayer(
+    rule,
+    fieldProvider,
+    zComposed,
+    fieldTiltProvider,
   );
 
   // backend selection: GPU underlay canvas for bg+grid, 2D content on top
@@ -414,8 +499,8 @@ export function createRgui(
       underlay,
       rule,
       fieldProvider,
-      zDirProvider,
-      () => rotation,
+      zComposed,
+      fieldTiltProvider,
     );
     gpu.ready.then((ok) => {
       if (destroyed) return;
@@ -1052,11 +1137,9 @@ export function createRgui(
       );
     } else {
       // touchpad two-finger scroll pans both axes — deltas arrive in raw
-      // screen space, so rotate them into the view frame
-      const c = Math.cos(-rotation);
-      const sn = Math.sin(-rotation);
-      const dx = ev.deltaX * c - ev.deltaY * sn;
-      const dy = ev.deltaX * sn + ev.deltaY * c;
+      // screen space, so map them through the inverse view matrix
+      const dx = Ainv[0] * ev.deltaX + Ainv[1] * ev.deltaY;
+      const dy = Ainv[2] * ev.deltaX + Ainv[3] * ev.deltaY;
       sel.call(
         zoomBehavior.transform,
         zoomIdentity.translate(view.x - dx, view.y - dy).scale(view.k),
@@ -1130,22 +1213,42 @@ export function createRgui(
       return rendererKind;
     },
     get rotation() {
-      return rotation;
+      return rot3.roll;
+    },
+    get rotation3() {
+      return { ...rot3 };
     },
     setRotation(rad: number, opts?: { animate?: boolean }) {
-      const target = rad;
-      if (opts?.animate === false || !Number.isFinite(target)) {
-        rotation = target || 0;
+      this.setRotation3({ roll: rad }, opts);
+    },
+    setRotation3(
+      target: { yaw?: number; pitch?: number; roll?: number },
+      opts?: { animate?: boolean },
+    ) {
+      // full range allowed: near edge-on the LOD collapses the graph (the
+      // det guard keeps the inverse finite); past 90° you see the plane's
+      // mirrored back — physically honest for a sheet in space
+      const to = {
+        yaw: target.yaw ?? rot3.yaw,
+        pitch: target.pitch ?? rot3.pitch,
+        roll: target.roll ?? rot3.roll,
+      };
+      if (opts?.animate === false) {
+        Object.assign(rot3, to);
+        updateRotation();
         invalidate();
         return;
       }
-      const from = rotation;
+      const from = { ...rot3 };
       const t0 = performance.now();
       const dur = 180;
       const step = (now: number) => {
         const u = Math.min(1, (now - t0) / dur);
         const e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2;
-        rotation = from + (target - from) * e;
+        rot3.yaw = from.yaw + (to.yaw - from.yaw) * e;
+        rot3.pitch = from.pitch + (to.pitch - from.pitch) * e;
+        rot3.roll = from.roll + (to.roll - from.roll) * e;
+        updateRotation();
         invalidate();
         if (u < 1) requestAnimationFrame(step);
       };

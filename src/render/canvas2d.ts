@@ -85,20 +85,23 @@ export function createGridDotsLayer(
   field?: () => FieldSource[],
   /** z of the field arrows: +1 = at the viewer (⊙), -1 = into the screen (⊗) */
   zDir?: () => number,
-  getAngle?: () => number,
+  /**
+   * global lateral field direction (viewport 3-D rotation): the grid DOTS
+   * keep their screen positions, but every arrow leans this way — rotate
+   * the box 180° and the whole field flips to ⊗ (pointing into the screen)
+   */
+  fieldTilt?: () => readonly [number, number],
 ): DrawLayer {
   return (ctx, t, { width, height }) => {
   const z = Math.max(-1, Math.min(1, zDir?.() ?? 1));
   const toward = z >= 0;
   const rgb = toward ? ARROW_OUT_RGB : ARROW_IN_RGB;
+  const gt = fieldTilt?.() ?? ([0, 0] as const);
   const levels = gridLevels(t.k, rule.minGridPx, rule.ladder);
-  // rotated viewport → cover the half-diagonal AABB so corners stay filled
-  const rot = getAngle?.() ?? 0;
-  const hd = rot ? Math.hypot(width, height) / 2 : 0;
-  const bx0 = rot ? width / 2 - hd : 0;
-  const bx1 = rot ? width / 2 + hd : width;
-  const by0 = rot ? height / 2 - hd : 0;
-  const by1 = rot ? height / 2 + hd : height;
+  const bx0 = 0;
+  const bx1 = width;
+  const by0 = 0;
+  const by1 = height;
   // screen-space attractors (capped for safety)
   const attractors = (field?.() ?? []).slice(0, 128).map((a) => ({
     x: a.x * t.k + t.x,
@@ -125,24 +128,35 @@ export function createGridDotsLayer(
         // default); pull from off-screen nodes tilts it sideways — the
         // projection shrinks the head and grows a tail
         let dotR = r;
-        if (major && attractors.length) {
-          let vx = 0;
-          let vy = 0;
-          for (const a of attractors) {
-            const dx = a.x - sx;
-            const dy = a.y - sy;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < 1) continue;
-            // inverse-square pull toward every off-screen node
-            vx += dx / d2;
-            vy += dy / d2;
+        if (major) {
+          // attractor pull (normalized tilt units) + global rotation tilt
+          let tx = gt[0];
+          let ty = gt[1];
+          if (attractors.length) {
+            let vx = 0;
+            let vy = 0;
+            for (const a of attractors) {
+              const dx = a.x - sx;
+              const dy = a.y - sy;
+              const d2 = dx * dx + dy * dy;
+              if (d2 < 1) continue;
+              // inverse-square pull toward every off-screen node
+              vx += dx / d2;
+              vy += dy / d2;
+            }
+            const mag = Math.hypot(vx, vy);
+            if (mag > 1e-4) {
+              const p = Math.min(1, mag * 900);
+              tx += (vx / mag) * p;
+              ty += (vy / mag) * p;
+            }
           }
-          const mag = Math.hypot(vx, vy);
-          if (mag > 1e-4) {
-            const tilt = Math.min(1, mag * 900); // 0 = at viewer, 1 = flat
+          const tmag = Math.hypot(tx, ty);
+          if (tmag > 1e-4) {
+            const tilt = Math.min(1, tmag); // 0 = at viewer, 1 = flat
             const len = 3 + 11 * tilt;
             dotR = r * (1 - 0.55 * tilt);
-            tails.push(sx, sy, sx + (vx / mag) * len, sy + (vy / mag) * len);
+            tails.push(sx, sy, sx + (tx / tmag) * len, sy + (ty / tmag) * len);
           }
         }
         if (toward) {

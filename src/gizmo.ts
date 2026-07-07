@@ -8,14 +8,17 @@
  * cube.ts and drives window.viewer.setRotation(); touches nothing else.
  */
 type ViewerLike = {
-  rotation: number;
-  setRotation(rad: number, opts?: { animate?: boolean }): void;
+  rotation3: { yaw: number; pitch: number; roll: number };
+  setRotation3(
+    t: { yaw?: number; pitch?: number; roll?: number },
+    opts?: { animate?: boolean },
+  ): void;
 };
 
 function attach() {
   const wrap = document.getElementById("hero-cube");
   const viewer = (window as unknown as { viewer?: ViewerLike }).viewer;
-  if (!wrap || !viewer?.setRotation) {
+  if (!wrap || !viewer?.setRotation3) {
     setTimeout(attach, 200); // cube.ts / viewer not mounted yet
     return;
   }
@@ -26,29 +29,29 @@ function attach() {
   cv.style.cursor = "grab";
   cv.title = "drag to rotate the canvas · double-click to reset";
 
-  let drag: { startAngle: number; baseRotation: number } | null = null;
-
-  const pointerAngle = (ev: PointerEvent) => {
-    const r = cv.getBoundingClientRect();
-    return Math.atan2(
-      ev.clientY - (r.top + r.height / 2),
-      ev.clientX - (r.left + r.width / 2),
-    );
-  };
+  let drag: {
+    x0: number;
+    y0: number;
+    base: { yaw: number; pitch: number; roll: number };
+  } | null = null;
 
   cv.addEventListener("pointerdown", (ev) => {
-    drag = {
-      startAngle: pointerAngle(ev),
-      baseRotation: viewer.rotation,
-    };
+    drag = { x0: ev.clientX, y0: ev.clientY, base: viewer.rotation3 };
     cv.setPointerCapture(ev.pointerId);
     cv.style.cursor = "grabbing";
     ev.preventDefault();
   });
   cv.addEventListener("pointermove", (ev) => {
     if (!drag) return;
-    const delta = pointerAngle(ev) - drag.startAngle;
-    viewer.setRotation(drag.baseRotation + delta, { animate: false });
+    // trackball-lite: horizontal drag = yaw, vertical = pitch
+    const S = 0.012; // rad per px
+    viewer.setRotation3(
+      {
+        yaw: drag.base.yaw + (ev.clientX - drag.x0) * S,
+        pitch: drag.base.pitch - (ev.clientY - drag.y0) * S,
+      },
+      { animate: false },
+    );
   });
   const end = () => {
     drag = null;
@@ -56,7 +59,9 @@ function attach() {
   };
   cv.addEventListener("pointerup", end);
   cv.addEventListener("pointercancel", end);
-  cv.addEventListener("dblclick", () => viewer.setRotation(0));
+  cv.addEventListener("dblclick", () =>
+    viewer.setRotation3({ yaw: 0, pitch: 0, roll: 0 }),
+  );
 }
 
 attach();

@@ -91,7 +91,11 @@ export function endpointPos(
 }
 
 /** shortest screen-space gap between two node rects (0 if overlapping) */
-function rectGapPx(a: GraphNode, b: GraphNode, k: number): number {
+function rectGapView(
+  a: GraphNode,
+  b: GraphNode,
+  px: (gx: number, gy: number) => number,
+): number {
   const gx = Math.max(
     0,
     Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w),
@@ -100,7 +104,7 @@ function rectGapPx(a: GraphNode, b: GraphNode, k: number): number {
     0,
     Math.max(a.y, b.y) - Math.min(a.y + nodeHeight(a), b.y + nodeHeight(b)),
   );
-  return Math.hypot(gx, gy) * k;
+  return px(gx, gy);
 }
 
 /** Build the LOD render graph for the current viewer scale. */
@@ -108,11 +112,22 @@ export function buildRenderGraph(
   graph: Graph,
   k: number,
   rule: RgRule = DEFAULT_RULE,
+  /**
+   * screen linear map applied AFTER k (viewport 3-D rotation): apparent
+   * sizes/gaps shrink under foreshortening, so visually converging nodes
+   * merge — a pure rendering trick, base positions never change
+   */
+  xform?: readonly [number, number, number, number],
 ): RenderGraph {
+  const [xa, xb, xc, xd] = xform ?? [1, 0, 0, 1];
+  /** screen length of a world vector under the full view map */
+  const px = (gx: number, gy: number) =>
+    Math.hypot(xa * gx + xb * gy, xc * gx + xd * gy) * k;
+  const kH = Math.hypot(xb, xd) * k; // apparent vertical scale
   // the render rule applies to EVERY element: nodes that would render
   // unreadably small degrade into readable pseudo-nodes
   const unreadable = graph.nodes.filter(
-    (n) => nodeHeight(n) * k < rule.collapsePx,
+    (n) => nodeHeight(n) * kH < rule.collapsePx,
   );
 
   // high-order rg nodes emerge from location + connection logic:
@@ -140,7 +155,7 @@ export function buildRenderGraph(
       const b = unreadable[j]!;
       const wired = connected.has([a.id, b.id].sort().join("|"));
       const budget = wired ? rule.clusterGapConnectedPx : rule.clusterGapPx;
-      if (rectGapPx(a, b, k) < budget) union(a.id, b.id);
+      if (rectGapView(a, b, px) < budget) union(a.id, b.id);
     }
   }
 

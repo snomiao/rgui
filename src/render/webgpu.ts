@@ -22,8 +22,6 @@ struct Uniforms {
   resolution: vec2f, // CSS px
   zdir: f32,         // field-arrow z: +1 = at viewer (⊙ purple), -1 = away (⊗ gold cross)
   _pad: f32,
-  rot: vec2f,        // cos/sin of the viewport rotation (about center)
-  _pad2: vec2f,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -33,11 +31,7 @@ struct Inst {
   @location(2) tail: vec2f,     // tail vector (px), 0 = none
 };
 
-fn toNdc(p0: vec2f) -> vec4f {
-  // rotate about the viewport center, then normalize
-  let c = u.resolution * 0.5;
-  let d = p0 - c;
-  let p = c + vec2f(d.x * u.rot.x - d.y * u.rot.y, d.x * u.rot.y + d.y * u.rot.x);
+fn toNdc(p: vec2f) -> vec4f {
   let ndc = p / u.resolution * 2.0 - 1.0;
   return vec4f(ndc.x, -ndc.y, 0.0, 1.0);
 }
@@ -133,7 +127,8 @@ export function createWebGPUGridRenderer(
   field?: () => FieldSource[],
   /** z of the field arrows: +1 = at the viewer (⊙), -1 = into the screen (⊗) */
   zDir?: () => number,
-  getAngle?: () => number,
+  /** global lateral field direction from the viewport 3-D rotation */
+  fieldTilt?: () => readonly [number, number],
 ): WebGPUGridRenderer {
   let device: GPUDevice | null = null;
   let ctx: GPUCanvasContext | null = null;
@@ -211,7 +206,7 @@ export function createWebGPUGridRenderer(
       dots = mk("dotVert", "dotFrag");
       tails = mk("tailVert", "tailFrag");
       uniformBuf = device.createBuffer({
-        size: 32,
+        size: 16,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       bind = device.createBindGroup({
@@ -234,13 +229,13 @@ export function createWebGPUGridRenderer(
       y: a.y * t.k + t.y,
     }));
     const out: number[] = [];
-    // rotated viewport → cover the half-diagonal AABB so corners stay filled
-    const rot = getAngle?.() ?? 0;
-    const hd = rot ? Math.hypot(width, height) / 2 : 0;
-    const bx0 = rot ? width / 2 - hd : 0;
-    const bx1 = rot ? width / 2 + hd : width;
-    const by0 = rot ? height / 2 - hd : 0;
-    const by1 = rot ? height / 2 + hd : height;
+    // dots keep their screen positions under viewport rotation — only the
+    // arrow directions lean (global field tilt)
+    const gt = fieldTilt?.() ?? ([0, 0] as const);
+    const bx0 = 0;
+    const bx1 = width;
+    const by0 = 0;
+    const by1 = height;
     for (const level of [...levels].reverse()) {
       if (level.alpha <= 0.01) continue;
       const major = level.step === levels[0]!.step;
@@ -255,24 +250,34 @@ export function createWebGPUGridRenderer(
           let dotR = r;
           let tx = 0;
           let ty = 0;
-          if (major && attractors.length) {
-            let vx = 0;
-            let vy = 0;
-            for (const a of attractors) {
-              const dx = a.x - sx;
-              const dy = a.y - sy;
-              const d2 = dx * dx + dy * dy;
-              if (d2 < 1) continue;
-              vx += dx / d2;
-              vy += dy / d2;
+          if (major) {
+            let ax = gt[0];
+            let ay = gt[1];
+            if (attractors.length) {
+              let vx = 0;
+              let vy = 0;
+              for (const a of attractors) {
+                const dx = a.x - sx;
+                const dy = a.y - sy;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < 1) continue;
+                vx += dx / d2;
+                vy += dy / d2;
+              }
+              const mag = Math.hypot(vx, vy);
+              if (mag > 1e-4) {
+                const p = Math.min(1, mag * 900);
+                ax += (vx / mag) * p;
+                ay += (vy / mag) * p;
+              }
             }
-            const mag = Math.hypot(vx, vy);
-            if (mag > 1e-4) {
-              const tilt = Math.min(1, mag * 900);
+            const tmag = Math.hypot(ax, ay);
+            if (tmag > 1e-4) {
+              const tilt = Math.min(1, tmag);
               const len = 3 + 11 * tilt;
               dotR = r * (1 - 0.55 * tilt);
-              tx = (vx / mag) * len;
-              ty = (vy / mag) * len;
+              tx = (ax / tmag) * len;
+              ty = (ay / tmag) * len;
             }
           }
           out.push(sx, sy, dotR, alpha, tx, ty, 0, 0);
@@ -296,20 +301,10 @@ export function createWebGPUGridRenderer(
     }
     if (count) device.queue.writeBuffer(instBuf, 0, data);
     const z = Math.max(-1, Math.min(1, zDir?.() ?? 1));
-    const ang = getAngle?.() ?? 0;
     device.queue.writeBuffer(
       uniformBuf,
       0,
-      new Float32Array([
-        width,
-        height,
-        z,
-        0,
-        Math.cos(ang),
-        Math.sin(ang),
-        0,
-        0,
-      ]),
+      new Float32Array([width, height, z, 0]),
     );
 
     const enc = device.createCommandEncoder();
