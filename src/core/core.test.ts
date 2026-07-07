@@ -131,6 +131,18 @@ describe("semantic-zoom LOD", () => {
 });
 
 describe("snap beats location (merge priority)", () => {
+  test("a stack RGs together: one member's threshold collapses ALL", () => {
+    const short = mkNode("short", 0, 0, 200, 1); // h = 68
+    const tall = mkNode("tall", 0, nodeHeight(mkNode("short", 0, 0, 200, 1)), 200, 6); // h = 178
+    const g = { nodes: [short, tall], edges: [] };
+    // k=1: short 68px < collapseSnappedPx 84 → whole stack collapses,
+    // even though tall (178px) is comfortably readable
+    const rg = buildRenderGraph(g, 1);
+    expect(rg.nodes.length).toBe(0);
+    expect(rg.pseudo.length).toBe(1);
+    expect(rg.pseudo[0]!.members.length).toBe(2);
+  });
+
   test("a flush stack collapses earlier than loose nodes", () => {
     const a = mkNode("a", 0, 0);
     const b = mkNode("b", 0, nodeHeight(mkNode("a", 0, 0))); // flush under a

@@ -133,21 +133,40 @@ export function buildRenderGraph(
   const px = (gx: number, gy: number) =>
     Math.hypot(xa * gx + xb * gy, xc * gx + xd * gy) * k;
   const kH = Math.hypot(xb, xd) * k; // apparent vertical scale
-  // SNAP BEATS LOCATION: members of a flush-contact stack use the more
-  // generous collapseSnappedPx threshold — a fused block becomes one
-  // pseudo-node before loose neighbors merge by proximity
+  // SNAP BEATS LOCATION, and stacks RG TOGETHER: when ANY member of a
+  // flush-contact stack crosses the (more generous) collapseSnappedPx
+  // threshold, the WHOLE stack promotes to the next level as one — no
+  // partially-merged stacks
   const segments = flushSegments(graph.nodes);
-  const snapped = new Set<string>();
-  for (const seg of segments) {
-    snapped.add(seg.a.id);
-    snapped.add(seg.b.id);
+  const stackRoot = new Map<string, string>();
+  const findRoot = (id: string): string => {
+    const p = stackRoot.get(id) ?? id;
+    if (p === id) return id;
+    const r = findRoot(p);
+    stackRoot.set(id, r);
+    return r;
+  };
+  for (const seg of segments)
+    stackRoot.set(findRoot(seg.a.id), findRoot(seg.b.id));
+  const stacks = new Map<string, GraphNode[]>();
+  for (const n of graph.nodes) {
+    if (!stackRoot.has(n.id) && !segments.some((s0) => s0.a === n || s0.b === n))
+      continue;
+    const root = findRoot(n.id);
+    let g = stacks.get(root);
+    if (!g) stacks.set(root, (g = []));
+    g.push(n);
   }
+  const collapseIds = new Set<string>();
+  for (const members of stacks.values())
+    if (
+      members.some((n) => nodeHeight(n) * kH < rule.collapseSnappedPx)
+    )
+      for (const n of members) collapseIds.add(n.id);
   // the render rule applies to EVERY element: nodes that would render
   // unreadably small degrade into readable pseudo-nodes
   const unreadable = graph.nodes.filter(
-    (n) =>
-      nodeHeight(n) * kH <
-      (snapped.has(n.id) ? rule.collapseSnappedPx : rule.collapsePx),
+    (n) => collapseIds.has(n.id) || nodeHeight(n) * kH < rule.collapsePx,
   );
 
   // high-order rg nodes emerge from location + connection logic:
