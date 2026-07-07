@@ -129,6 +129,7 @@ export function createWebGPUGridRenderer(
   zDir?: () => number,
   /** global lateral field direction from the viewport 3-D rotation */
   fieldTilt?: () => readonly [number, number],
+  maxDpr?: number,
 ): WebGPUGridRenderer {
   let device: GPUDevice | null = null;
   let ctx: GPUCanvasContext | null = null;
@@ -143,7 +144,7 @@ export function createWebGPUGridRenderer(
   let height = 0;
 
   function resize() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, maxDpr ?? Infinity);
     width = canvas.clientWidth;
     height = canvas.clientHeight;
     canvas.width = Math.max(1, Math.round(width * dpr));
@@ -221,6 +222,31 @@ export function createWebGPUGridRenderer(
     }
   })();
 
+  // growable scratch buffer reused across frames (allocation-free steady state)
+  let scratch = new Float32Array(4096 * STRIDE);
+  let scratchLen = 0;
+  const pushInst = (
+    sx: number,
+    sy: number,
+    r: number,
+    a: number,
+    tx: number,
+    ty: number,
+  ) => {
+    if (scratchLen + STRIDE > scratch.length) {
+      const bigger = new Float32Array(scratch.length * 2);
+      bigger.set(scratch);
+      scratch = bigger;
+    }
+    scratch[scratchLen] = sx;
+    scratch[scratchLen + 1] = sy;
+    scratch[scratchLen + 2] = r;
+    scratch[scratchLen + 3] = a;
+    scratch[scratchLen + 4] = tx;
+    scratch[scratchLen + 5] = ty;
+    scratchLen += STRIDE;
+  };
+
   /** build per-instance data — same math as the Canvas 2D grid layer */
   function buildInstances(t: ViewTransform): Float32Array {
     const levels = gridLevels(t.k, rule.minGridPx, rule.ladder);
@@ -228,7 +254,7 @@ export function createWebGPUGridRenderer(
       x: a.x * t.k + t.x,
       y: a.y * t.k + t.y,
     }));
-    const out: number[] = [];
+    scratchLen = 0;
     // dots keep their screen positions under viewport rotation — only the
     // arrow directions lean (global field tilt)
     const gt = fieldTilt?.() ?? ([0, 0] as const);
@@ -280,11 +306,11 @@ export function createWebGPUGridRenderer(
               ty = (ay / tmag) * len;
             }
           }
-          out.push(sx, sy, dotR, alpha, tx, ty, 0, 0);
+          pushInst(sx, sy, dotR, alpha, tx, ty);
         }
       }
     }
-    return new Float32Array(out);
+    return scratch.subarray(0, scratchLen) as Float32Array;
   }
 
   function render(t: ViewTransform) {

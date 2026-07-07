@@ -125,6 +125,12 @@ export interface RguiOptions {
    */
   renderer?: "auto" | "canvas2d" | "webgpu";
   /**
+   * cap the canvas backing-store scale (default: device pixel ratio).
+   * Raster cost grows with dpr² — 1.5 is a good perf/sharpness trade on
+   * retina displays with busy pages.
+   */
+  maxDpr?: number;
+  /**
    * input preset (default "figma"):
    * - figma: 2-finger scroll = pan · pinch / ctrl+wheel / mouse wheel = zoom ·
    *   plain or right drag on empty = box select · space+drag / middle drag = pan
@@ -502,7 +508,7 @@ export function createRgui(
   let renderer = createCanvas2DRenderer(
     canvas,
     wantGpu ? contentLayers : [gridLayer, ...contentLayers],
-    { background: wantGpu ? false : undefined },
+    { background: wantGpu ? false : undefined, maxDpr: options.maxDpr },
   );
   if (wantGpu) {
     underlay = document.createElement("canvas");
@@ -524,6 +530,7 @@ export function createRgui(
       fieldProvider,
       zComposed,
       fieldTiltProvider,
+      options.maxDpr,
     );
     gpu.ready.then((ok) => {
       if (destroyed) return;
@@ -534,10 +541,9 @@ export function createRgui(
         underlay?.remove();
         underlay = null;
         gpu = null;
-        renderer = createCanvas2DRenderer(
-          canvas,
-          [gridLayer, ...contentLayers],
-        );
+        renderer = createCanvas2DRenderer(canvas, [gridLayer, ...contentLayers], {
+          maxDpr: options.maxDpr,
+        });
         renderer.resize();
       }
       invalidate();
@@ -583,8 +589,15 @@ export function createRgui(
       ? v.toExponential(d)
       : +v.toFixed(d) + "";
 
+  let lastDebugHtml = "";
+  let lastDebugTs = 0;
   function updateDebug() {
     if (!debugEl) return;
+    // DOM writes are the expensive part — throttle to 10 Hz and skip
+    // unchanged content
+    const now = performance.now();
+    if (now - lastDebugTs < 100) return;
+    lastDebugTs = now;
     const [major, minor] = gridLevels(view.k, rule.minGridPx, rule.ladder);
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
@@ -593,7 +606,7 @@ export function createRgui(
     const rem = parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
-    debugEl.innerHTML =
+    const html =
       `<span class="dim">scale </span><span class="hi">${fmt(view.k, 3)}×</span>` +
       `<span class="dim"> dpr </span>${devicePixelRatio}` +
       `<span class="dim"> · ${rendererKind}</span>\n` +
@@ -606,6 +619,10 @@ export function createRgui(
       `<span class="dim">size  </span>${w}×${h}px` +
       `<span class="dim"> = </span>${fmt(w / view.k)}×${fmt(h / view.k)} wu\n` +
       `<span class="dim">ptr   </span>${fmt(pwx)}, ${fmt(pwy)} wu`;
+    if (html !== lastDebugHtml) {
+      lastDebugHtml = html;
+      debugEl.innerHTML = html;
+    }
   }
 
   // --- hit-testing & dragging -------------------------------------------
@@ -1155,7 +1172,13 @@ export function createRgui(
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
 
-  /** figma wheel: ctrl/pinch + discrete mouse wheel = zoom; 2-finger = pan */
+  /**
+   * figma wheel: ctrl/pinch + discrete mouse wheel = zoom; 2-finger = pan.
+   * STREAM STICKINESS: a fast touchpad flick emits large integer deltas
+   * that look like mouse-wheel ticks — so within a rapid burst, the first
+   * classification wins (ctrl/pinch always zooms).
+   */
+  let wheelStreak: { ts: number; zoom: boolean } = { ts: 0, zoom: false };
   const onWheel = (ev: WheelEvent) => {
     if (input !== "figma") return; // classic: d3 handles wheel
     ev.preventDefault();
@@ -1164,12 +1187,18 @@ export function createRgui(
     // to the overlay element — and synthetic events mangle it by dpr)
     const rect = canvas.getBoundingClientRect();
     const [ox, oy] = toView(ev.clientX - rect.left, ev.clientY - rect.top);
+    const now = performance.now();
+    const inStreak = now - wheelStreak.ts < 160;
     const isZoom =
-      ev.ctrlKey || // pinch gesture or ctrl+wheel
-      ev.deltaMode !== 0 || // line/page mode = real mouse wheel
-      (ev.deltaX === 0 &&
-        Number.isInteger(ev.deltaY) &&
-        Math.abs(ev.deltaY) >= 50); // discrete integer steps = mouse wheel
+      ev.ctrlKey || // pinch gesture or ctrl+wheel — always zooms
+      (inStreak
+        ? wheelStreak.zoom // mid-burst: keep the burst's classification
+        : ev.deltaMode !== 0 || // line/page mode = real mouse wheel
+          (ev.deltaX === 0 &&
+            Number.isInteger(ev.deltaY) &&
+            Math.abs(ev.deltaY) >= 50)); // isolated discrete tick
+    if (ev.ctrlKey) wheelStreak.ts = 0; // pinch resets the burst
+    else wheelStreak = { ts: now, zoom: isZoom };
     if (isZoom) {
       // clamp per-event delta so pinch (small fractional deltas) stays
       // smooth while discrete mouse-wheel ticks (±120) don't explode

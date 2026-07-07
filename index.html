@@ -49,6 +49,7 @@
       #hero {
         position: fixed;
         inset: 0;
+        z-index: 10; /* above the demo's DOM node overlays */
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -61,7 +62,7 @@
         text-align: center;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         color: #e6e9ec;
-        text-shadow: 0 2px 24px rgba(0, 0, 0, 0.85);
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
       }
       #hero .title {
         margin: 0;
@@ -69,11 +70,20 @@
         font-weight: 800;
         letter-spacing: -0.04em;
         line-height: 0.9;
-        color: #ffd60a;
-        text-shadow:
-          0 0 2px rgba(255, 214, 10, 0.6),
-          0 0 28px rgba(255, 214, 10, 0.35),
-          0 4px 40px rgba(0, 0, 0, 0.9);
+        /* the mascot crossover: purple head (TL) flowing to gold tail (BR) */
+        background: linear-gradient(
+          135deg,
+          #9b34bf 0%,
+          #c74be0 32%,
+          #f3820d 68%,
+          #ffd21c 100%
+        );
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        /* no CSS filter here: a filtered layer over the live canvas re-rasters
+           every frame (measured 4x page slowdown) — the shadow is painted
+           inside the title canvas instead */
       }
       #hero .title::after {
         content: "·rg";
@@ -100,48 +110,11 @@
         animation: crt-flash 2500ms ease-in-out;
       }
       @keyframes crt-flash {
-        0% {
-          opacity: 0;
-          transform: translateY(2px) skewX(0deg);
-          filter: brightness(3);
-          text-shadow: -2px 0 #ff2d6b, 2px 0 #22d3ee;
-          clip-path: inset(45% 0 40% 0);
-        }
-        4% {
-          opacity: 1;
-          transform: translateX(-3px) skewX(6deg);
-          clip-path: inset(10% 0 60% 0);
-        }
-        8% {
-          transform: translateX(3px) skewX(-4deg);
-          clip-path: inset(60% 0 8% 0);
-        }
-        12% {
-          transform: translateX(0) skewX(0deg);
-          filter: brightness(1.4);
-          text-shadow: -1px 0 rgba(255, 45, 107, 0.5), 1px 0 rgba(34, 211, 238, 0.5);
-          clip-path: inset(0 0 0 0);
-        }
-        16% {
-          filter: brightness(1);
-          text-shadow: none;
-        }
-        88% {
-          opacity: 1;
-          filter: brightness(1);
-          text-shadow: none;
-        }
-        96% {
-          opacity: 0.15;
-          filter: brightness(2.2);
-          text-shadow: -2px 0 #ff2d6b, 2px 0 #22d3ee;
-        }
-        100% {
-          opacity: 0;
-          transform: translateY(-2px);
-          filter: brightness(3);
-          clip-path: inset(40% 0 45% 0);
-        }
+        0% { opacity: 0; transform: translateY(2px) skewX(4deg); }
+        8% { opacity: 1; transform: translateX(-2px) skewX(-3deg); }
+        14% { transform: translateX(0) skewX(0); }
+        88% { opacity: 1; }
+        100% { opacity: 0; transform: translateY(-2px); }
       }
       #hero .tagline {
         max-width: 720px;
@@ -168,7 +141,7 @@
         border: 1px solid #3a4048;
         border-radius: 6px;
         background: rgba(20, 22, 26, 0.7);
-        backdrop-filter: blur(4px);
+        /* backdrop-filter removed: re-blurs every frame over a live canvas */
         color: #e6e9ec;
         text-decoration: none;
         font-size: 14px;
@@ -196,7 +169,7 @@
     <div id="debug"></div>
 
     <div id="hero">
-      <h1 class="title">rgui</h1>
+      <h1 class="title">RGUI</h1>
       <div class="subtitle" aria-live="polite"><span class="word" id="hero-word"></span></div>
       <p class="tagline">
         Zoom is a <b>renormalization-group flow</b>: at every scale, only the
@@ -213,5 +186,7 @@
 
     <script type="module" src="/src/main.ts"></script>
     <script type="module" src="/src/hero.ts"></script>
+    <script type="module" src="/src/title.ts"></script>
+    <script type="module" src="/src/cube.ts"></script>
   </body>
 </html>

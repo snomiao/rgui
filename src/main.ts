@@ -36,6 +36,7 @@ setInterval(() => {
 const viewer = rgui(canvas, {
   graph,
   debug,
+  maxDpr: 1.5, // busy homepage: trade a little sharpness for frame rate
   // host-app hooks (otoji-style integration)
   onNodeMoveEnd: (id, pos) => console.log("[rgui] moveEnd", id, pos),
   isValidConnection: (from, to) => {

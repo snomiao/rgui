@@ -29,6 +29,8 @@ export function createCanvas2DRenderer(
   opts?: {
     /** background fill; false = transparent (compositing over an underlay) */
     background?: string | false;
+    /** cap the backing-store scale (raster cost grows with dpr²) */
+    maxDpr?: number;
   },
 ): GridRenderer {
   const ctx = canvas.getContext("2d");
@@ -40,7 +42,7 @@ export function createCanvas2DRenderer(
   let dpr = 1;
 
   function resize() {
-    dpr = window.devicePixelRatio || 1;
+    dpr = Math.min(window.devicePixelRatio || 1, opts?.maxDpr ?? Infinity);
     width = canvas.clientWidth;
     height = canvas.clientHeight;
     canvas.width = Math.round(width * dpr);
