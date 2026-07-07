@@ -28,6 +28,7 @@ import {
 import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
 import {
   computePortLayout,
+  flushComponents,
   flushSegments,
   resolveOverlap,
 } from "./core/pack.js";
@@ -106,6 +107,24 @@ export interface Rgui {
   setView(view: ViewTransform): void;
   /** fit all nodes into the viewport with the given screen-px padding */
   fitView(paddingPx?: number): void;
+  /**
+   * screen position of a port as currently laid out (flush-snap aware) —
+   * null if the node/port is missing or collapsed into a pseudo-node.
+   * `hidden` = dissolved into a flush stack (not drawn, not hittable).
+   */
+  portScreenPos(
+    nodeId: string,
+    portId: string,
+    side: "in" | "out",
+  ): { x: number; y: number; edge: "left" | "right"; hidden: boolean } | null;
+  /**
+   * screen midpoint of a wire's bezier as currently drawn — null if the
+   * wire is dissolved (inside a flush stack) or an endpoint is collapsed.
+   */
+  edgeMidScreen(edge: {
+    from: { node: string; port: string };
+    to: { node: string; port: string };
+  }): { x: number; y: number } | null;
   /** request a re-render on the next animation frame */
   invalidate(): void;
   destroy(): void;
@@ -674,6 +693,38 @@ export function createRgui(
     },
     setSelection(nodeIds: string[]) {
       applySelection(new Set(nodeIds));
+    },
+    portScreenPos(nodeId: string, portId: string, side: "in" | "out") {
+      const nodes = lastRg?.nodes ?? graph.nodes;
+      const layout = computePortLayout(graph, nodes, flushSegments(nodes));
+      const pl = layout.get(`${nodeId}/${side}/${portId}`);
+      if (!pl) return null;
+      const [x, y] = worldToScreenXY(pl.x, pl.y);
+      return { x, y, edge: pl.edge, hidden: pl.hidden };
+    },
+    edgeMidScreen(edge: {
+      from: { node: string; port: string };
+      to: { node: string; port: string };
+    }) {
+      const nodes = lastRg?.nodes ?? graph.nodes;
+      const segments = flushSegments(nodes);
+      const comp = flushComponents(nodes, segments);
+      // dissolved inside one flush stack → not drawn (matches the renderer)
+      if (comp.get(edge.from.node) === comp.get(edge.to.node)) return null;
+      const layout = computePortLayout(graph, nodes, segments);
+      const pf = layout.get(`${edge.from.node}/out/${edge.from.port}`);
+      const pt = layout.get(`${edge.to.node}/in/${edge.to.port}`);
+      if (!pf || !pt || pf.hidden || pt.hidden) return null;
+      const [x0, y0] = worldToScreenXY(pf.x, pf.y);
+      const [x1, y1] = worldToScreenXY(pt.x, pt.y);
+      const dx = Math.max(40 * view.k, Math.abs(x1 - x0) * 0.5);
+      const cx0 = x0 + (pf.edge === "right" ? 1 : -1) * dx;
+      const cx1 = x1 + (pt.edge === "right" ? 1 : -1) * dx;
+      // cubic bezier at u=0.5 (controls' y equal endpoint y)
+      return {
+        x: 0.125 * (x0 + x1) + 0.375 * (cx0 + cx1),
+        y: 0.5 * (y0 + y1),
+      };
     },
     setView(v: ViewTransform) {
       sel.call(
