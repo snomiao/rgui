@@ -1,6 +1,5 @@
 /** Demo app — dogfoods the library exactly as a consumer would. */
 import rgui, { demoGraph } from "./index";
-import "./gizmo"; // corner cube = viewport rotation handle
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
 const debug = document.querySelector<HTMLDivElement>("#debug")!;
@@ -37,6 +36,7 @@ const viewer = rgui(canvas, {
   graph,
   debug,
   maxDpr: 1.5, // busy homepage: trade a little sharpness for frame rate
+  background: false, // page bg shows through; the RGUI title sits BEHIND nodes
   // host-app hooks (otoji-style integration)
   onNodeMoveEnd: (id, pos) => console.log("[rgui] moveEnd", id, pos),
   isValidConnection: (from, to) => {

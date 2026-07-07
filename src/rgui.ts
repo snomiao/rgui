@@ -131,6 +131,11 @@ export interface RguiOptions {
    */
   maxDpr?: number;
   /**
+   * canvas background fill; false = transparent (page background shows
+   * through — lets hosts layer DOM behind the graph)
+   */
+  background?: string | false;
+  /**
    * input preset (default "figma"):
    * - figma: 2-finger scroll = pan · pinch / ctrl+wheel / mouse wheel = zoom ·
    *   plain or right drag on empty = box select · space+drag / middle drag = pan
@@ -527,7 +532,10 @@ export function createRgui(
   let renderer = createCanvas2DRenderer(
     canvas,
     wantGpu ? contentLayers : [gridLayer, ...contentLayers],
-    { background: wantGpu ? false : undefined, maxDpr: options.maxDpr },
+    {
+      background: wantGpu ? false : options.background,
+      maxDpr: options.maxDpr,
+    },
   );
   if (wantGpu) {
     underlay = document.createElement("canvas");
@@ -562,6 +570,7 @@ export function createRgui(
         gpu = null;
         renderer = createCanvas2DRenderer(canvas, [gridLayer, ...contentLayers], {
           maxDpr: options.maxDpr,
+          background: options.background,
         });
         renderer.resize();
       }

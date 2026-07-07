@@ -45,8 +45,7 @@ const CELL = 4; // dither cell size in CSS px
 const P = 8, Q = 8; // noise tile periods
 const LOOP_MS = 4800; // pattern scroll period (whole-period → seamless)
 const BLINK_EVERY = 6200, BLINK_MS = 200;
-const SPEED = 105; // swim speed, px/s
-const DEPTH = 120; // max |z| of the swim box
+const CYCLE_MS = 30_000; // one closed lap of the pool — exactly home every cycle
 const PERSP = 620; // perspective strength: scale = PERSP/(PERSP - z)
 
 const title = document.querySelector<HTMLElement>("#hero .title");
@@ -56,7 +55,17 @@ if (title) {
   const cv = document.createElement("canvas");
   cv.setAttribute("aria-hidden", "true");
   title.style.position = "relative";
-  title.appendChild(cv);
+  // the swim canvas lives in a BEHIND layer (below the graph nodes, above
+  // the background) — the h1 stays in #hero purely for layout
+  let behind = document.getElementById("title-behind");
+  if (!behind) {
+    behind = document.createElement("div");
+    behind.id = "title-behind";
+    behind.style.cssText =
+      "position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;";
+    document.body.appendChild(behind);
+  }
+  behind.appendChild(cv);
   const ctx = cv.getContext("2d");
 
   if (ctx) {
@@ -73,15 +82,18 @@ if (title) {
       const fs = parseFloat(getComputedStyle(title).fontSize);
       padX = Math.ceil(fs * 0.7);
       padY = Math.ceil(fs * 1.05);
+      // absolute placement in the fixed behind-layer, tracking the h1's
+      // viewport rect (the h1 stays in #hero purely for layout)
+      const r = title.getBoundingClientRect();
       cv.style.cssText =
-        `position:absolute;left:${-padX}px;top:${-padY}px;` +
-        `width:calc(100% + ${2 * padX}px);height:calc(100% + ${2 * padY}px);` +
-        `pointer-events:none;`;
+        `position:absolute;left:${r.left - padX}px;top:${r.top - padY}px;` +
+        `width:${w + 2 * padX}px;height:${h + 2 * padY}px;pointer-events:none;`;
       cv.width = Math.max(1, Math.round((w + 2 * padX) * dpr));
       cv.height = Math.max(1, Math.round((h + 2 * padY) * dpr));
     };
     resize();
     new ResizeObserver(resize).observe(title);
+    window.addEventListener("resize", resize);
 
     // ---- per-char offscreen sprites ----
     type Sprite = {
@@ -123,37 +135,25 @@ if (title) {
     let font = buildSprites();
     new ResizeObserver(() => (font = buildSprites())).observe(title);
 
-    // ---- swim simulation: head position + direction, with a path history ----
-    // wander: sums of incommensurate sinusoids → smooth, never-repeating-ish
-    const wanderDir = (tMs: number) => {
-      const s = tMs / 1000;
-      const heading =
-        (205 + 34 * Math.sin(s * 0.19 + 0.4) + 18 * Math.sin(s * 0.067 + 2.1)) *
-        (Math.PI / 180);
-      const pitch =
-        (42 * Math.sin(s * 0.14 + 1.2) + 22 * Math.sin(s * 0.043)) *
-        (Math.PI / 180);
-      // y flattened: the fish patrols a wide, shallow volume (the hero band)
-      const dx = Math.cos(pitch) * Math.cos(heading);
-      const dy = Math.cos(pitch) * Math.sin(heading) * 0.3;
-      const dz = Math.sin(pitch);
-      const n = Math.hypot(dx, dy, dz) || 1;
-      return [dx / n, dy / n, dz / n] as const;
+    // ---- swim: a CLOSED one-way circuit, not back-and-forth ----
+    // The head traces a fixed loop (an ellipse in x–z with organic harmonics,
+    // plus a gentle y bob) traversed in one direction: leftward across the
+    // front (big, reads RGUI), turning through the camera at the left wall,
+    // back rightward along the far side, home in exactly CYCLE_MS.
+    // θ starts at π/2 so t=0 is the front-pass reading pose.
+    const swimPos = (tSwim: number): [number, number, number] => {
+      const th =
+        Math.PI / 2 +
+        (((tSwim % CYCLE_MS) + CYCLE_MS) % CYCLE_MS) * ((Math.PI * 2) / CYCLE_MS);
+      const XA = Math.min(Math.max((w - 320) / 2, 140), 520);
+      const YA = padY * 0.3, ZA = 110;
+      return [
+        XA * (Math.cos(th) + 0.1 * Math.sin(2 * th + 1.3)),
+        YA * Math.sin(2 * th + 0.6),
+        ZA * (Math.sin(th) + 0.18 * Math.sin(3 * th + 0.8)),
+      ];
     };
-    const head: [number, number, number] = [0, 0, 0];
     let hist: [number, number, number][] = [];
-    const seedHist = () => {
-      // straight body along the initial direction so frame 0 reads RGUI
-      const d = wanderDir(0);
-      head[0] = (d[0] * (spacings.reduce((a, b) => a + b, 0))) / 2;
-      head[1] = (d[1] * (spacings.reduce((a, b) => a + b, 0))) / 2;
-      head[2] = 0;
-      hist = [];
-      for (let j = 0; j < 600; j++)
-        hist.push([head[0] - d[0] * j * 2, head[1] - d[1] * j * 2, head[2] - d[2] * j * 2]);
-    };
-    seedHist();
-    let lastT: number | null = null;
 
     // zoom-reactive bias (3-D rule: in → purple rush, out → gold recede)
     let bias = 0;
@@ -258,28 +258,16 @@ if (title) {
       }
     };
 
-    const draw = (tMs: number) => {
+    const draw = (tMs: number, tSwim: number) => {
       if (!w || !h) return;
-      const u = reduced ? 0.3 : (tMs % LOOP_MS) / LOOP_MS;
+      const u = reduced ? 0.3 : (tSwim % LOOP_MS) / LOOP_MS;
       const b = reduced ? 0 : zoomBias();
 
-      // --- advance the swim ---
-      if (!reduced) {
-        if (lastT === null) lastT = tMs;
-        const dt = Math.min(0.05, (tMs - lastT) / 1000);
-        lastT = tMs;
-        const dir = wanderDir(tMs);
-        head[0] += dir[0] * SPEED * dt;
-        head[1] += dir[1] * SPEED * dt;
-        head[2] += dir[2] * SPEED * dt;
-        // soft spring keeps the fish in the hero's water
-        const bx = (w - 320) / 2, by = padY * 0.18;
-        head[0] -= Math.max(0, Math.abs(head[0]) - bx) * Math.sign(head[0]) * 0.08;
-        head[1] -= Math.max(0, Math.abs(head[1]) - by) * Math.sign(head[1]) * 0.12;
-        head[2] -= Math.max(0, Math.abs(head[2]) - DEPTH) * Math.sign(head[2]) * 0.1;
-        hist.unshift([head[0], head[1], head[2]]);
-        if (hist.length > 900) hist.length = 900;
-      }
+      // --- advance the swim along the circuit ---
+      if (hist.length === 0)
+        for (let j = 1; j <= 900; j++) hist.push(swimPos(tSwim - j * 16));
+      hist.unshift(swimPos(tSwim));
+      if (hist.length > 900) hist.length = 900;
 
       // --- thread chars along the path by arc length ---
       const pos: [number, number, number][] = [];
@@ -341,25 +329,32 @@ if (title) {
     };
 
     if (reduced) {
-      requestAnimationFrame((t) => draw(t));
+      requestAnimationFrame((t) => draw(t, 0)); // home = the reading pose
     } else {
       // ~30 fps is visually identical for the slow dither current, and the
-      // swim FREEZES after an intro — perpetual raster of a large filtered
-      // layer was measured to cost most of the page's frame budget. Hovering
-      // the title wakes it up again.
+      // swim rests after each lap — perpetual raster of a large layer was
+      // measured to cost most of the page's frame budget. The swim clock only
+      // advances while awake, and sleep always lands ON a lap boundary, so
+      // the fish rests exactly at its home reading pose. Hovering the title
+      // sends it out for one more full lap.
       let lastT = 0;
-      let wakeUntil = performance.now() + 9000;
+      let swimT = 0;
+      let lapTarget = CYCLE_MS; // intro: one full lap, then rest at home
       title.addEventListener("pointerenter", () => {
-        wakeUntil = performance.now() + 8000;
+        lapTarget = (Math.floor(swimT / CYCLE_MS) + 1) * CYCLE_MS;
       });
       const tick = (tMs: number) => {
-        if (tMs <= wakeUntil && tMs - lastT >= 33) {
+        const awake = swimT < lapTarget;
+        if (awake && tMs - lastT >= 33) {
+          swimT = Math.min(swimT + Math.min(tMs - lastT, 66), lapTarget);
           lastT = tMs;
           try {
-            draw(tMs);
+            draw(tMs, swimT);
           } catch (e) {
             console.error("[rgui title]", e);
           }
+        } else if (!awake) {
+          lastT = tMs;
         }
         requestAnimationFrame(tick);
       };

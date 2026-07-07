@@ -19,6 +19,8 @@
         background: #1c2126;
       }
       #viewer {
+        position: relative;
+        z-index: 1; /* nodes render above the behind-layer title */
         display: block;
         width: 100vw;
         height: 100vh;
@@ -49,6 +51,7 @@
       #hero {
         position: fixed;
         inset: 0;
+        z-index: 2; /* interactive hero chrome stays on top */
         z-index: 10; /* above the demo's DOM node overlays */
         display: flex;
         flex-direction: column;
@@ -188,5 +191,8 @@
     <script type="module" src="/src/hero.ts"></script>
     <script type="module" src="/src/title.ts"></script>
     <script type="module" src="/src/cube.ts"></script>
+    <!-- entry script (not an import): package sideEffects:false would let
+         the bundler drop a side-effect-only import of this module -->
+    <script type="module" src="/src/gizmo.ts"></script>
   </body>
 </html>
