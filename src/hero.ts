@@ -20,7 +20,7 @@ if (word) {
   let i = 0;
 
   const show = (idx: number) => {
-    word.textContent = EXPANSIONS[idx];
+    word.textContent = EXPANSIONS[idx] ?? "";
     // Restart the CSS animation by toggling the class off/on across a reflow.
     word.classList.remove("flash");
     void word.offsetWidth; // force reflow so re-adding replays the keyframes

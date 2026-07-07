@@ -73,6 +73,7 @@ export {
   createGridDotsLayer,
   gridDotsLayer,
   type DrawLayer,
+  type FieldSource,
   type GridRenderer,
 } from "./render/canvas2d.js";
 export {

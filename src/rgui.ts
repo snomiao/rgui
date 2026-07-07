@@ -262,7 +262,10 @@ export function createRgui(
   }
 
   const renderer = createCanvas2DRenderer(canvas, [
-    createGridDotsLayer(rule),
+    // grid field: dots grow tails pulling toward off-screen nodes
+    createGridDotsLayer(rule, () =>
+      lastIndicators.map((it) => ({ x: it.cx, y: it.cy })),
+    ),
     ...(options.layers ?? []),
     (ctx, t) => (lastRg = drawGraph(ctx, t, graph, rule)),
     (ctx, t) => drawSelectionLayer(ctx, t),
