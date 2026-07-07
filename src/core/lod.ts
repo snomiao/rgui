@@ -193,6 +193,26 @@ export function buildRenderGraph(
   for (const seg of segments)
     if (eligible.has(seg.a.id) && eligible.has(seg.b.id))
       union(seg.a.id, seg.b.id);
+  // 1.5) CHAIN CONTRACTION: interior nodes of a linear chain (in-degree 1,
+  // out-degree 1) union unconditionally when unreadable — the chain's
+  // endpoints stay as real nodes and the middle becomes one compact link:
+  // A → [⋯ ×3] → E. Chain beats distance, like snap beats location.
+  const inDeg = new Map<string, number>();
+  const outDeg = new Map<string, number>();
+  for (const e of graph.edges) {
+    outDeg.set(e.from.node, (outDeg.get(e.from.node) ?? 0) + 1);
+    inDeg.set(e.to.node, (inDeg.get(e.to.node) ?? 0) + 1);
+  }
+  const isMiddle = (id: string) =>
+    inDeg.get(id) === 1 && outDeg.get(id) === 1;
+  for (const e of graph.edges)
+    if (
+      isMiddle(e.from.node) &&
+      isMiddle(e.to.node) &&
+      eligible.has(e.from.node) &&
+      eligible.has(e.to.node)
+    )
+      union(e.from.node, e.to.node);
   // 2) then proximity/connection with their pixel budgets
   for (let i = 0; i < unreadable.length; i++) {
     for (let j = i + 1; j < unreadable.length; j++) {
@@ -218,11 +238,15 @@ export function buildRenderGraph(
     const xs = members.flatMap((n) => [n.x, n.x + n.w]);
     const ys = members.flatMap((n) => [n.y, n.y + nodeHeight(n)]);
     const solo = members.length === 1;
+    const isChainRun =
+      members.length > 1 && members.every((n) => isMiddle(n.id));
     const p: PseudoNode = {
       id: members.map((n) => n.id).join("+"),
       title: solo
         ? members[0]!.title
-        : `${members[0]!.title} +${members.length - 1}`,
+        : isChainRun
+          ? `⋯ ×${members.length}`
+          : `${members[0]!.title} +${members.length - 1}`,
       cx: (Math.min(...xs) + Math.max(...xs)) / 2,
       cy: (Math.min(...ys) + Math.max(...ys)) / 2,
       bw: Math.max(...xs) - Math.min(...xs),

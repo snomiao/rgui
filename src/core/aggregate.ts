@@ -128,18 +128,26 @@ export function fieldSummarize(
       const n = nodes[0];
       return n && n.fields.length ? { kind: "kv", rows: n.fields } : null;
     }
-    // pseudo: aggregate each field key across members (first-seen order)
+    // pseudo: aggregate each field key across members (first-seen order).
+    // Precedence: the NODE's own fieldRules (declared with the data) >
+    // the host's map > fallback.
     const byKey = new Map<string, string[]>();
+    const nodeRules = new Map<string, MergeRule>();
     for (const n of nodes)
       for (const [k, v] of n.fields) {
         let list = byKey.get(k);
         if (!list) byKey.set(k, (list = []));
         list.push(v);
+        const r = n.fieldRules?.[k];
+        if (r !== undefined && !nodeRules.has(k)) nodeRules.set(k, r);
       }
     if (!byKey.size) return null;
     const rows: [string, string][] = [];
     for (const [k, values] of byKey) {
-      const merged = aggregate(values, rules[k] ?? fallback);
+      const merged = aggregate(
+        values,
+        nodeRules.get(k) ?? rules[k] ?? fallback,
+      );
       if (merged) rows.push([k, merged]);
     }
     return rows.length ? { kind: "kv", rows: rows.slice(0, 4) } : null;

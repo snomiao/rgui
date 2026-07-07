@@ -165,6 +165,40 @@ describe("snap beats location (merge priority)", () => {
   });
 });
 
+describe("chain contraction", () => {
+  test("middles contract into one link; endpoints stay", () => {
+    // A → B → C → D → E, spread FAR apart (proximity would never merge);
+    // middles are short, endpoints tall
+    const A = mkNode("A", 0, 0, 200, 6); // tall, readable
+    const B = mkNode("B", 900, 0, 200, 1); // short middles
+    const C = mkNode("C", 1800, 0, 200, 1);
+    const D = mkNode("D", 2700, 0, 200, 1);
+    const E = mkNode("E", 3600, 0, 200, 6); // tall, readable
+    for (const n of [A, B, C, D, E]) {
+      n.outputs = [{ id: "o", label: "o", kind: "text" as const }];
+      n.inputs = [{ id: "i", label: "i", kind: "text" as const }];
+    }
+    const g = {
+      nodes: [A, B, C, D, E],
+      edges: [
+        { from: { node: "A", port: "o" }, to: { node: "B", port: "i" } },
+        { from: { node: "B", port: "o" }, to: { node: "C", port: "i" } },
+        { from: { node: "C", port: "o" }, to: { node: "D", port: "i" } },
+        { from: { node: "D", port: "o" }, to: { node: "E", port: "i" } },
+      ],
+    };
+    // k=0.7: middles (h=68 → 47.6px) unreadable; endpoints (178 → 125px) fine
+    const rg = buildRenderGraph(g, 0.7);
+    expect(rg.nodes.map((n) => n.id).sort()).toEqual(["A", "E"]);
+    expect(rg.pseudo.length).toBe(1);
+    expect(rg.pseudo[0]!.members.length).toBe(3);
+    expect(rg.pseudo[0]!.title).toBe("⋯ ×3");
+    // wiring: A → link → E
+    const kinds = rg.edges.map((e) => `${e.from.at}->${e.to.at}`).sort();
+    expect(kinds).toEqual(["node->pseudo", "pseudo->node"]);
+  });
+});
+
 describe("auto-layout", () => {
   test("layers follow connections; pinned stays put", () => {
     const g = demoGraph();
@@ -219,6 +253,28 @@ describe("data merge rules", () => {
     expect(aggregate(["on", "off"], "any")).toBe("on");
     expect(aggregate(["on", "off"], "all")).toBe("off");
   });
+  test("node-declared fieldRules win over host map and fallback", () => {
+    const a = {
+      ...mkNode("a", 0, 0),
+      fields: [["score", "0.5"], ["vad", "off"]] as [string, string][],
+      fieldRules: { score: "max" as const, vad: "any" as const },
+    };
+    const b = {
+      ...mkNode("b", 0, 0),
+      fields: [["score", "0.8"], ["vad", "on"]] as [string, string][],
+    };
+    // no host config at all — the node's own rules apply
+    const out = fieldSummarize()([a, b], {
+      collapsed: true,
+      level: "pseudo",
+      screen: { w: 200, h: 100 },
+    });
+    expect(out).toEqual({
+      kind: "kv",
+      rows: [["score", "0.8"], ["vad", "on"]],
+    });
+  });
+
   test("fieldSummarize merges member fields into kv rows", () => {
     const a = {
       ...mkNode("a", 0, 0),

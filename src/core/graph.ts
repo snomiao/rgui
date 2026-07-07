@@ -14,6 +14,8 @@ export interface Port {
   kind: SignalKind;
 }
 
+import type { MergeRule } from "./aggregate.js";
+
 export interface GraphNode {
   id: string;
   title: string;
@@ -32,6 +34,13 @@ export interface GraphNode {
   outputs: Port[];
   /** label: value rows shown in the node body */
   fields: [string, string][];
+  /**
+   * how each field MERGES when this node renormalizes into a block —
+   * declared with the data it governs, e.g. { "min score": "max",
+   * device: "set", vad: "any" }. Takes precedence over host-level
+   * fieldSummarize maps; unlisted keys fall back to "mode".
+   */
+  fieldRules?: Record<string, MergeRule>;
   /**
    * pinned: excluded from dragging (and future auto-layout) — an immovable
    * anchor other nodes snap around. Toggled via the header pin glyph.
@@ -199,6 +208,7 @@ export function demoGraph(): Graph {
         ["peer", "rusty-fox (me)"],
         ["vad", "on"],
       ],
+      fieldRules: { vad: "any", peer: "set" },
     },
     {
       id: "vision",
@@ -220,6 +230,8 @@ export function demoGraph(): Graph {
         ["model", "YOLOS-tiny (fast)"],
         ["min score", "0.5"],
       ],
+      // merge behavior declared with the data it governs
+      fieldRules: { "min score": "max", model: "set" },
     },
     {
       id: "stt",
