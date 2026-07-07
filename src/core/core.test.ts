@@ -12,6 +12,7 @@ import { buildRenderGraph } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
 import { DEFAULT_RULE } from "./rule";
+import { aggregate, fieldSummarize } from "./aggregate";
 
 const mkNode = (
   id: string,
@@ -178,6 +179,52 @@ describe("auto-layout", () => {
       expect(Math.abs(p.x % 20)).toBe(0);
       expect(Math.abs(p.y % 20)).toBe(0);
     }
+  });
+});
+
+describe("data merge rules", () => {
+  test("numeric reducers", () => {
+    expect(aggregate(["0.5", "0.8", "0.3"], "max")).toBe("0.8");
+    expect(aggregate(["0.5", "0.8", "0.3"], "min")).toBe("0.3");
+    expect(aggregate(["1", "2", "3"], "sum")).toBe("6");
+    expect(aggregate(["1", "2"], "mean")).toBe("1.5");
+    expect(aggregate(["3", "1", "9"], "range")).toBe("1–9");
+  });
+  test("众数 mode works for text and numbers", () => {
+    expect(aggregate(["ja", "en", "ja"], "mode")).toBe("ja ×2");
+    expect(aggregate(["a", "b"], "mode")).toBe("a");
+  });
+  test("集合 set joins distinct values", () => {
+    expect(aggregate(["mic-1", "mic-2", "mic-1"], "set")).toBe("mic-1, mic-2");
+  });
+  test("same / custom", () => {
+    expect(aggregate(["x", "x"], "same")).toBe("x");
+    expect(aggregate(["x", "y", "z"], "same")).toBe("mixed (3)");
+    expect(aggregate(["a", "b"], (v) => v.join("|"))).toBe("a|b");
+  });
+
+  test("booleans are a lattice: OR ≡ max, AND ≡ min", () => {
+    // max/min work directly on booleans, keeping the input vocabulary
+    expect(aggregate(["on", "off"], "max")).toBe("on");
+    expect(aggregate(["on", "off"], "min")).toBe("off");
+    expect(aggregate(["true", "false"], "max")).toBe("true");
+    expect(aggregate(["yes", "yes"], "min")).toBe("yes");
+    // any/all are aliases
+    expect(aggregate(["on", "off"], "any")).toBe("on");
+    expect(aggregate(["on", "off"], "all")).toBe("off");
+  });
+  test("fieldSummarize merges member fields into kv rows", () => {
+    const a = {
+      ...mkNode("a", 0, 0),
+      fields: [["lang", "ja"], ["score", "0.5"]] as [string, string][],
+    };
+    const b = {
+      ...mkNode("b", 0, 0),
+      fields: [["lang", "ja"], ["score", "0.8"]] as [string, string][],
+    };
+    const f = fieldSummarize({ score: "max" });
+    const out = f([a, b], { collapsed: true, level: "pseudo", screen: { w: 200, h: 100 } });
+    expect(out).toEqual({ kind: "kv", rows: [["lang", "ja ×2"], ["score", "0.8"]] });
   });
 });
 

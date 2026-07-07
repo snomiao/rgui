@@ -28,6 +28,7 @@ import {
   type RenderGraph,
 } from "../core/lod.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
+import { defaultSummarize } from "../core/aggregate.js";
 import type { SummarizeFn, SummaryContent } from "../core/summary.js";
 import {
   computePortLayout,
@@ -569,8 +570,9 @@ function drawPseudoNode(
   }
 
   // group summary: drawn INSIDE the pseudo's interior, below the port rows
-  // (the enclosure-sized box has the room; nothing extends outside)
-  const content = summarize?.(p.members, {
+  // (the enclosure-sized box has the room; nothing extends outside).
+  // No host summarize → default DATA MERGE (mode per field) applies.
+  const content = (summarize ?? defaultSummarize)(p.members, {
     collapsed: true,
     level: "pseudo",
     screen: { w, h },

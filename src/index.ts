@@ -41,6 +41,12 @@ export type {
   SummaryInfo,
 } from "./core/summary.js";
 export {
+  aggregate,
+  fieldSummarize,
+  defaultSummarize,
+  type MergeRule,
+} from "./core/aggregate.js";
+export {
   nodeHeight,
   bodyRect,
   inputPortPos,
