@@ -29,6 +29,10 @@ export interface PseudoNode {
   /** world center of the member bounding box (may be shifted by declutter) */
   cx: number;
   cy: number;
+  /** world size of the member ENCLOSURE (the merged block occupies the
+   * footprint of what it replaced, clamped to a readable minimum) */
+  bw: number;
+  bh: number;
   members: GraphNode[];
   inputs: Port[];
   outputs: Port[];
@@ -55,13 +59,16 @@ export interface RenderGraph {
   edges: RenderEdge[];
 }
 
-/** pseudo-node rect in world units at scale k (screen-constant size) */
+/**
+ * pseudo-node rect in world units at scale k: the members' enclosure,
+ * never smaller than the readable minimum (screen px)
+ */
 export function pseudoRect(p: PseudoNode, k: number, rule = DEFAULT_RULE) {
   const m = rule.pseudo;
   const rows = Math.max(p.inputs.length, p.outputs.length, 1);
-  const hpx = m.headerH + m.pad + rows * m.rowH + m.pad;
-  const w = m.w / k;
-  const h = hpx / k;
+  const minHpx = m.headerH + m.pad + rows * m.rowH + m.pad;
+  const w = Math.max(p.bw, m.w / k);
+  const h = Math.max(p.bh, minHpx / k);
   return { x: p.cx - w / 2, y: p.cy - h / 2, w, h };
 }
 
@@ -198,6 +205,8 @@ export function buildRenderGraph(
         : `${members[0]!.title} +${members.length - 1}`,
       cx: (Math.min(...xs) + Math.max(...xs)) / 2,
       cy: (Math.min(...ys) + Math.max(...ys)) / 2,
+      bw: Math.max(...xs) - Math.min(...xs),
+      bh: Math.max(...ys) - Math.min(...ys),
       members,
       inputs: [],
       outputs: [],
