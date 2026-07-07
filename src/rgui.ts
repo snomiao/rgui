@@ -68,6 +68,8 @@ export interface RguiOptions {
     nodeId: string,
     screen: { x: number; y: number },
   ) => void;
+  /** selection changed (click select, shift+drag box select, setSelection) */
+  onSelectionChange?: (nodeIds: string[]) => void;
 }
 
 /** reference to one port of one node */
@@ -83,6 +85,9 @@ export interface Rgui {
   readonly rule: RgRule;
   graph: Graph;
   setGraph(g: Graph): void;
+  /** selected node ids (click to select, shift+drag to box-select) */
+  readonly selection: string[];
+  setSelection(nodeIds: string[]): void;
   /** request a re-render on the next animation frame */
   invalidate(): void;
   destroy(): void;
@@ -100,10 +105,61 @@ export function createRgui(
   let graph: Graph = options.graph ?? { nodes: [], edges: [] };
   let lastRg: RenderGraph | null = null;
 
+  let selection = new Set<string>();
+  function applySelection(next: Set<string>) {
+    const changed =
+      next.size !== selection.size || [...next].some((id) => !selection.has(id));
+    selection = next;
+    if (changed) options.onSelectionChange?.([...next]);
+    invalidate();
+  }
+
+  function drawSelectionLayer(
+    ctx: CanvasRenderingContext2D,
+    t: ViewTransform,
+  ) {
+    // highlight selected nodes (screen-constant stroke)
+    if (selection.size) {
+      ctx.save();
+      ctx.strokeStyle = "#ffd60a";
+      ctx.lineWidth = 2;
+      for (const id of selection) {
+        const n = graph.nodes.find((m) => m.id === id);
+        if (!n) continue;
+        const x = n.x * t.k + t.x;
+        const y = n.y * t.k + t.y;
+        ctx.beginPath();
+        ctx.roundRect(
+          x - 3,
+          y - 3,
+          n.w * t.k + 6,
+          nodeHeight(n) * t.k + 6,
+          10,
+        );
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // marquee
+    if (drag?.type === "marquee") {
+      ctx.save();
+      ctx.strokeStyle = "#ffd60a";
+      ctx.fillStyle = "rgba(255, 214, 10, 0.08)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      const x = Math.min(drag.x0, drag.x1);
+      const y = Math.min(drag.y0, drag.y1);
+      ctx.fillRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+      ctx.strokeRect(x, y, Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0));
+      ctx.restore();
+    }
+  }
+
   const renderer = createCanvas2DRenderer(canvas, [
     createGridDotsLayer(rule),
     ...(options.layers ?? []),
     (ctx, t) => (lastRg = drawGraph(ctx, t, graph, rule)),
+    (ctx, t) => drawSelectionLayer(ctx, t),
     (ctx, t, size) => {
       if (lastRg) drawOffscreenIndicators(ctx, t, lastRg, size, rule);
     },
@@ -235,6 +291,7 @@ export function createRgui(
       }
     | { type: "pseudo"; pseudo: PseudoNode; wx: number; wy: number; moved: boolean }
     | { type: "wire"; from: PortHit; toSx: number; toSy: number }
+    | { type: "marquee"; x0: number; y0: number; x1: number; y1: number }
     | null = null;
 
   function drawGhostWire(ctx: CanvasRenderingContext2D, t: ViewTransform) {
@@ -285,7 +342,20 @@ export function createRgui(
       return;
     }
     const hit = hitAt(ev.offsetX, ev.offsetY);
-    if (!hit) return;
+    if (!hit) {
+      if (ev.shiftKey) {
+        // box select
+        drag = {
+          type: "marquee",
+          x0: ev.offsetX,
+          y0: ev.offsetY,
+          x1: ev.offsetX,
+          y1: ev.offsetY,
+        };
+        canvas.setPointerCapture(ev.pointerId);
+      }
+      return;
+    }
     const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
     if (hit.type === "node") {
       const n = hit.node;
@@ -314,7 +384,10 @@ export function createRgui(
       const [wx, wy] = screenToWorld(view, ev.offsetX, ev.offsetY);
       // rg-ui: every element snaps to the minor readable grid → dense layouts
       const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[1]!.step;
-      if (drag.type === "wire") {
+      if (drag.type === "marquee") {
+        drag.x1 = ev.offsetX;
+        drag.y1 = ev.offsetY;
+      } else if (drag.type === "wire") {
         drag.toSx = ev.offsetX;
         drag.toSy = ev.offsetY;
       } else if (drag.type === "node") {
@@ -354,6 +427,24 @@ export function createRgui(
 
   const onPointerUp = (ev: PointerEvent) => {
     if (!drag) return;
+    if (drag.type === "marquee") {
+      const [wx0, wy0] = screenToWorld(view, Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1));
+      const [wx1, wy1] = screenToWorld(view, Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1));
+      const picked = new Set(
+        (lastRg?.nodes ?? graph.nodes)
+          .filter(
+            (n) =>
+              n.x < wx1 &&
+              n.x + n.w > wx0 &&
+              n.y < wy1 &&
+              n.y + nodeHeight(n) > wy0,
+          )
+          .map((n) => n.id),
+      );
+      applySelection(picked);
+      drag = null;
+      return;
+    }
     if (drag.type === "wire") {
       const target = portAt(ev.offsetX, ev.offsetY);
       if (target && validConnection(drag.from, target)) {
@@ -372,6 +463,7 @@ export function createRgui(
       } else if (
         Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) < 4
       ) {
+        applySelection(new Set([drag.node.id]));
         options.onNodeClick?.(drag.node.id, { x: ev.offsetX, y: ev.offsetY });
       }
     } else if (drag.type === "pseudo" && drag.moved) {
@@ -407,6 +499,7 @@ export function createRgui(
     .filter((ev: MouseEvent | WheelEvent) => {
       if (ev.type === "wheel") return true;
       const me = ev as MouseEvent;
+      if (me.shiftKey) return false; // shift+drag = box select
       if (
         (options.onConnect || options.isValidConnection) &&
         portAt(me.offsetX, me.offsetY)
@@ -458,6 +551,12 @@ export function createRgui(
     setGraph(g: Graph) {
       graph = g;
       invalidate();
+    },
+    get selection() {
+      return [...selection];
+    },
+    setSelection(nodeIds: string[]) {
+      applySelection(new Set(nodeIds));
     },
     invalidate,
     destroy() {

@@ -26,6 +26,23 @@ export interface GraphNode {
   outputs: Port[];
   /** label: value rows shown in the node body */
   fields: [string, string][];
+  /**
+   * Reserved live-body rows below the field rows (row height NODE_ROW_H).
+   * The `body` hook draws inside this region.
+   */
+  bodyRows?: number;
+  /**
+   * Live-body draw hook: called every rendered frame with a SCREEN-space
+   * ctx clipped to the body region (origin at the region's top-left,
+   * rect in screen px). Auto-skipped when the node is collapsed into a
+   * pseudo-node or too small to read. Call viewer.invalidate() when the
+   * live data changes to schedule a redraw.
+   */
+  body?: (
+    ctx: CanvasRenderingContext2D,
+    rect: { width: number; height: number },
+    view: { k: number },
+  ) => void;
 }
 
 export interface Edge {
@@ -52,7 +69,29 @@ export function nodeHeight(n: GraphNode): number {
     n.fields.length,
     Math.max(n.inputs.length, n.outputs.length),
   );
-  return NODE_HEADER_H + NODE_PAD + rows * NODE_ROW_H + NODE_PAD;
+  return (
+    NODE_HEADER_H +
+    NODE_PAD +
+    (rows + (n.bodyRows ?? 0)) * NODE_ROW_H +
+    NODE_PAD
+  );
+}
+
+/** world-space rect of the reserved live-body region (null if none) */
+export function bodyRect(
+  n: GraphNode,
+): { x: number; y: number; w: number; h: number } | null {
+  if (!n.bodyRows) return null;
+  const rows = Math.max(
+    n.fields.length,
+    Math.max(n.inputs.length, n.outputs.length),
+  );
+  return {
+    x: n.x + NODE_PAD,
+    y: n.y + NODE_HEADER_H + NODE_PAD + rows * NODE_ROW_H,
+    w: n.w - 2 * NODE_PAD,
+    h: n.bodyRows * NODE_ROW_H,
+  };
 }
 
 /** world position of an input port center */

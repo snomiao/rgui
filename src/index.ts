@@ -25,6 +25,7 @@ export {
 export { DEFAULT_RULE, resolveRule, type RgRule } from "./core/rule.js";
 export {
   nodeHeight,
+  bodyRect,
   inputPortPos,
   outputPortPos,
   demoGraph,

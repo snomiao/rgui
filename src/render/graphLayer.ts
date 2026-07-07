@@ -8,6 +8,7 @@
  * before it becomes unreadable.
  */
 import {
+  bodyRect,
   inputPortPos,
   nodeHeight,
   outputPortPos,
@@ -228,6 +229,24 @@ function drawNode(
       ctx.textAlign = "right";
       ctx.fillText(v, n.x + n.w - NODE_PAD - 10, y);
     }
+  }
+
+  // live body — host-drawn region (waveform / partial text / thumbnails).
+  // Screen-space ctx clipped to the region; skipped when unreadably small.
+  const bodyR = bodyRect(n);
+  if (n.body && bodyR && bodyR.h * k >= 12) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bodyR.x, bodyR.y, bodyR.w, bodyR.h);
+    ctx.clip();
+    ctx.translate(bodyR.x, bodyR.y);
+    ctx.scale(1 / k, 1 / k); // hand the host SCREEN pixels
+    try {
+      n.body(ctx, { width: bodyR.w * k, height: bodyR.h * k }, { k });
+    } catch (err) {
+      console.error("[rgui] node body hook failed:", err);
+    }
+    ctx.restore();
   }
 
   // ports — layout-driven: internal ports vanish (辺界消融), external ports
