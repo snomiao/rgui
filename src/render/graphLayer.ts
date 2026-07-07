@@ -146,8 +146,10 @@ export function drawGraph(
 }
 
 /**
- * Solder joint: a small kind-colored pill on the dissolved seam between two
- * snapped-and-wired nodes — the indicator that the contact IS a connection.
+ * Seam flow chevron: a wire between snapped nodes condenses into a
+ * kind-colored arrowhead ON the dissolved boundary, pointing from the
+ * source node into the target — the same flow language as the port
+ * handles, so a fused stack still reads its data direction.
  */
 function drawSolderJoint(
   ctx: CanvasRenderingContext2D,
@@ -162,7 +164,7 @@ function drawSolderJoint(
       (s.a === a && s.b === b) || (s.a === b && s.b === a),
   );
   if (!seg) return;
-  // place the joint near the connected ports' rows, clamped into the seam
+  // place the chevron near the connected ports' rows, clamped into the seam
   const oi = a.outputs.findIndex((p) => p.id === e.source.from.port);
   const ii = b.inputs.findIndex((p) => p.id === e.source.to.port);
   const py =
@@ -173,22 +175,38 @@ function drawSolderJoint(
     ((oi >= 0 ? outputPortPos(a, oi)[0] : seg.from) +
       (ii >= 0 ? inputPortPos(b, ii)[0] : seg.to)) /
     2;
-  const half = 8;
-  const width = 5;
+  const margin = 9;
+  // flow direction: from the output node's center toward the input node's
+  const angle =
+    seg.axis === "v"
+      ? a.x + a.w / 2 <= b.x + b.w / 2
+        ? 0 // rightward through the vertical seam
+        : Math.PI
+      : a.y + nodeHeight(a) / 2 <= b.y + nodeHeight(b) / 2
+        ? Math.PI / 2 // downward through the horizontal seam
+        : -Math.PI / 2;
+  const cx =
+    seg.axis === "v"
+      ? seg.at
+      : Math.min(seg.to - margin, Math.max(seg.from + margin, px));
+  const cy =
+    seg.axis === "v"
+      ? Math.min(seg.to - margin, Math.max(seg.from + margin, py))
+      : seg.at;
+
   ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  const r = 6.5; // slightly larger than port chevrons — it stands alone
+  ctx.beginPath();
+  ctx.moveTo(-3, -r);
+  ctx.lineTo(r - 0.5, 0);
+  ctx.lineTo(-3, r);
+  ctx.lineTo(-0.5, 0);
+  ctx.closePath();
   ctx.fillStyle = KIND_COLOR[e.kind];
   ctx.globalAlpha = 0.95;
-  ctx.beginPath();
-  if (seg.axis === "v") {
-    const y = Math.min(seg.to - half, Math.max(seg.from + half, py));
-    ctx.roundRect(seg.at - width / 2, y - half, width, half * 2, width / 2);
-  } else {
-    const x = Math.min(seg.to - half, Math.max(seg.from + half, px));
-    ctx.roundRect(x - half, seg.at - width / 2, half * 2, width, width / 2);
-  }
   ctx.fill();
-  // hairline notch so the joint reads at low zoom too
-  ctx.globalAlpha = 0.5;
   ctx.lineWidth = Math.min(1.5, 1.5 / k);
   ctx.strokeStyle = "#14161a";
   ctx.stroke();
