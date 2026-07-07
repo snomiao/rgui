@@ -39,6 +39,19 @@ export interface GraphNode {
   /** custom block background fill (default #2b3036) */
   bg?: string;
   /**
+   * node-anchored HTML overlay (interactive form controls etc.) — rgui
+   * glues the element to the node's screen rect every frame and hides it
+   * (without destroying) when the node collapses, goes off-screen, or is
+   * too small to read. Size is screen-fixed.
+   */
+  overlay?: {
+    el: HTMLElement;
+    anchor?: "right" | "below" | "over";
+    offset?: { x: number; y: number };
+    interactive?: boolean;
+    destroy?: () => void;
+  };
+  /**
    * Full-content draw override: when set, rgui still owns the node block
    * (shape, fused boundaries, border, ports, pin, selection) but the ENTIRE
    * content — title, fields, everything — is drawn by this hook instead of

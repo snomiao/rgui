@@ -85,6 +85,11 @@ export {
   type OffscreenIndicator,
 } from "./render/graphLayer.js";
 export {
+  createOverlayManager,
+  type NodeHtmlOverlay,
+  type OverlayManager,
+} from "./render/overlayLayer.js";
+export {
   panelLayout,
   drawPanels,
   panelHitAt,

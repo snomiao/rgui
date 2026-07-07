@@ -27,6 +27,10 @@ import {
   type PanelRect,
 } from "./render/panelLayer.js";
 import {
+  createOverlayManager,
+  type NodeHtmlOverlay,
+} from "./render/overlayLayer.js";
+import {
   inputPortPos,
   nodeHeight,
   nodeMinHeight,
@@ -143,6 +147,14 @@ export interface Rgui {
   ): { x: number; y: number; edge: "left" | "right"; hidden: boolean } | null;
   /** replace the panel set (host mutates panels + calls this or invalidate) */
   setPanels(panels: Panel[]): void;
+  /**
+   * attach/replace/remove a node-anchored HTML overlay at runtime
+   * (declarative alternative: set GraphNode.overlay before rendering)
+   */
+  setNodeOverlay(
+    nodeId: string,
+    overlay: HTMLElement | NodeHtmlOverlay | null,
+  ): void;
   /**
    * programmatic resize (for nodes that want to size themselves) — snapped
    * to minimums and clamped against neighbors (一格一物), then re-rendered
@@ -285,6 +297,8 @@ export function createRgui(
 
   let view: ViewTransform = options.view ?? { x: 0, y: 0, k: 1 };
 
+  const overlays = createOverlayManager(canvas);
+
   let raf = 0;
   let destroyed = false;
   function invalidate() {
@@ -292,6 +306,7 @@ export function createRgui(
     raf = requestAnimationFrame(() => {
       raf = 0;
       renderer.render(view);
+      overlays.sync(graph, lastRg?.nodes ?? null, view, rule);
       if (debugEl) updateDebug();
       options.onFrame?.(view, lastRg);
     });
@@ -868,6 +883,22 @@ export function createRgui(
       panels = next;
       invalidate();
     },
+    setNodeOverlay(
+      nodeId: string,
+      overlay: HTMLElement | NodeHtmlOverlay | null,
+    ) {
+      const n = graph.nodes.find((m) => m.id === nodeId);
+      if (!n) {
+        console.warn(`[rgui] setNodeOverlay: unknown node "${nodeId}"`);
+        return;
+      }
+      n.overlay = overlay
+        ? overlay instanceof HTMLElement
+          ? { el: overlay }
+          : overlay
+        : undefined;
+      invalidate();
+    },
     autoLayout(opts?: LayoutOptions & { animate?: boolean }) {
       const target = layoutGraph(graph, opts);
       const moved = [...target].filter(([id, p]) => {
@@ -986,6 +1017,7 @@ export function createRgui(
     invalidate,
     destroy() {
       destroyed = true;
+      overlays.destroy();
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
       sel.on(".zoom", null);
