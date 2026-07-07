@@ -49,6 +49,12 @@ export {
   type RenderEdge,
   type EndpointRef,
 } from "./core/lod.js";
+export {
+  resolveOverlap,
+  flushSegments,
+  flushPairKeys,
+  type FlushSegment,
+} from "./core/pack.js";
 
 // renderers (Canvas 2D first impl)
 export {

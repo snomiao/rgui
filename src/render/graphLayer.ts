@@ -27,6 +27,7 @@ import {
   type RenderGraph,
 } from "../core/lod.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
+import { flushPairKeys, flushSegments } from "../core/pack.js";
 import type { ViewTransform } from "../core/grid.js";
 
 export const KIND_COLOR: Record<SignalKind, string> = {
@@ -58,11 +59,39 @@ export function drawGraph(
   ctx.scale(t.k, t.k);
 
   for (const n of rg.nodes) drawNode(ctx, n, t.k, rule);
+
+  // 辺界消融: flush-contact boundaries dissolve — erase the shared border
+  // segment so snapped nodes render as one fused shape (yet stay standalone)
+  const segments = flushSegments(rg.nodes);
+  const flushPairs = flushPairKeys(segments);
+  for (const seg of segments) {
+    ctx.strokeStyle = "#2b3036"; // node body color paints over the border
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    const inset = 6; // keep the rounded outer corners intact
+    if (seg.axis === "v") {
+      ctx.moveTo(seg.at, seg.from + inset);
+      ctx.lineTo(seg.at, seg.to - inset);
+    } else {
+      ctx.moveTo(seg.from + inset, seg.at);
+      ctx.lineTo(seg.to - inset, seg.at);
+    }
+    if (seg.to - seg.from > 2 * inset) ctx.stroke();
+  }
+
   for (const p of rg.pseudo) drawPseudoNode(ctx, p, t.k, rule);
 
   // wires draw ON TOP of nodes: connections carry the meaning of the graph
-  // and cost far fewer pixels than nodes — never hide them
+  // and cost far fewer pixels than nodes — never hide them.
+  // Exception (辺界消融): a wire between flush-snapped nodes dissolves —
+  // physical contact renders the connection.
   for (const e of rg.edges) {
+    if (
+      e.from.at === "node" &&
+      e.to.at === "node" &&
+      flushPairs.has([e.from.node.id, e.to.node.id].sort().join("|"))
+    )
+      continue;
     const [x0, y0] = endpointPos(e.from, t.k, rule);
     const [x1, y1] = endpointPos(e.to, t.k, rule);
     ctx.strokeStyle = KIND_COLOR[e.kind];

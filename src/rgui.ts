@@ -20,6 +20,7 @@ import {
   type Port,
 } from "./core/graph.js";
 import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
+import { resolveOverlap } from "./core/pack.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
 import {
   gridLevels,
@@ -308,8 +309,14 @@ export function createRgui(
         drag.toSx = ev.offsetX;
         drag.toSy = ev.offsetY;
       } else if (drag.type === "node") {
-        const nx = snap(wx - drag.dx, step);
-        const ny = snap(wy - drag.dy, step);
+        // 一格一物: overlap is not allowed — grid-snap first, then push out
+        // to flush contact against whatever the node would cover
+        const { x: nx, y: ny } = resolveOverlap(
+          drag.node,
+          snap(wx - drag.dx, step),
+          snap(wy - drag.dy, step),
+          graph.nodes,
+        );
         if (nx !== drag.node.x || ny !== drag.node.y) {
           drag.node.x = nx;
           drag.node.y = ny;
