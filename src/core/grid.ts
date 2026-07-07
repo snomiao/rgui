@@ -6,7 +6,7 @@
  * step in world units snaps to a ladder (default 1-2-5 * 10^n) so that its
  * on-screen spacing always stays within a readable pixel band.
  */
-import { DEFAULT_RULE } from "./rule";
+import { DEFAULT_RULE } from "./rule.js";
 
 /** Viewer transform: screen = world * k + t (per axis). */
 export interface ViewTransform {

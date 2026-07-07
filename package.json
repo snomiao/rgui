@@ -4,20 +4,59 @@
   "description": "Framework-agnostic readable-grid UI library — screen-adaptive grid, snap-everything, semantic-zoom LOD node graphs. Canvas 2D now, WebGPU next.",
   "type": "module",
   "license": "MIT",
+  "author": "snomiao <snomiao@gmail.com>",
+  "homepage": "https://github.com/snomiao/rgui#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snomiao/rgui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/snomiao/rgui/issues"
+  },
+  "keywords": [
+    "canvas",
+    "canvas2d",
+    "node-graph",
+    "node-editor",
+    "graph-editor",
+    "semantic-zoom",
+    "level-of-detail",
+    "lod",
+    "grid",
+    "snap-to-grid",
+    "infinite-canvas",
+    "pan-zoom",
+    "d3",
+    "d3-zoom",
+    "graph-visualization",
+    "dataflow",
+    "webgpu",
+    "framework-agnostic",
+    "readable-grid"
+  ],
+  "sideEffects": false,
   "main": "./dist/rgui.js",
   "module": "./dist/rgui.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/rgui.js"
+      "import": "./dist/rgui.js",
+      "default": "./dist/rgui.js"
     },
-    "./src": "./src/index.ts"
+    "./src": "./src/index.ts",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "src"
   ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsgo --noEmit && vite build",

@@ -18,16 +18,16 @@ import {
   type Graph,
   type GraphNode,
   type SignalKind,
-} from "../core/graph";
+} from "../core/graph.js";
 import {
   buildRenderGraph,
   endpointPos,
   pseudoRect,
   type PseudoNode,
   type RenderGraph,
-} from "../core/lod";
-import { DEFAULT_RULE, type RgRule } from "../core/rule";
-import type { ViewTransform } from "../core/grid";
+} from "../core/lod.js";
+import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
+import type { ViewTransform } from "../core/grid.js";
 
 export const KIND_COLOR: Record<SignalKind, string> = {
   image: "#2dd4bf", // teal

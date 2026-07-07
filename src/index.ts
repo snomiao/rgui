@@ -8,7 +8,7 @@
  *   import rgui from "@snomiao/rgui";
  *   const viewer = rgui(canvas, { graph, rule: { collapsePx: 48 } });
  */
-export { createRgui, type Rgui, type RguiOptions } from "./rgui";
+export { createRgui, type Rgui, type RguiOptions } from "./rgui.js";
 
 // core — rg math & models (pure, framework-agnostic)
 export {
@@ -21,8 +21,8 @@ export {
   screenToWorld,
   type ViewTransform,
   type GridLevel,
-} from "./core/grid";
-export { DEFAULT_RULE, resolveRule, type RgRule } from "./core/rule";
+} from "./core/grid.js";
+export { DEFAULT_RULE, resolveRule, type RgRule } from "./core/rule.js";
 export {
   nodeHeight,
   inputPortPos,
@@ -38,7 +38,7 @@ export {
   type Port,
   type SignalKind,
   type NodeCategory,
-} from "./core/graph";
+} from "./core/graph.js";
 export {
   buildRenderGraph,
   pseudoRect,
@@ -48,7 +48,7 @@ export {
   type PseudoNode,
   type RenderEdge,
   type EndpointRef,
-} from "./core/lod";
+} from "./core/lod.js";
 
 // renderers (Canvas 2D first impl)
 export {
@@ -57,8 +57,8 @@ export {
   gridDotsLayer,
   type DrawLayer,
   type GridRenderer,
-} from "./render/canvas2d";
-export { drawGraph, KIND_COLOR } from "./render/graphLayer";
+} from "./render/canvas2d.js";
+export { drawGraph, KIND_COLOR } from "./render/graphLayer.js";
 
-import { createRgui } from "./rgui";
+import { createRgui } from "./rgui.js";
 export default createRgui;

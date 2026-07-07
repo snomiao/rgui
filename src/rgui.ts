@@ -9,17 +9,17 @@ import {
   createCanvas2DRenderer,
   createGridDotsLayer,
   type DrawLayer,
-} from "./render/canvas2d";
-import { drawGraph } from "./render/graphLayer";
-import { nodeHeight, type Graph, type GraphNode } from "./core/graph";
-import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod";
-import { resolveRule, type RgRule } from "./core/rule";
+} from "./render/canvas2d.js";
+import { drawGraph } from "./render/graphLayer.js";
+import { nodeHeight, type Graph, type GraphNode } from "./core/graph.js";
+import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
+import { resolveRule, type RgRule } from "./core/rule.js";
 import {
   gridLevels,
   screenToWorld,
   snap,
   type ViewTransform,
-} from "./core/grid";
+} from "./core/grid.js";
 
 export interface RguiOptions {
   /** the node graph to render (mutated in place by dragging) */

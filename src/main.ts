@@ -1,5 +1,5 @@
 /** Demo app — dogfoods the library exactly as a consumer would. */
-import rgui, { demoGraph } from "./index";
+import rgui, { demoGraph } from "./index.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
 const debug = document.querySelector<HTMLDivElement>("#debug")!;

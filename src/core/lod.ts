@@ -18,8 +18,8 @@ import {
   type Graph,
   type GraphNode,
   type Port,
-} from "./graph";
-import { DEFAULT_RULE, type RgRule } from "./rule";
+} from "./graph.js";
+import { DEFAULT_RULE, type RgRule } from "./rule.js";
 
 export interface PseudoNode {
   id: string; // group name, or node id for a singleton

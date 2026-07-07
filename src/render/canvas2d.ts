@@ -8,8 +8,8 @@ import {
   gridLevels,
   gridRange,
   type ViewTransform,
-} from "../core/grid";
-import { DEFAULT_RULE, type RgRule } from "../core/rule";
+} from "../core/grid.js";
+import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
 
 export type DrawLayer = (
   ctx: CanvasRenderingContext2D,
