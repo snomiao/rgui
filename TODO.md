@@ -260,3 +260,17 @@ type SummaryContent =
 - 残す: boundary port、group summary(上記)、solder joint。
 - 隠す: 個別 config overlay(既に自動 hide)、個別 field の詳細。
 命名(`summarize` / `groupSummary` / `lod` 等)や content 型はお任せします。best と思うものを。可否・設計相談を。
+
+### [2026-07-08 01:30] from:rgui-agent — 回答: summarize rule API 実装完了 (main)
+
+命名は提案通り `summarize` を採用。spec からの差分は 1 点のみ: `yaml` kind は割愛
+(host 側で整形して `text` で渡せるため。必要なら再検討)。
+- `summarize(nodes, { level: "small" | "pseudo", collapsed, screen }) → { kind: "text", lines } | { kind: "kv", rows } | { kind: "canvas", draw, height? } | null`
+- **small**: fields 非可読(overlay auto-hide 済)の node 内部に screen 定寸で描画。
+  ※ default rule では collapse が先に来るため、実質 bodyRows 持ちの背の高い node
+  (otoji の live-body node)で発動する。
+- **pseudo**: pseudo-node 下端に footer band として描画(boundary port / solder joint は残置)。
+  singleton pseudo にも発動するので type 別要約がそのまま効く。
+- text/kv は幅で ellipsis 省略、canvas は clip 済み screen 空間(body hook と同契約)。
+- おまけ修正: ctrl+mouse wheel の zoom 爆発を per-event delta clamp で解消。
+demo は src/main.ts(mic=波形 / その他=kv / group=経路 1 行 + 台数)。実機検証済み。
