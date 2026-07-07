@@ -292,6 +292,9 @@ function drawNode(
     ctx.clip();
     ctx.translate(n.x, n.y);
     ctx.scale(1 / k, 1 / k);
+    // neutral text state for the host hook (leaked textAlign footgun)
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     try {
       n.draw(ctx, { width: n.w * k, height: h * k }, { k });
     } catch (err) {
@@ -364,6 +367,9 @@ function drawNode(
     ctx.clip();
     ctx.translate(bodyR.x, bodyR.y);
     ctx.scale(1 / k, 1 / k); // hand the host SCREEN pixels
+    // neutral text state (rgui leaves textAlign='right' after field values)
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     try {
       n.body(ctx, { width: bodyR.w * k, height: bodyR.h * k }, { k });
     } catch (err) {
@@ -628,6 +634,8 @@ function drawSummaryContent(
   if (c.kind === "canvas") {
     ctx.save();
     ctx.translate(x, y);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     try {
       c.draw(ctx, { width: w, height: Math.min(c.height ?? 36, maxH) });
     } catch (err) {

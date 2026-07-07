@@ -1239,6 +1239,12 @@ export function createRgui(
           )
           .map((n) => n.id),
       );
+      // merged blocks in the marquee contribute all their members
+      for (const p of lastRg?.pseudo ?? []) {
+        const r = pseudoRect(p, view.k, rule);
+        if (r.x < wx1 && r.x + r.w > wx0 && r.y < wy1 && r.y + r.h > wy0)
+          for (const m of p.members) picked.add(m.id);
+      }
       applySelection(picked);
       drag = null;
       return;
@@ -1284,11 +1290,26 @@ export function createRgui(
       if (drag.moved)
         for (const n of drag.nodes)
           options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
-    } else if (drag.type === "pseudo" && drag.moved) {
-      // pseudo drags report every member's final BASE position
-      for (const m of drag.pseudo.members) {
-        const n = baseOf(m);
-        options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
+    } else if (drag.type === "pseudo") {
+      if (drag.moved) {
+        // pseudo drags report every member's final BASE position
+        for (const m of drag.pseudo.members) {
+          const n = baseOf(m);
+          options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
+        }
+      } else {
+        // CLICK on a merged block: selecting at this level selects all its
+        // members — zoom back in and every member is selected. Shift
+        // toggles the whole group in/out.
+        const ids = drag.pseudo.members.map((m) => m.id);
+        if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
+          const next = new Set(selection);
+          const allIn = ids.every((id) => next.has(id));
+          for (const id of ids) allIn ? next.delete(id) : next.add(id);
+          applySelection(next);
+        } else {
+          applySelection(new Set(ids));
+        }
       }
     }
     drag = null;
