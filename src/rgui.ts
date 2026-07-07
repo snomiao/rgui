@@ -350,7 +350,51 @@ export function createRgui(
   /** per-frame display graph: center-projected node positions, same ids */
   let displayNodes = new Map<string, GraphNode>();
   function displayGraph(): Graph {
-    if (!rotActive) return graph;
+    if (!rotActive) {
+      // even unrotated, RENDERED overlap is not allowed (一格一物): overlaps
+      // created by group drags or host position updates pack to flush
+      // contact — 辺界消融 then fuses them and snapped-priority merges them.
+      // Rendering only; base positions stay untouched.
+      let overlapping = false;
+      outer: for (let i = 0; i < graph.nodes.length; i++) {
+        for (let j = i + 1; j < graph.nodes.length; j++) {
+          const a = graph.nodes[i]!;
+          const b = graph.nodes[j]!;
+          if (
+            a.x < b.x + b.w &&
+            a.x + a.w > b.x &&
+            a.y < b.y + nodeHeight(b) &&
+            a.y + nodeHeight(a) > b.y
+          ) {
+            overlapping = true;
+            break outer;
+          }
+        }
+      }
+      if (!overlapping) return graph;
+      displayNodes = new Map();
+      const nodes = graph.nodes.map((n) => {
+        const clone = { ...n };
+        displayNodes.set(n.id, clone);
+        return clone;
+      });
+      for (let pass = 0; pass < 3; pass++) {
+        let moved = false;
+        for (const c of nodes) {
+          const r = resolveOverlap(c, c.x, c.y, nodes, {
+            alignSnap: 0,
+            direction: rule.direction,
+          });
+          if (r.x !== c.x || r.y !== c.y) {
+            c.x = r.x;
+            c.y = r.y;
+            moved = true;
+          }
+        }
+        if (!moved) break;
+      }
+      return { nodes, edges: graph.edges };
+    }
     displayNodes = new Map();
     // whatever the rotation, rendered cards sit on the MAIN visible grid:
     // quantize each projected position to the nearest major grid point

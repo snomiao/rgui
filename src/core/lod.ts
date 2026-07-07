@@ -279,10 +279,11 @@ export function buildRenderGraph(
   }
 
   const pseudo = collapsed;
-  declutter(pseudo, k, rule);
+  const expanded = graph.nodes.filter((n) => !nodeToPseudo.has(n.id));
+  declutter(pseudo, k, rule, expanded);
 
   return {
-    nodes: graph.nodes.filter((n) => !nodeToPseudo.has(n.id)),
+    nodes: expanded,
     pseudo,
     edges,
   };
@@ -293,10 +294,31 @@ export function buildRenderGraph(
  * close. Push overlapping pairs apart along the axis of least overlap
  * (in screen space) until stable — keeps the collapsed view readable.
  */
-function declutter(pseudo: PseudoNode[], k: number, rule: RgRule) {
+function declutter(
+  pseudo: PseudoNode[],
+  k: number,
+  rule: RgRule,
+  obstacles: GraphNode[] = [],
+) {
   const margin = rule.declutterMarginPx / k;
   for (let iter = 0; iter < 10; iter++) {
     let moved = false;
+    // expanded (readable) nodes are immovable: push pseudos out of them
+    for (const p of pseudo) {
+      const r = pseudoRect(p, k, rule);
+      for (const o of obstacles) {
+        const oh = nodeHeight(o);
+        const ox =
+          Math.min(r.x + r.w, o.x + o.w) - Math.max(r.x, o.x) + margin;
+        const oy =
+          Math.min(r.y + r.h, o.y + oh) - Math.max(r.y, o.y) + margin;
+        if (ox <= margin || oy <= margin) continue;
+        moved = true;
+        if (ox < oy)
+          p.cx += (p.cx <= o.x + o.w / 2 ? -1 : 1) * ox;
+        else p.cy += (p.cy <= o.y + oh / 2 ? -1 : 1) * oy;
+      }
+    }
     for (let i = 0; i < pseudo.length; i++) {
       for (let j = i + 1; j < pseudo.length; j++) {
         const a = pseudo[i]!;

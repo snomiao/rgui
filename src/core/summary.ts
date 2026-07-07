@@ -36,3 +36,12 @@ export type SummarizeFn = (
   nodes: GraphNode[],
   info: SummaryInfo,
 ) => SummaryContent | null | undefined;
+
+export const SUMMARY_LINE_H = 14;
+
+/** height (px) a summary renders at — pure, canvas-free */
+export function summaryContentHeight(c: SummaryContent): number {
+  if (c.kind === "text") return Math.min(c.lines.length, 4) * SUMMARY_LINE_H;
+  if (c.kind === "kv") return Math.min(c.rows.length, 4) * SUMMARY_LINE_H;
+  return c.height ?? 36;
+}

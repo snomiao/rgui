@@ -554,28 +554,32 @@ function drawPseudoNode(
     ctx.fillText(port.label, w - PORT_R - 4, y);
   }
 
-  // group summary: host-provided, drawn as a footer band attached under the
-  // block (hit-rect stays pseudoRect; the band is visual)
+  // group summary: drawn INSIDE the pseudo's interior, below the port rows
+  // (the enclosure-sized box has the room; nothing extends outside)
   const content = summarize?.(p.members, {
     collapsed: true,
     level: "pseudo",
-    screen: { w, h: 999 },
+    screen: { w, h },
   });
   if (content) {
-    const bandH = summaryHeight(ctx, content) + 8;
-    ctx.beginPath();
-    ctx.roundRect(0, h, w, bandH, [0, 0, r, r]);
-    ctx.fillStyle = "#22262b";
-    ctx.fill();
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = accent;
-    ctx.stroke();
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, h, w, bandH);
-    ctx.clip();
-    drawSummaryContent(ctx, content, PSEUDO.pad, h + 4, w - 2 * PSEUDO.pad, bandH - 8);
-    ctx.restore();
+    const rows = Math.max(p.inputs.length, p.outputs.length, 1);
+    const top = PSEUDO.headerH + PSEUDO.pad + rows * PSEUDO.rowH + PSEUDO.pad;
+    const maxH = h - top - PSEUDO.pad;
+    if (maxH >= 14) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(PSEUDO.pad, top, w - 2 * PSEUDO.pad, maxH);
+      ctx.clip();
+      drawSummaryContent(
+        ctx,
+        content,
+        PSEUDO.pad,
+        top,
+        w - 2 * PSEUDO.pad,
+        maxH,
+      );
+      ctx.restore();
+    }
   }
   ctx.restore();
 }
