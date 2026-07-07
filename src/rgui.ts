@@ -835,19 +835,20 @@ export function createRgui(
     graph.nodes.find((m) => m.id === n.id) ?? n;
 
   /**
-   * a node's position snaps to ITS OWN scale layer (from the size law) or
-   * the viewing main grid, whichever is coarser — big nodes live on big
-   * lattices even when zoomed in
+   * a node's position snaps to the FINER of the viewing main grid and its
+   * OWN scale layer (from the size law): zoomed in you get precision on the
+   * visible grid; zoomed out the node's layer caps the coarseness so drags
+   * never jump in giant view-grid steps
    */
   const nodeSnapStep = (viewStep: number, ...nodes: GraphNode[]) => {
-    let s = viewStep;
+    let layer = 0;
     for (const n of nodes)
-      s = Math.max(
-        s,
+      layer = Math.max(
+        layer,
         sizeLayerStep(n.w, rule.radix),
         sizeLayerStep(nodeHeight(n), rule.radix),
       );
-    return s;
+    return layer ? Math.min(viewStep, layer) : viewStep;
   };
 
   let drag:

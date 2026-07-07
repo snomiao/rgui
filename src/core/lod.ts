@@ -286,9 +286,9 @@ export function buildRenderGraph(
   const mainStep = gridLevels(k, rule.minGridPx, rule.radix)[0]!.step;
   for (const p of pseudo) {
     const r = pseudoRect(p, k, rule);
-    // a merged block also lives on ITS size's layer (or the view grid,
-    // whichever is coarser) — higher-order nodes on higher-order lattices
-    const pstep = Math.max(
+    // a merged block quantizes to the finer of the view grid and its own
+    // size layer — never coarser than the lattice it visually belongs to
+    const pstep = Math.min(
       mainStep,
       sizeLayerStep(Math.max(r.w, r.h), rule.radix),
     );
