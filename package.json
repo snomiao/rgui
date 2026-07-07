@@ -1,0 +1,40 @@
+{
+  "name": "@snomiao/rgui",
+  "version": "0.1.0",
+  "description": "Framework-agnostic readable-grid UI library — screen-adaptive grid, snap-everything, semantic-zoom LOD node graphs. Canvas 2D now, WebGPU next.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/rgui.js",
+  "module": "./dist/rgui.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/rgui.js"
+    },
+    "./src": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsgo --noEmit && vite build",
+    "build:lib": "vite build --config vite.lib.config.ts && tsgo -p tsconfig.build.json",
+    "typecheck": "tsgo --noEmit",
+    "preview": "vite preview",
+    "prepublishOnly": "bun run build:lib"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/d3-selection": "^3.0.11",
+    "@types/d3-zoom": "^3.0.8",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "vite": "^8.1.3"
+  },
+  "dependencies": {
+    "d3-selection": "^3.0.0",
+    "d3-zoom": "^3.0.0"
+  }
+}

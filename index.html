@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>rgui — readable grid viewer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #111;
+      }
+      #viewer {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        touch-action: none;
+        cursor: grab;
+      }
+      #debug {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        padding: 6px 8px;
+        background: rgba(20, 22, 26, 0.85);
+        border: 1px solid #3a4048;
+        border-radius: 4px;
+        color: #e6e9ec;
+        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre;
+        pointer-events: none;
+        user-select: none;
+      }
+      #debug .dim { color: #8b949e; }
+      #debug .hi { color: #ffd60a; }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewer"></canvas>
+    <div id="debug"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
