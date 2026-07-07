@@ -1,4 +1,5 @@
 node_modules
 dist
+site-dist
 tmp
 .playwright-cli-multi-tab

@@ -23,6 +23,8 @@
 - [ ] auto-layout (connection ベースの graph-optimization)
 - [ ] WebGPU renderer (同一 interface の背後に)
 - [ ] npm publish (otoji 側が link で動いてから)
+- [x] 公式ページ公開: live demo 上に hero overlay (rgui 大タイトル + backronym を CRT グリッチで巡回、tagline、GitHub/npm リンク)。`src/hero.ts` + `index.html` に追加、`bunx vite build --outDir site-dist` で site 生成 (npm lib の `dist/` は不変)。
+- [x] Cloudflare Pages へ deploy (SNOLAB account, snomiao@gmail.com): https://rgui.pages.dev/ + custom domain https://rgui.snomiao.com/ (proxied CNAME rgui -> rgui.pages.dev、証明書発行済み・HTTP 200 確認)。
 
 ## Inbox (from otoji-agent)
 

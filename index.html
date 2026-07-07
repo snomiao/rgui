@@ -3,14 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>rgui — readable grid viewer</title>
+    <title>rgui — readable grid UI</title>
+    <meta
+      name="description"
+      content="rgui — a framework-agnostic readable-grid UI library. Zoom is a renormalization-group flow: at every scale, only the relevant couplings survive."
+    />
     <style>
       html,
       body {
         margin: 0;
         height: 100%;
         overflow: hidden;
-        background: #111;
+        background: #1c2126;
       }
       #viewer {
         display: block;
@@ -35,11 +39,177 @@
       }
       #debug .dim { color: #8b949e; }
       #debug .hi { color: #ffd60a; }
+
+      /* ── Hero overlay ─────────────────────────────────────────────
+         Sits on top of the live rgui canvas without stealing pointer
+         events, so the graph underneath stays pannable/zoomable.
+         Only interactive children (links) re-enable pointer events. */
+      #hero {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 18px;
+        padding: 24px;
+        box-sizing: border-box;
+        pointer-events: none;
+        user-select: none;
+        text-align: center;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #e6e9ec;
+        text-shadow: 0 2px 24px rgba(0, 0, 0, 0.85);
+      }
+      #hero .title {
+        margin: 0;
+        font-size: clamp(72px, 22vw, 260px);
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        line-height: 0.9;
+        color: #ffd60a;
+        text-shadow:
+          0 0 2px rgba(255, 214, 10, 0.6),
+          0 0 28px rgba(255, 214, 10, 0.35),
+          0 4px 40px rgba(0, 0, 0, 0.9);
+      }
+      #hero .title::after {
+        content: "·rg";
+        font-size: 0.28em;
+        color: #8b949e;
+        vertical-align: super;
+        letter-spacing: 0;
+      }
+      /* Cycling subtitle — CRT-flash glitch between expansions */
+      #hero .subtitle {
+        position: relative;
+        height: 1.4em;
+        min-height: 1.4em;
+        font-size: clamp(15px, 3.6vw, 30px);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: #e6e9ec;
+      }
+      #hero .subtitle .word {
+        display: inline-block;
+        will-change: opacity, transform, filter;
+      }
+      #hero .subtitle .word.flash {
+        animation: crt-flash 2500ms ease-in-out;
+      }
+      @keyframes crt-flash {
+        0% {
+          opacity: 0;
+          transform: translateY(2px) skewX(0deg);
+          filter: brightness(3);
+          text-shadow: -2px 0 #ff2d6b, 2px 0 #22d3ee;
+          clip-path: inset(45% 0 40% 0);
+        }
+        4% {
+          opacity: 1;
+          transform: translateX(-3px) skewX(6deg);
+          clip-path: inset(10% 0 60% 0);
+        }
+        8% {
+          transform: translateX(3px) skewX(-4deg);
+          clip-path: inset(60% 0 8% 0);
+        }
+        12% {
+          transform: translateX(0) skewX(0deg);
+          filter: brightness(1.4);
+          text-shadow: -1px 0 rgba(255, 45, 107, 0.5), 1px 0 rgba(34, 211, 238, 0.5);
+          clip-path: inset(0 0 0 0);
+        }
+        16% {
+          filter: brightness(1);
+          text-shadow: none;
+        }
+        88% {
+          opacity: 1;
+          filter: brightness(1);
+          text-shadow: none;
+        }
+        96% {
+          opacity: 0.15;
+          filter: brightness(2.2);
+          text-shadow: -2px 0 #ff2d6b, 2px 0 #22d3ee;
+        }
+        100% {
+          opacity: 0;
+          transform: translateY(-2px);
+          filter: brightness(3);
+          clip-path: inset(40% 0 45% 0);
+        }
+      }
+      #hero .tagline {
+        max-width: 720px;
+        margin: 4px 0 0;
+        font-size: clamp(12px, 2vw, 16px);
+        line-height: 1.6;
+        color: #aeb6bf;
+        font-weight: 400;
+      }
+      #hero .tagline b { color: #ffd60a; font-weight: 600; }
+      #hero .links {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 6px;
+        pointer-events: auto;
+      }
+      #hero .links a {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        border: 1px solid #3a4048;
+        border-radius: 6px;
+        background: rgba(20, 22, 26, 0.7);
+        backdrop-filter: blur(4px);
+        color: #e6e9ec;
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 600;
+        transition: border-color 120ms, color 120ms, background 120ms;
+      }
+      #hero .links a:hover {
+        border-color: #ffd60a;
+        color: #ffd60a;
+        background: rgba(20, 22, 26, 0.9);
+      }
+      #hero .hint {
+        margin-top: 2px;
+        font-size: 11px;
+        color: #5c6570;
+        letter-spacing: 0.04em;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #hero .subtitle .word.flash { animation: none; }
+      }
     </style>
   </head>
   <body>
     <canvas id="viewer"></canvas>
     <div id="debug"></div>
+
+    <div id="hero">
+      <h1 class="title">rgui</h1>
+      <div class="subtitle" aria-live="polite"><span class="word" id="hero-word"></span></div>
+      <p class="tagline">
+        Zoom is a <b>renormalization-group flow</b>: at every scale, only the
+        relevant couplings survive — and the canvas stays readable.
+      </p>
+      <nav class="links">
+        <a href="https://github.com/snomiao/rgui" target="_blank" rel="noopener">GitHub ↗</a>
+        <a href="https://www.npmjs.com/package/@snomiao/rgui" target="_blank" rel="noopener">
+          npm · @snomiao/rgui ↗
+        </a>
+      </nav>
+      <div class="hint">drag · scroll to zoom · the graph is live behind this</div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/hero.ts"></script>
   </body>
 </html>
