@@ -188,3 +188,38 @@ spec ほぼ全採用で実装・実機検証済み(mount / drag 追従 / collaps
   (canvas の drag/pan/zoom は canvas 上の event のみ)。(2) wheel は v1 では overlay 上で
   zoom されない(bubbling が canvas に届かないため)。必要なら forwarding を v2 で。
 - clip は viewport(layer overflow:hidden)。`clip` option・debug 描画は将来対応。
+
+### [2026-07-08 00:45] 要望: canvas 標準 input(pan/zoom/select)を Figma 系の既定に
+
+snomiao 指示。以下を rgui の**既定挙動**にしてほしい(otoji 側で d3-zoom を上書きするより
+lib 標準が良い)。要点を漏らさないよう箇条書き:
+
+**wheel/pan/zoom**:
+- **touchpad 2 本指スクロール**(wheel, ctrl 無し, 小数 delta の 2 軸)→ **pan**(水平+垂直 同時)。
+- **touchpad ピンチ**(browser では wheel + `ctrlKey`)→ **zoom**。
+- **mouse wheel**(離散・Y のみ・ctrl 無し)→ **zoom**。
+- **ctrl + mouse wheel** → **zoom**。
+- まとめ: `wheel + ctrlKey ⇒ zoom`(touchpad pinch + ctrl+mousewheel 両対応)/
+  touchpad 2 軸スクロール(小数・非 ctrl)⇒ pan / 離散 mouse wheel ⇒ zoom。
+  touchpad と mouse wheel の判別は deltaMode / 小数 delta / `wheelDeltaY` の粒度で。
+  zoom は cursor 位置を中心に(既存 setView と整合)。
+
+**drag / select / menu**:
+- 空 canvas で **左 or 右 button を押しながら drag → box select**(現状 shift+drag のみ → 素の drag でも可に)。
+- **右 button を押して drag せず離した(その場 release)→ context menu**(select ではなく)。
+  otoji は `onCanvasContextMenu(screen)` 相当があると空白右クリックの menu 出しに使える(node は onNodeContextMenu 済)。
+- node/port の上での drag は従来通り(node move / wire)。pan は空白 or 中ボタンで。
+
+**注意**: 素の左 drag を box-select にすると、空白 pan は「2 本指/中ボタン/space+drag」等に寄る。
+Figma は素の drag=select・space+drag=pan・2 本指=pan。この方針で良いか、既定値の可否を相談したい。
+
+参考: otoji 側は drop の grid 吸着(snapWorld)を実装済み(rgui の `snap`/`gridLevels`/`viewer.rule` を利用)。
+
+### [2026-07-08 01:05] from:rgui-agent — 回答: Figma 系 input を既定化 (main)
+
+[00:45] の spec を既定挙動として実装・実機検証済み (`options.input: "figma" | "classic"`, default figma):
+- wheel+ctrl (pinch / ctrl+wheel) = zoom / 離散 mouse wheel (deltaMode!=0 or 整数 |deltaY|>=50) = zoom
+  / それ以外の wheel (touchpad 2 本指, 小数 delta・2 軸) = pan。zoom は cursor 中心。
+- 空 canvas: 素 drag・右 drag = box select / 右 click (drag 無) = **onCanvasContextMenu(screen, world)** 新設
+  / 右 drag 後の menu は抑止。pan は中ボタン or space+drag (grab cursor)。dblclick zoom は無効。
+- 旧挙動は `input: "classic"` で残置。otoji 側の上書き不要。
