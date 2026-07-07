@@ -188,7 +188,18 @@ export function buildRenderGraph(
     connected.add(`${a}|${b}`);
   }
 
-  const eligible = new Set(unreadable.map((n) => n.id));
+  // CASCADING RG: if a merged block ends up overlapping other nodes or
+  // blocks, they RG together — rebuild with forced unions until stable
+  const extraEligible = new Set<string>();
+  const forcedPairs: [string, string][] = [];
+  for (let rgIter = 0; ; rgIter++) {
+  parent.clear();
+  const eligible = new Set([
+    ...unreadable.map((n) => n.id),
+    ...extraEligible,
+  ]);
+  for (const [a, b] of forcedPairs)
+    if (eligible.has(a) && eligible.has(b)) union(a, b);
   // 1) flush contact unions FIRST and unconditionally (snap > location)
   for (const seg of segments)
     if (eligible.has(seg.a.id) && eligible.has(seg.b.id))
@@ -214,10 +225,11 @@ export function buildRenderGraph(
     )
       union(e.from.node, e.to.node);
   // 2) then proximity/connection with their pixel budgets
-  for (let i = 0; i < unreadable.length; i++) {
-    for (let j = i + 1; j < unreadable.length; j++) {
-      const a = unreadable[i]!;
-      const b = unreadable[j]!;
+  const elig = graph.nodes.filter((n) => eligible.has(n.id));
+  for (let i = 0; i < elig.length; i++) {
+    for (let j = i + 1; j < elig.length; j++) {
+      const a = elig[i]!;
+      const b = elig[j]!;
       const wired = connected.has([a.id, b.id].sort().join("|"));
       const budget = wired ? rule.clusterGapConnectedPx : rule.clusterGapPx;
       if (rectGapView(a, b, px) < budget) union(a.id, b.id);
@@ -226,7 +238,7 @@ export function buildRenderGraph(
 
   // materialize clusters as pseudo-nodes (singletons become title chips)
   const clusters = new Map<string, GraphNode[]>();
-  for (const n of unreadable) {
+  for (const n of elig) {
     const root = find(n.id);
     let c = clusters.get(root);
     if (!c) clusters.set(root, (c = []));
@@ -339,6 +351,37 @@ export function buildRenderGraph(
     p.cy += snap(r.y, pstep) - r.y;
   }
   const expanded = graph.nodes.filter((n) => !nodeToPseudo.has(n.id));
+
+  // overlap after RG? → RG together (fixed point, bounded iterations)
+  if (rgIter < 4) {
+    let changed = false;
+    const rects = pseudo.map((p) => ({ p, r: pseudoRect(p, k, rule) }));
+    const hits = (
+      a: { x: number; y: number; w: number; h: number },
+      b: { x: number; y: number; w: number; h: number },
+    ) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        if (hits(rects[i]!.r, rects[j]!.r)) {
+          forcedPairs.push([
+            rects[i]!.p.members[0]!.id,
+            rects[j]!.p.members[0]!.id,
+          ]);
+          changed = true;
+        }
+      }
+      for (const n of expanded) {
+        const nr = { x: n.x, y: n.y, w: n.w, h: nodeHeight(n) };
+        if (hits(rects[i]!.r, nr)) {
+          extraEligible.add(n.id);
+          forcedPairs.push([n.id, rects[i]!.p.members[0]!.id]);
+          changed = true;
+        }
+      }
+    }
+    if (changed) continue; // rebuild with the new unions
+  }
+
   declutter(pseudo, k, rule, expanded);
 
   return {
@@ -346,6 +389,7 @@ export function buildRenderGraph(
     pseudo,
     edges,
   };
+  } // cascading-RG loop
 }
 
 /**

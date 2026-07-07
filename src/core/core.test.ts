@@ -199,6 +199,29 @@ describe("chain contraction", () => {
   });
 });
 
+describe("cascading RG", () => {
+  test("a block overlapping a readable node absorbs it", () => {
+    // two short nodes merge into an enclosure block; a readable tall node
+    // sits INSIDE that enclosure → it must RG into the block too
+    const a = mkNode("a", 0, 0, 200, 1); // short → collapses at k=0.7
+    const b = mkNode("b", 0, 600, 200, 1); // short, far below (same cluster? no—too far)
+    const c = mkNode("c", 40, 200, 200, 6); // tall (readable), between them
+    // force a+b into one cluster via connection at close gap: instead place
+    // them near each other vertically around c so the enclosure covers c
+    a.y = 100; b.y = 420; // gap 252wu*0.7=176px > budgets... use flush chain:
+    // simplest: snap a and b to c? Instead: make a and b flush-stacked pair
+    // whose enclosure box (min size at k) overlaps c.
+    b.x = 0; b.y = 100 + nodeHeight(a); // flush under a
+    c.x = 40; c.y = 120; c.w = 200; // sits on top of the pair's enclosure
+    const g = { nodes: [a, b, c], edges: [] };
+    const rg = buildRenderGraph(g, 0.7);
+    // c must be absorbed: no expanded nodes left, one block with all three
+    expect(rg.nodes.length).toBe(0);
+    expect(rg.pseudo.length).toBe(1);
+    expect(rg.pseudo[0]!.members.length).toBe(3);
+  });
+});
+
 describe("auto-layout", () => {
   test("layers follow connections; pinned stays put", () => {
     const g = demoGraph();

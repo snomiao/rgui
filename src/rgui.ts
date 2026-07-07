@@ -48,6 +48,7 @@ import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
 import {
   clampSize,
   computePortLayout,
+  flushComponents,
   flushPairKeys,
   flushSegments,
   resolveOverlap,
@@ -1316,6 +1317,20 @@ export function createRgui(
     invalidate();
   };
 
+  const onDblClick = (ev: MouseEvent) => {
+    // double-click selects the whole SNAPPED stack the node belongs to
+    const [vx, vy] = toView(ev.offsetX, ev.offsetY);
+    const hit = hitAt(vx, vy);
+    if (!hit || hit.type !== "node") return;
+    const nodes = lastRg?.nodes ?? dGraph.nodes;
+    const comp = flushComponents(nodes, flushSegments(nodes));
+    const root = comp.get(hit.node.id);
+    const ids = nodes
+      .filter((n) => comp.get(n.id) === root)
+      .map((n) => n.id);
+    applySelection(new Set(ids.length ? ids : [hit.node.id]));
+  };
+
   const onContextMenu = (ev: MouseEvent) => {
     if (rightDragMoved) {
       // a right-button box select just ended — not a menu
@@ -1355,6 +1370,7 @@ export function createRgui(
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("contextmenu", onContextMenu);
+  canvas.addEventListener("dblclick", onDblClick);
 
   // --- pan / zoom (figma-style input by default) --------------------------
 
@@ -1736,6 +1752,7 @@ export function createRgui(
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("contextmenu", onContextMenu);
+      canvas.removeEventListener("dblclick", onDblClick);
     },
   };
 }
