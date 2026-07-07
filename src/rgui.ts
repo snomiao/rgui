@@ -929,8 +929,10 @@ export function createRgui(
         drag.toSy = vy0;
       } else if (drag.type === "node") {
         if (drag.node.pinned) return; // pinned nodes do not move
-        // pointer works in DISPLAY space; un-project the target into base
-        // space, then apply 一格一物 (snap → flush push-out) as usual
+        // SNAP ON THE RENDERED PLANE: grid-align the target in display
+        // space (what the user sees), then un-project EXACTLY into base
+        // space — no second snap there, or the alignment would belong to
+        // the rotated plane instead of the visible one
         const h0 = nodeHeight(drag.node);
         const [tdx, tdy] = [snap(wx - drag.dx, step), snap(wy - drag.dy, step)];
         const [bcx, bcy] = rotActive
@@ -942,8 +944,8 @@ export function createRgui(
           : ([tdx + drag.node.w / 2, tdy + h0 / 2] as const);
         const { x: nx, y: ny } = resolveOverlap(
           drag.node,
-          snap(bcx - drag.node.w / 2, step),
-          snap(bcy - h0 / 2, step),
+          bcx - drag.node.w / 2,
+          bcy - h0 / 2,
           graph.nodes,
           { alignSnap: rule.alignSnapPx / view.k, direction: rule.direction },
         );
