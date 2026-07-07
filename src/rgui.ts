@@ -44,6 +44,7 @@ import {
   flushSegments,
   resolveOverlap,
 } from "./core/pack.js";
+import { layoutGraph, type LayoutOptions } from "./core/layout.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
 import {
   gridLevels,
@@ -147,6 +148,12 @@ export interface Rgui {
    * to minimums and clamped against neighbors (一格一物), then re-rendered
    */
   resizeNode(nodeId: string, size: { w?: number; h?: number }): void;
+  /**
+   * auto-layout by connection optimization (layered + barycenter). Pinned
+   * nodes stay put. Animates ~300ms, then fires onNodeMoveEnd per moved node
+   * so hosts can broadcast the new positions.
+   */
+  autoLayout(opts?: LayoutOptions & { animate?: boolean }): void;
   /**
    * screen midpoint of a wire's bezier as currently drawn — null if the
    * wire is dissolved (inside a flush stack) or an endpoint is collapsed.
@@ -857,6 +864,46 @@ export function createRgui(
     setPanels(next: Panel[]) {
       panels = next;
       invalidate();
+    },
+    autoLayout(opts?: LayoutOptions & { animate?: boolean }) {
+      const target = layoutGraph(graph, opts);
+      const moved = [...target].filter(([id, p]) => {
+        const n = graph.nodes.find((m) => m.id === id);
+        return n && (n.x !== p.x || n.y !== p.y);
+      });
+      if (!moved.length) return;
+      const finish = () => {
+        for (const [id, p] of moved) {
+          const n = graph.nodes.find((m) => m.id === id)!;
+          n.x = p.x;
+          n.y = p.y;
+          options.onNodeMoveEnd?.(id, p);
+        }
+        invalidate();
+      };
+      if (opts?.animate === false) return finish();
+      const start = new Map(
+        moved.map(([id]) => {
+          const n = graph.nodes.find((m) => m.id === id)!;
+          return [id, { x: n.x, y: n.y }] as const;
+        }),
+      );
+      const t0 = performance.now();
+      const dur = 300;
+      const stepFrame = (now: number) => {
+        const u = Math.min(1, (now - t0) / dur);
+        const e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2;
+        for (const [id, p] of moved) {
+          const n = graph.nodes.find((m) => m.id === id)!;
+          const s0 = start.get(id)!;
+          n.x = s0.x + (p.x - s0.x) * e;
+          n.y = s0.y + (p.y - s0.y) * e;
+        }
+        invalidate();
+        if (u < 1) requestAnimationFrame(stepFrame);
+        else finish();
+      };
+      requestAnimationFrame(stepFrame);
     },
     resizeNode(nodeId: string, size: { w?: number; h?: number }) {
       const n = graph.nodes.find((m) => m.id === nodeId);

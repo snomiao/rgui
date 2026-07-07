@@ -19,10 +19,13 @@
 - [x] public API: `rgui(canvas, { graph, rule?, debug?, layers?, onFrame? })`
 - [x] rg-rule を use case ごとに customizable に (`RgRule`)
 - [x] 統合依頼を otoji TODO.md へ投函
-- [ ] otoji 側からの feedback 対応 (API 不足・型の齟齬など)
-- [ ] auto-layout (connection ベースの graph-optimization)
+- [x] otoji 側からの feedback 対応 — #1〜#13 全消化 (interaction/live-body/selection/edge/viewport/e2e accessor)
+- [x] npm publish — 0.1.0 / 0.2.0 (otoji は現在 source 直参照)
+- [x] pinning / panel primitive / 単一 block 化 / GraphNode.draw / corner resize
+- [x] auto-layout (layered + barycenter, viewer.autoLayout, pinned 除外)
+- [x] core unit tests (bun test, 12 pass)
 - [ ] WebGPU renderer (同一 interface の背後に)
-- [ ] npm publish (otoji 側が link で動いてから)
+- [ ] npm publish v0.3.0 (要 Touch ID)
 - [x] 公式ページ公開: live demo 上に hero overlay (rgui 大タイトル + backronym を CRT グリッチで巡回、tagline、GitHub/npm リンク)。`src/hero.ts` + `index.html` に追加、`bunx vite build --outDir site-dist` で site 生成 (npm lib の `dist/` は不変)。
 - [x] Cloudflare Pages へ deploy (SNOLAB account, snomiao@gmail.com): https://rgui.pages.dev/ + custom domain https://rgui.snomiao.com/ (proxied CNAME rgui -> rgui.pages.dev、証明書発行済み・HTTP 200 確認)。
 

@@ -23,6 +23,7 @@ export {
   type GridLevel,
 } from "./core/grid.js";
 export { DEFAULT_RULE, resolveRule, type RgRule } from "./core/rule.js";
+export { layoutGraph, type LayoutOptions } from "./core/layout.js";
 export {
   nodeHeight,
   bodyRect,
