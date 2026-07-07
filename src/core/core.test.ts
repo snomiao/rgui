@@ -12,7 +12,13 @@ import { buildRenderGraph } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
 import { DEFAULT_RULE } from "./rule";
-import { aggregate, fieldSummarize, ordered, topK } from "./aggregate";
+import {
+  aggregate,
+  fieldSummarize,
+  ordered,
+  quantile,
+  topK,
+} from "./aggregate";
 
 const mkNode = (
   id: string,
@@ -240,6 +246,12 @@ describe("merge combinators extend the simple rules", () => {
   test("median: plain rule, robust middle", () => {
     expect(aggregate(["1", "9", "5"], "median")).toBe("5");
     expect(aggregate(["1", "9"], "median")).toBe("5");
+  });
+  test("quantile: advanced combinator for the rare p95 case", () => {
+    expect(
+      parseFloat(aggregate(["1", "2", "3", "4", "100"], quantile(0.95))),
+    ).toBeCloseTo(80.8, 6);
+    expect(aggregate(["1", "9", "5"], quantile(0.5))).toBe("5");
   });
   test("topK: histogram generalizes mode", () => {
     const vals = ["en", "ja", "en", "de", "ja", "en"];

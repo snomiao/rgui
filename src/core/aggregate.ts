@@ -184,6 +184,25 @@ export function ordered(
 
 
 /**
+ * ADVANCED: arbitrary quantile of the numeric values (q in 0..1, linear
+ * interpolation). The everyday cases have plain names — use "min", "max",
+ * "median" — reach for this only when you really need e.g. a p95.
+ */
+export function quantile(q: number): (values: string[]) => string {
+  return (values) => {
+    const ns = values
+      .map((v) => parseFloat(v))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => a - b);
+    if (!ns.length) return "";
+    const i = (ns.length - 1) * Math.max(0, Math.min(1, q));
+    const lo = ns[Math.floor(i)]!;
+    const hi = ns[Math.ceil(i)]!;
+    return String(lo + (hi - lo) * (i - Math.floor(i)));
+  };
+}
+
+/**
  * Top-k histogram — mode generalized: topK(1) ≡ "mode",
  * topK(2)(["en","ja","en","de","ja","en"]) → "en ×3, ja ×2".
  */
