@@ -146,7 +146,7 @@ if (title) {
         Math.PI / 2 +
         (((tSwim % CYCLE_MS) + CYCLE_MS) % CYCLE_MS) * ((Math.PI * 2) / CYCLE_MS);
       const XA = Math.min(Math.max((w - 320) / 2, 140), 520);
-      const YA = padY * 0.3, ZA = 110;
+      const YA = Math.min(48, padY * 0.3), ZA = 110; // shallow bob: stay in the viewport
       return [
         XA * (Math.cos(th) + 0.1 * Math.sin(2 * th + 1.3)),
         YA * Math.sin(2 * th + 0.6),

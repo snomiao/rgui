@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { finerStep, gridLevels, readableStep, snap } from "./grid";
+import {
+  finerStep,
+  gridLevels,
+  readableStep,
+  snap,
+  snapSizeRadix,
+} from "./grid";
 import { demoGraph, nodeHeight, type GraphNode } from "./graph";
 import { buildRenderGraph } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
@@ -24,12 +30,11 @@ const mkNode = (
   fields: Array.from({ length: fields }, (_, i) => [`f${i}`, "v"]),
 });
 
-describe("readable grid math", () => {
-  test("readableStep picks the finest 1-2-5 step >= minPx", () => {
-    expect(readableStep(1, 48)).toBe(50);
-    expect(readableStep(0.5, 48)).toBe(100);
-    // raw = 24wu: smallest ladder step >= 24 is 50 (25 is not on 1-2-5)
-    expect(readableStep(2, 48)).toBe(50);
+describe("readable grid math (radix layers)", () => {
+  test("readableStep picks the finest radix-power step >= minPx", () => {
+    expect(readableStep(1, 48, 8)).toBe(64); // 8^2
+    expect(readableStep(0.5, 48, 8)).toBe(512); // raw 96 → 8^3? no: 8^ceil(log8 96)=512? log8(96)=2.19→512
+    expect(readableStep(8, 48, 8)).toBe(8); // raw 6 → 8^1
   });
 
   test("major level always renders >= minPx on screen", () => {
@@ -39,10 +44,18 @@ describe("readable grid math", () => {
     }
   });
 
-  test("finerStep descends the ladder", () => {
-    expect(finerStep(50)).toBe(20);
-    expect(finerStep(20)).toBe(10);
-    expect(finerStep(10)).toBe(5);
+  test("finerStep is one radix layer down", () => {
+    expect(finerStep(64, 8)).toBe(8);
+    expect(finerStep(8, 8)).toBe(1);
+  });
+
+  test("node-size law: 1..radix grids, promote past the limit", () => {
+    // 9 grids at layer 1 (radix 8) → 2 grids at the next layer
+    expect(snapSizeRadix(9, 8, 1)).toBe(16);
+    expect(snapSizeRadix(8, 8, 1)).toBe(8); // exactly the limit stays
+    expect(snapSizeRadix(3.2, 8, 1)).toBe(4);
+    expect(snapSizeRadix(200, 8, 1)).toBe(256); // 25 grids@8 → 4 grids@64
+    expect(snapSizeRadix(512, 8, 1)).toBe(512); // 8 grids@64 ok
   });
 
   test("snap", () => {
@@ -151,7 +164,7 @@ describe("auto-layout", () => {
 
 describe("rg rule", () => {
   test("defaults are sane", () => {
-    expect(DEFAULT_RULE.ladder).toEqual([1, 2, 5]);
+    expect(DEFAULT_RULE.radix).toBe(8);
     expect(DEFAULT_RULE.clusterGapConnectedPx).toBeGreaterThan(
       DEFAULT_RULE.clusterGapPx,
     );

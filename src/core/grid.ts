@@ -2,9 +2,10 @@
  * rgui core — readable-grid (rg) math.
  *
  * Framework-agnostic: pure functions from a viewer transform to grid geometry.
- * The grid is "screen-adaptive readable": whatever the zoom level, the grid
- * step in world units snaps to a ladder (default 1-2-5 * 10^n) so that its
- * on-screen spacing always stays within a readable pixel band.
+ * The grid is "screen-adaptive readable" AND radix-layered: grid scales are
+ * powers of a configurable radix (default 8 — 八进制), so one higher-order
+ * cell contains radix sub-steps per axis (radix² cells). Whatever the zoom,
+ * the on-screen spacing of the main grid stays within a readable pixel band.
  */
 import { DEFAULT_RULE } from "./rule.js";
 
@@ -25,21 +26,17 @@ export interface GridLevel {
 }
 
 /**
- * Pick the finest ladder step whose screen spacing >= minPx.
+ * Pick the finest radix-power step whose screen spacing >= minPx.
  */
 export function readableStep(
   k: number,
   minPx = DEFAULT_RULE.minGridPx,
-  ladder = DEFAULT_RULE.ladder,
+  radix = DEFAULT_RULE.radix,
 ): number {
-  // smallest step s.t. step * k >= minPx, step in ladder * 10^n
+  // smallest step = radix^n (n ∈ ℤ) s.t. step * k >= minPx
   const raw = minPx / k;
-  const exp = Math.floor(Math.log10(raw));
-  const base = Math.pow(10, exp);
-  for (const m of ladder) {
-    if (m * base >= raw) return m * base;
-  }
-  return 10 * base;
+  const n = Math.ceil(Math.log(raw) / Math.log(radix) - 1e-9);
+  return Math.pow(radix, n);
 }
 
 /**
@@ -49,10 +46,10 @@ export function readableStep(
 export function gridLevels(
   k: number,
   minPx = DEFAULT_RULE.minGridPx,
-  ladder = DEFAULT_RULE.ladder,
+  radix = DEFAULT_RULE.radix,
 ): GridLevel[] {
-  const major = readableStep(k, minPx, ladder);
-  const minor = finerStep(major, ladder);
+  const major = readableStep(k, minPx, radix);
+  const minor = finerStep(major, radix);
   const minorPx = minor * k;
   // minor fades in from 0 at minPx/ratio up to 1 when it reaches minPx
   const ratio = major / minor;
@@ -64,15 +61,31 @@ export function gridLevels(
   ];
 }
 
-/** One rung finer on the ladder (default: 5 -> 2 -> 1 -> 0.5 ...). */
-export function finerStep(step: number, ladder = DEFAULT_RULE.ladder): number {
-  const exp = Math.floor(Math.log10(step) + 1e-9);
-  const base = Math.pow(10, exp);
-  const m = Math.round(step / base);
-  const i = ladder.indexOf(m);
-  if (i > 0) return ladder[i - 1]! * base;
-  // below the ladder's first rung: drop a decade to its top rung
-  return (ladder[ladder.length - 1]! * base) / 10;
+/** One layer finer: step / radix. */
+export function finerStep(step: number, radix = DEFAULT_RULE.radix): number {
+  return step / radix;
+}
+
+/**
+ * The node-size law: a size must span an INTEGER number of grids between
+ * 1 and radix at SOME layer. A size needing more than radix grids at a
+ * layer promotes to the next layer, snapped to the upper limit —
+ * e.g. 9 grids at layer s (radix 8) becomes 2 grids at layer s+1.
+ */
+export function snapSizeRadix(
+  size: number,
+  radix = DEFAULT_RULE.radix,
+  /** the finest layer's step (world units) to start from */
+  baseStep = 1,
+): number {
+  if (size <= 0) return baseStep;
+  let step = baseStep;
+  // find the coarsest layer whose single grid does not exceed the size
+  while (step * radix < size) step *= radix;
+  const cells = Math.ceil(size / step - 1e-9);
+  if (cells <= radix) return cells * step;
+  // needs more than radix grids → promote and snap up
+  return Math.ceil(cells / radix) * step * radix;
 }
 
 /** Iterate world-space grid coordinates visible in a screen rect. */

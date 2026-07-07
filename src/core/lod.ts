@@ -283,7 +283,7 @@ export function buildRenderGraph(
   // higher-order nodes sit on the higher-order lattice: snap each merged
   // box to the CURRENT main grid step (declutter afterwards — contact
   // beats grid, exactly like drags)
-  const mainStep = gridLevels(k, rule.minGridPx, rule.ladder)[0]!.step;
+  const mainStep = gridLevels(k, rule.minGridPx, rule.radix)[0]!.step;
   for (const p of pseudo) {
     const r = pseudoRect(p, k, rule);
     p.cx += snap(r.x, mainStep) - r.x;

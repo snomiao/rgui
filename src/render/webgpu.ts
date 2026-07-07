@@ -10,18 +10,21 @@
  */
 import { gridLevels, gridRange, type ViewTransform } from "../core/grid.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
+import { DARK_THEME, themeRgb, type RgTheme } from "../core/theme.js";
 import type { FieldSource } from "./canvas2d.js";
-
-const BG = { r: 0.11, g: 0.129, b: 0.149, a: 1 }; // #1c2126
 
 // per-instance: cx, cy, radius, alpha, tailDx, tailDy, pad, pad (CSS px)
 const STRIDE = 8;
 
 const WGSL = /* wgsl */ `
 struct Uniforms {
-  resolution: vec2f, // CSS px
-  zdir: f32,         // field-arrow z: +1 = at viewer (⊙ purple), -1 = away (⊗ gold cross)
+  resolution: vec2f,  // CSS px
+  zdir: f32,          // field-arrow z: +1 = at viewer (⊙ purple), -1 = away (⊗ gold cross)
   _pad: f32,
+  colorToward: vec3f, // theme arrowToward (⊙) — mascot purple by default
+  _pad2: f32,
+  colorAway: vec3f,   // theme arrowAway (⊗) — mascot gold by default
+  _pad3: f32,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -35,9 +38,6 @@ fn toNdc(p: vec2f) -> vec4f {
   let ndc = p / u.resolution * 2.0 - 1.0;
   return vec4f(ndc.x, -ndc.y, 0.0, 1.0);
 }
-
-const GOLD = vec3f(1.0, 0.839, 0.039);   // #ffd60a — arrows into the screen
-const PURPLE = vec3f(0.698, 0.361, 0.878); // #b25ce0 — arrows at the viewer
 
 // --- field arrows: instanced quad; SDF circle (⊙) or cross (⊗) --------------
 struct DotOut {
@@ -78,7 +78,7 @@ fn dotFrag(in: DotOut) -> @location(0) vec4f {
       * (1.0 - smoothstep(0.5, 1.0, arm))
       * (1.0 - smoothstep(reach - 0.5, reach + 0.5, d));
   }
-  let col = select(GOLD, PURPLE, u.zdir >= 0.0);
+  let col = select(u.colorAway, u.colorToward, u.zdir >= 0.0);
   return vec4f(col * a, a); // premultiplied
 }
 
@@ -108,7 +108,7 @@ fn tailVert(@builtin(vertex_index) vi: u32, in: Inst) -> TailOut {
 
 @fragment
 fn tailFrag(in: TailOut) -> @location(0) vec4f {
-  let col = select(GOLD, PURPLE, u.zdir >= 0.0);
+  let col = select(u.colorAway, u.colorToward, u.zdir >= 0.0);
   return vec4f(col * in.alpha, in.alpha);
 }
 `;
@@ -130,6 +130,13 @@ export function createWebGPUGridRenderer(
   /** global lateral field direction from the viewport 3-D rotation */
   fieldTilt?: () => readonly [number, number],
   maxDpr?: number,
+  /** live theme object (mutated by viewer.setTheme); colors read per frame */
+  theme: RgTheme = DARK_THEME,
+  /**
+   * background clear; false = transparent underlay (page shows through);
+   * a getter re-reads per frame. Default: the theme background.
+   */
+  background?: string | false | (() => string | false),
 ): WebGPUGridRenderer {
   let device: GPUDevice | null = null;
   let ctx: GPUCanvasContext | null = null;
@@ -161,7 +168,9 @@ export function createWebGPUGridRenderer(
       ctx = canvas.getContext("webgpu");
       if (!ctx) return false;
       const format = navigator.gpu.getPreferredCanvasFormat();
-      ctx.configure({ device, format, alphaMode: "opaque" });
+      // premultiplied (not opaque): background: false hosts get a transparent
+      // underlay — the page background shows through, matching canvas2d
+      ctx.configure({ device, format, alphaMode: "premultiplied" });
 
       const module = device.createShaderModule({ code: WGSL });
       // explicit shared layout: one bind group must serve BOTH pipelines
@@ -207,7 +216,7 @@ export function createWebGPUGridRenderer(
       dots = mk("dotVert", "dotFrag");
       tails = mk("tailVert", "tailFrag");
       uniformBuf = device.createBuffer({
-        size: 16,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       bind = device.createBindGroup({
@@ -267,7 +276,7 @@ export function createWebGPUGridRenderer(
 
   /** build per-instance data — same math as the Canvas 2D grid layer */
   function buildInstances(t: ViewTransform): Float32Array {
-    const levels = gridLevels(t.k, rule.minGridPx, rule.ladder);
+    const levels = gridLevels(t.k, rule.minGridPx, rule.radix);
     const attractors = (field?.() ?? []).slice(0, 128).map((a) => ({
       x: a.x * t.k + t.x,
       y: a.y * t.k + t.y,
@@ -345,18 +354,35 @@ export function createWebGPUGridRenderer(
     }
     if (count) device.queue.writeBuffer(instBuf, 0, data);
     const z = Math.max(-1, Math.min(1, zDir?.() ?? 1));
+    const [tr, tg, tb] = themeRgb(theme.arrowToward);
+    const [ar, ag, ab] = themeRgb(theme.arrowAway);
     device.queue.writeBuffer(
       uniformBuf,
       0,
-      new Float32Array([width, height, z, 0]),
+      // prettier-ignore
+      new Float32Array([
+        width, height, z, 0,
+        tr / 255, tg / 255, tb / 255, 0,
+        ar / 255, ag / 255, ab / 255, 0,
+      ]),
     );
+    const bg =
+      (typeof background === "function" ? background() : background) ??
+      theme.background;
+    const clearValue =
+      bg === false
+        ? { r: 0, g: 0, b: 0, a: 0 }
+        : (() => {
+            const [r, g, b] = themeRgb(bg);
+            return { r: r / 255, g: g / 255, b: b / 255, a: 1 };
+          })();
 
     const enc = device.createCommandEncoder();
     const pass = enc.beginRenderPass({
       colorAttachments: [
         {
           view: ctx.getCurrentTexture().createView(),
-          clearValue: BG,
+          clearValue,
           loadOp: "clear",
           storeOp: "store",
         },

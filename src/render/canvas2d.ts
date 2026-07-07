@@ -11,6 +11,7 @@ import {
   type ViewTransform,
 } from "../core/grid.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
+import { DARK_THEME, themeRgb, type RgTheme } from "../core/theme.js";
 
 export type DrawLayer = (
   ctx: CanvasRenderingContext2D,
@@ -27,15 +28,20 @@ export function createCanvas2DRenderer(
   canvas: HTMLCanvasElement,
   layers: DrawLayer[],
   opts?: {
-    /** background fill; false = transparent (compositing over an underlay) */
-    background?: string | false;
+    /**
+     * background fill; false = transparent (compositing over an underlay);
+     * a getter re-reads per frame — live theme swaps need no renderer rebuild
+     */
+    background?: string | false | (() => string | false);
     /** cap the backing-store scale (raster cost grows with dpr²) */
     maxDpr?: number;
   },
 ): GridRenderer {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2d context unavailable");
-  const background = opts?.background ?? "#1c2126";
+  const bgOpt = opts?.background;
+  const background = () =>
+    (typeof bgOpt === "function" ? bgOpt() : bgOpt) ?? DARK_THEME.background;
 
   let width = 0;
   let height = 0;
@@ -52,10 +58,11 @@ export function createCanvas2DRenderer(
   function render(t: ViewTransform) {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (background === false) {
+    const bg = background();
+    if (bg === false) {
       ctx.clearRect(0, 0, width, height);
     } else {
-      ctx.fillStyle = background;
+      ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
     }
     for (const layer of layers) layer(ctx, t, { width, height });
@@ -68,9 +75,16 @@ export function createCanvas2DRenderer(
 /** world-space attractors that bend the grid field (e.g. off-screen nodes) */
 export type FieldSource = { x: number; y: number };
 
-/** field-arrow colors: ⊙ toward the viewer = mascot purple, ⊗ away = gold */
-const ARROW_OUT_RGB = "178, 92, 224"; // #b25ce0
-const ARROW_IN_RGB = "255, 214, 10"; // #ffd60a
+/** memoized "r, g, b" triplet of a theme color (themes swap rarely) */
+const tripletCache = new Map<string, string>();
+function triplet(color: string): string {
+  let t = tripletCache.get(color);
+  if (!t) {
+    t = themeRgb(color).join(", ");
+    tripletCache.set(color, t);
+  }
+  return t;
+}
 
 /**
  * Base layer: every readable-grid point is a unit 3-D FIELD ARROW.
@@ -93,13 +107,15 @@ export function createGridDotsLayer(
    * the box 180° and the whole field flips to ⊗ (pointing into the screen)
    */
   fieldTilt?: () => readonly [number, number],
+  /** live theme object (mutated by viewer.setTheme); arrow colors read per frame */
+  theme: RgTheme = DARK_THEME,
 ): DrawLayer {
   return (ctx, t, { width, height }) => {
   const z = Math.max(-1, Math.min(1, zDir?.() ?? 1));
   const toward = z >= 0;
-  const rgb = toward ? ARROW_OUT_RGB : ARROW_IN_RGB;
+  const rgb = triplet(toward ? theme.arrowToward : theme.arrowAway);
   const gt = fieldTilt?.() ?? ([0, 0] as const);
-  const levels = gridLevels(t.k, rule.minGridPx, rule.ladder);
+  const levels = gridLevels(t.k, rule.minGridPx, rule.radix);
   const bx0 = 0;
   const bx1 = width;
   const by0 = 0;

@@ -7,8 +7,11 @@
 export interface RgRule {
   /** readable grid: minimum on-screen spacing of major grid points (px) */
   minGridPx: number;
-  /** grid step ladder within a decade (must be ascending divisors of 10) */
-  ladder: number[];
+  /**
+   * grid radix (进制, default 8): grid layers are radix^n; one higher-order
+   * cell spans radix sub-steps per axis. 4 / 5 / 8 / 10 / 16 … all valid.
+   */
+  radix: number;
   /** a node collapses into a pseudo-node below this screen height (px) */
   collapsePx: number;
   /**
@@ -48,7 +51,7 @@ export interface RgRule {
 
 export const DEFAULT_RULE: RgRule = {
   minGridPx: 48,
-  ladder: [1, 2, 5],
+  radix: 8,
   collapsePx: 56,
   collapseSnappedPx: 84,
   fieldMinPx: 9,

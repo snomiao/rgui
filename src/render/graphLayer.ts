@@ -40,6 +40,7 @@ import {
   type SideCoverage,
 } from "../core/pack.js";
 import type { ViewTransform } from "../core/grid.js";
+import { DARK_THEME, type RgTheme } from "../core/theme.js";
 
 export const KIND_COLOR: Record<SignalKind, string> = {
   image: "#2dd4bf", // teal
@@ -54,7 +55,12 @@ const CATEGORY_COLOR: Record<GraphNode["category"], string> = {
   sink: "#5cb87a", // green
 };
 
-const PSEUDO_HEADER = "#8a72c9"; // purple = group
+/**
+ * Active theme for this draw pass. Rendering is synchronous, so the exported
+ * entry points set it from their theme argument and every helper below reads
+ * it — no per-helper plumbing, and concurrent viewers can't interleave.
+ */
+let T: RgTheme = DARK_THEME;
 
 export function drawGraph(
   ctx: CanvasRenderingContext2D,
@@ -63,7 +69,9 @@ export function drawGraph(
   rule: RgRule = DEFAULT_RULE,
   summarize?: SummarizeFn,
   xform?: readonly [number, number, number, number],
+  theme: RgTheme = DARK_THEME,
 ): RenderGraph {
+  T = theme;
   const rg = buildRenderGraph(graph, t.k, rule, xform);
 
   ctx.save();
@@ -134,7 +142,7 @@ export function drawGraph(
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       const tw = ctx.measureText(e.source.label).width;
-      ctx.fillStyle = "rgba(28, 33, 38, 0.85)";
+      ctx.fillStyle = T.labelBg;
       ctx.fillRect(-tw / 2 - 4, -8, tw + 8, 16);
       ctx.fillStyle = color;
       ctx.fillText(e.source.label, 0, 0);
@@ -209,7 +217,7 @@ function drawSolderJoint(
   ctx.globalAlpha = 0.95;
   ctx.fill();
   ctx.lineWidth = Math.min(1.5, 1.5 / k);
-  ctx.strokeStyle = "#14161a";
+  ctx.strokeStyle = T.ink;
   ctx.stroke();
   ctx.restore();
 }
@@ -271,7 +279,7 @@ function drawNode(
   // body fill (fills butt together squarely at junctions)
   ctx.beginPath();
   ctx.roundRect(n.x, n.y, n.w, h, [tl, tr, br, bl]);
-  ctx.fillStyle = n.bg ?? "#2b3036";
+  ctx.fillStyle = n.bg ?? T.nodeBg;
   ctx.fill();
 
   drawNodeBorder(ctx, n, h, [tl, tr, br, bl], cov);
@@ -337,10 +345,10 @@ function drawNode(
     for (let i = 0; i < n.fields.length; i++) {
       const [key, v] = n.fields[i]!;
       const y = n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H;
-      ctx.fillStyle = "#8b949e";
+      ctx.fillStyle = T.textMuted;
       ctx.textAlign = "left";
       ctx.fillText(key, n.x + NODE_PAD + 10, y);
-      ctx.fillStyle = "#e6e9ec";
+      ctx.fillStyle = T.text;
       ctx.textAlign = "right";
       ctx.fillText(v, n.x + n.w - NODE_PAD - 10, y);
     }
@@ -373,7 +381,7 @@ function drawResizeGrip(ctx: CanvasRenderingContext2D, n: GraphNode, h: number) 
   const x = n.x + n.w;
   const y = n.y + h;
   ctx.save();
-  ctx.strokeStyle = "#8b949e";
+  ctx.strokeStyle = T.textMuted;
   ctx.globalAlpha = 0.35;
   ctx.lineWidth = 1.2;
   ctx.beginPath();
@@ -393,7 +401,7 @@ function drawNodeBorder(
 ) {
   const [tl, tr, br, bl] = radii;
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = "#14161a";
+  ctx.strokeStyle = T.ink;
   ctx.beginPath();
   for (const seg of subtractIntervals(
     { from: n.x + tl, to: n.x + n.w - tr },
@@ -436,8 +444,8 @@ function drawNodePin(ctx: CanvasRenderingContext2D, n: GraphNode) {
   ctx.translate(px, py);
   ctx.rotate(Math.PI / 4);
   ctx.globalAlpha = n.pinned ? 1 : 0.25;
-  ctx.fillStyle = n.pinned ? "#ffd60a" : "#8b949e";
-  ctx.strokeStyle = n.pinned ? "#ffd60a" : "#8b949e";
+  ctx.fillStyle = n.pinned ? T.accent : T.textMuted;
+  ctx.strokeStyle = n.pinned ? T.accent : T.textMuted;
   ctx.lineWidth = 1.2;
   ctx.beginPath();
   ctx.arc(0, -3, 3.2, 0, Math.PI * 2); // head
@@ -511,19 +519,19 @@ function drawPseudoNode(
   const h = rect.h * k;
   const r = 8;
 
-  const accent = p.category ? CATEGORY_COLOR[p.category] : PSEUDO_HEADER;
+  const accent = p.category ? CATEGORY_COLOR[p.category] : T.pseudoHeader;
 
   // stacked-cards shadow hints "this is a group" (groups only)
   if (!p.category) {
     ctx.beginPath();
     ctx.roundRect(6, 6, w, h, r);
-    ctx.fillStyle = "rgba(20, 22, 26, 0.6)";
+    ctx.fillStyle = T.shadow;
     ctx.fill();
   }
 
   ctx.beginPath();
   ctx.roundRect(0, 0, w, h, r);
-  ctx.fillStyle = "#2b3036";
+  ctx.fillStyle = T.nodeBg;
   ctx.fill();
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = accent;
@@ -637,15 +645,15 @@ function drawSummaryContent(
   for (let i = 0; i < rows; i++) {
     const cy = y + (i + 0.5) * SUMMARY_LINE_H;
     if (c.kind === "text") {
-      ctx.fillStyle = "#aeb6bf";
+      ctx.fillStyle = T.textDim;
       ctx.textAlign = "left";
       ctx.fillText(fitText(ctx, c.lines[i]!, w), x, cy);
     } else {
       const [key, v] = c.rows[i]!;
-      ctx.fillStyle = "#8b949e";
+      ctx.fillStyle = T.textMuted;
       ctx.textAlign = "left";
       ctx.fillText(fitText(ctx, key, w * 0.4), x, cy);
-      ctx.fillStyle = "#e6e9ec";
+      ctx.fillStyle = T.text;
       ctx.textAlign = "right";
       ctx.fillText(fitText(ctx, v, w * 0.55), x + w, cy);
     }
@@ -680,7 +688,7 @@ function drawPort(
   ctx.fillStyle = color;
   ctx.fill();
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = "#14161a";
+  ctx.strokeStyle = T.ink;
   ctx.stroke();
 }
 
@@ -779,7 +787,7 @@ export function offscreenIndicators(
       r.y * t.k + t.y,
       (r.x + r.w) * t.k + t.x,
       (r.y + r.h) * t.k + t.y,
-      p.category ? CATEGORY_COLOR[p.category] : PSEUDO_HEADER,
+      p.category ? CATEGORY_COLOR[p.category] : T.pseudoHeader,
     );
   }
   return out;
@@ -792,7 +800,9 @@ export function drawOffscreenIndicators(
   size: { width: number; height: number },
   rule: RgRule = DEFAULT_RULE,
   mapPoint?: (x: number, y: number) => readonly [number, number],
+  theme?: RgTheme,
 ): OffscreenIndicator[] {
+  if (theme) T = theme;
   const items = offscreenIndicators(t, rg, size, rule, mapPoint);
   for (const it of items) {
     ctx.save();
@@ -809,7 +819,7 @@ export function drawOffscreenIndicators(
     ctx.fillStyle = it.color;
     ctx.fill();
     ctx.lineWidth = 1;
-    ctx.strokeStyle = "#14161a";
+    ctx.strokeStyle = T.ink;
     ctx.stroke();
     ctx.restore();
   }

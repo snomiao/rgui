@@ -54,11 +54,18 @@ import {
 } from "./core/pack.js";
 import { layoutGraph, type LayoutOptions } from "./core/layout.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
+import {
+  resolveTheme,
+  withAlpha,
+  type RgTheme,
+  type RgThemeInput,
+} from "./core/theme.js";
 import type { SummarizeFn } from "./core/summary.js";
 import {
   gridLevels,
   screenToWorld,
   snap,
+  snapSizeRadix,
   type ViewTransform,
 } from "./core/grid.js";
 
@@ -67,6 +74,13 @@ export interface RguiOptions {
   graph?: Graph;
   /** customize every readability threshold for your use case */
   rule?: Partial<RgRule>;
+  /**
+   * chrome colors (default "dark"): "dark" | "light" | a partial palette
+   * over a base ({ base: "light", accent: "#e91e63" }). Both built-ins keep
+   * the mascot field-arrow pair — purple ⊙ toward the viewer, gold ⊗ away.
+   * Swap live with viewer.setTheme().
+   */
+  theme?: RgThemeInput;
   /** element to render live debug info into (grid px / scale / pos / size) */
   debug?: HTMLElement | null;
   /** extra draw layers rendered between the grid and the graph */
@@ -239,6 +253,10 @@ export interface Rgui {
     from: { node: string; port: string };
     to: { node: string; port: string };
   }): { x: number; y: number } | null;
+  /** the resolved active theme (live object — do not mutate; use setTheme) */
+  readonly theme: RgTheme;
+  /** swap the chrome palette live: "dark" | "light" | partial over a base */
+  setTheme(theme: RgThemeInput): void;
   /** request a re-render on the next animation frame */
   invalidate(): void;
   destroy(): void;
@@ -253,6 +271,12 @@ export function createRgui(
   options: RguiOptions = {},
 ): Rgui {
   const rule = resolveRule(options.rule);
+  // one mutable theme object for the viewer's lifetime: layers/renderers
+  // close over it and read colors per frame, so setTheme = assign + redraw
+  const theme = resolveTheme(options.theme);
+  // an explicit background option wins over the theme (incl. false)
+  const themeBg = () =>
+    options.background === undefined ? theme.background : options.background;
   let graph: Graph = options.graph ?? { nodes: [], edges: [] };
   let lastRg: RenderGraph | null = null;
 
@@ -405,7 +429,7 @@ export function createRgui(
     displayNodes = new Map();
     // whatever the rotation, rendered cards sit on the MAIN visible grid:
     // quantize each projected position to the nearest major grid point
-    const mainStep = gridLevels(view.k, rule.minGridPx, rule.ladder)[0]!.step;
+    const mainStep = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
     const nodes = graph.nodes.map((n) => {
       const h = nodeHeight(n);
       const [cx, cy] = projectWorldPt(n.x + n.w / 2, n.y + h / 2, n.z ?? 0);
@@ -484,7 +508,7 @@ export function createRgui(
     // highlight selected nodes (screen-constant stroke)
     if (selection.size) {
       ctx.save();
-      ctx.strokeStyle = "#ffd60a";
+      ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 2;
       for (const id of selection) {
         const n =
@@ -508,8 +532,8 @@ export function createRgui(
     // marquee
     if (drag?.type === "marquee") {
       ctx.save();
-      ctx.strokeStyle = "#ffd60a";
-      ctx.fillStyle = "rgba(255, 214, 10, 0.08)";
+      ctx.strokeStyle = theme.accent;
+      ctx.fillStyle = withAlpha(theme.accent, 0.08);
       ctx.lineWidth = 1;
       ctx.setLineDash([5, 4]);
       const x = Math.min(drag.x0, drag.x1);
@@ -527,7 +551,7 @@ export function createRgui(
     ...(options.layers ?? []),
     (ctx, t) => {
       dGraph = displayGraph();
-      lastRg = drawGraph(ctx, t, dGraph, rule, options.summarize);
+      lastRg = drawGraph(ctx, t, dGraph, rule, options.summarize, undefined, theme);
     },
     (ctx, t) => drawSelectionLayer(ctx, t),
     (ctx, t, size) => {
@@ -538,15 +562,17 @@ export function createRgui(
             lastRg,
             size,
             rule,
+            undefined,
+            theme,
           )
         : [];
     },
     (ctx, t) => drawGhostWire(ctx, t),
     (ctx, _t, size) => {
       lastPanelRects = panelLayout(panels, size);
-      drawPanels(ctx, lastPanelRects);
+      drawPanels(ctx, lastPanelRects, theme);
       if (drag?.type === "panelItem" && drag.moved)
-        drawPanelDragGhost(ctx, view, drag.item, drag.sx, drag.sy);
+        drawPanelDragGhost(ctx, view, drag.item, drag.sx, drag.sy, theme);
     },
   ];
   // grid points are 3-D field arrows: zoom-in rushes the field AT the viewer
@@ -567,6 +593,7 @@ export function createRgui(
     fieldProvider,
     zComposed,
     fieldTiltProvider,
+    theme,
   );
 
   // backend selection: GPU underlay canvas for bg+grid, 2D content on top
@@ -584,7 +611,7 @@ export function createRgui(
     canvas,
     wantGpu ? contentLayers : [gridLayer, ...contentLayers],
     {
-      background: wantGpu ? false : options.background,
+      background: wantGpu ? false : themeBg,
       maxDpr: options.maxDpr,
     },
   );
@@ -609,6 +636,8 @@ export function createRgui(
       zComposed,
       fieldTiltProvider,
       options.maxDpr,
+      theme,
+      themeBg,
     );
     gpu.ready.then((ok) => {
       if (destroyed) return;
@@ -621,7 +650,7 @@ export function createRgui(
         gpu = null;
         renderer = createCanvas2DRenderer(canvas, [gridLayer, ...contentLayers], {
           maxDpr: options.maxDpr,
-          background: options.background,
+          background: themeBg,
         });
         renderer.resize();
       }
@@ -677,7 +706,7 @@ export function createRgui(
     const now = performance.now();
     if (now - lastDebugTs < 100) return;
     lastDebugTs = now;
-    const [major, minor] = gridLevels(view.k, rule.minGridPx, rule.ladder);
+    const [major, minor] = gridLevels(view.k, rule.minGridPx, rule.radix);
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     const [cwx, cwy] = screenToWorld(view, w / 2, h / 2);
@@ -852,7 +881,7 @@ export function createRgui(
     ctx.strokeStyle = target
       ? ok
         ? KIND_COLOR[drag.from.port.kind]
-        : "#e5534b" // invalid target: red
+        : theme.danger // invalid target
       : KIND_COLOR[drag.from.port.kind];
     ctx.globalAlpha = 0.9;
     ctx.lineWidth = 2;
@@ -1020,13 +1049,18 @@ export function createRgui(
       const [wx, wy] = screenToWorld(view, vx0, vy0);
       // rg-ui: whatever the zoom or rotation, everything snaps to the MAIN
       // visible grid — the dots the user can actually see
-      const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[0]!.step;
+      const step = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
       if (drag.type === "resize") {
         const n = drag.node;
         // grid-snap the corner, respect minimums, stop at neighbors
+        // node-size law: spans 1..radix grids at SOME layer — exceeding
+        // radix grids promotes to the next layer, snapped to the limit
         const minW = 96;
-        const wantW = Math.max(minW, snap(wx - n.x, step));
-        const wantH = Math.max(nodeMinHeight(n), snap(wy - n.y, step));
+        const wantW = Math.max(minW, snapSizeRadix(wx - n.x, rule.radix));
+        const wantH = Math.max(
+          nodeMinHeight(n),
+          snapSizeRadix(wy - n.y, rule.radix),
+        );
         const { w, h } = clampSize(n, wantW, wantH, graph.nodes);
         if (w !== n.w || h !== nodeHeight(n)) {
           n.w = w;
@@ -1412,6 +1446,14 @@ export function createRgui(
     get rendererKind() {
       return rendererKind;
     },
+    get theme() {
+      return theme;
+    },
+    setTheme(input: RgThemeInput) {
+      // one mutable theme object: layers close over it — assign + redraw
+      Object.assign(theme, resolveTheme(input));
+      invalidate();
+    },
     get rotation() {
       return rot3.roll;
     },
@@ -1493,7 +1535,7 @@ export function createRgui(
       invalidate();
     },
     snapGraph(opts?: { silent?: boolean }) {
-      const step = gridLevels(view.k, rule.minGridPx, rule.ladder)[0]!.step;
+      const step = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
       for (const n of graph.nodes) {
         const nx = snap(n.x, step);
         const ny = snap(n.y, step);
@@ -1502,10 +1544,10 @@ export function createRgui(
           n.y = ny;
           if (!opts?.silent) options.onNodeMoveEnd?.(n.id, { x: nx, y: ny });
         }
-        // size snaps too: w/h up to grid multiples, never below minimums
+        // size law: 1..radix grids at some layer, never below minimums
         const minH = nodeMinHeight(n);
-        const nw = Math.max(96, snap(n.w, step) || step);
-        const nh = Math.max(minH, snap(nodeHeight(n), step) || step);
+        const nw = Math.max(96, snapSizeRadix(n.w, rule.radix));
+        const nh = Math.max(minH, snapSizeRadix(nodeHeight(n), rule.radix));
         if (nw !== n.w || nh !== nodeHeight(n)) {
           n.w = nw;
           n.h = nh;

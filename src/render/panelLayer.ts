@@ -7,6 +7,10 @@
  * and creates whatever the item stands for).
  */
 import type { ViewTransform } from "../core/grid.js";
+import { DARK_THEME, type RgTheme } from "../core/theme.js";
+
+/** active theme for this draw pass (set by the exported draw entry points) */
+let T: RgTheme = DARK_THEME;
 
 export interface PanelItem {
   id: string;
@@ -86,30 +90,32 @@ export function panelLayout(
 export function drawPanels(
   ctx: CanvasRenderingContext2D,
   rects: PanelRect[],
+  theme?: RgTheme,
 ) {
+  if (theme) T = theme;
   ctx.save();
   ctx.textBaseline = "middle";
   for (const r of rects) {
     // body
     ctx.beginPath();
     ctx.roundRect(r.x, r.y, r.w, r.h, 6);
-    ctx.fillStyle = "rgba(34, 39, 46, 0.94)";
+    ctx.fillStyle = T.panelBg;
     ctx.fill();
     ctx.lineWidth = 1;
-    ctx.strokeStyle = "#3a4048";
+    ctx.strokeStyle = T.panelBorder;
     ctx.stroke();
 
     // header
     ctx.beginPath();
     ctx.roundRect(r.x, r.y, r.w, PANEL.headerH, r.panel.collapsed ? 6 : [6, 6, 0, 0]);
-    ctx.fillStyle = "rgba(20, 22, 26, 0.9)";
+    ctx.fillStyle = T.panelHeaderBg;
     ctx.fill();
-    ctx.fillStyle = "#aeb6bf";
+    ctx.fillStyle = T.textDim;
     ctx.font = "bold 11px system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(r.panel.title, r.x + PANEL.pad, r.y + PANEL.headerH / 2 + 0.5);
     // collapse chevron
-    ctx.fillStyle = "#5c6570";
+    ctx.fillStyle = T.textFaint;
     ctx.textAlign = "right";
     ctx.fillText(
       r.panel.collapsed ? "▸" : "▾",
@@ -124,9 +130,9 @@ export function drawPanels(
       const y = r.itemsY + (i + 0.5) * PANEL.rowH;
       ctx.beginPath();
       ctx.arc(r.x + PANEL.pad + 4, y, 3, 0, Math.PI * 2);
-      ctx.fillStyle = it.color ?? "#8b949e";
+      ctx.fillStyle = it.color ?? T.textMuted;
       ctx.fill();
-      ctx.fillStyle = "#e6e9ec";
+      ctx.fillStyle = T.text;
       ctx.textAlign = "left";
       ctx.fillText(it.label, r.x + PANEL.pad + 12, y);
     }
@@ -166,23 +172,25 @@ export function drawPanelDragGhost(
   item: PanelItem,
   sx: number,
   sy: number,
+  theme?: RgTheme,
 ) {
+  if (theme) T = theme;
   ctx.save();
   ctx.font = "11px system-ui, sans-serif";
   ctx.textBaseline = "middle";
   const tw = ctx.measureText(item.label).width;
   ctx.beginPath();
   ctx.roundRect(sx + 10, sy - 11, tw + 24, 22, 5);
-  ctx.fillStyle = "rgba(34, 39, 46, 0.95)";
+  ctx.fillStyle = T.panelBg;
   ctx.fill();
-  ctx.strokeStyle = item.color ?? "#8b949e";
+  ctx.strokeStyle = item.color ?? T.textMuted;
   ctx.lineWidth = 1.2;
   ctx.stroke();
   ctx.beginPath();
   ctx.arc(sx + 20, sy, 3, 0, Math.PI * 2);
-  ctx.fillStyle = item.color ?? "#8b949e";
+  ctx.fillStyle = item.color ?? T.textMuted;
   ctx.fill();
-  ctx.fillStyle = "#e6e9ec";
+  ctx.fillStyle = T.text;
   ctx.textAlign = "left";
   ctx.fillText(item.label, sx + 28, sy);
   ctx.restore();

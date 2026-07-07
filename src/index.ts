@@ -17,12 +17,22 @@ export {
   finerStep,
   gridRange,
   snap,
+  snapSizeRadix,
   worldToScreen,
   screenToWorld,
   type ViewTransform,
   type GridLevel,
 } from "./core/grid.js";
 export { DEFAULT_RULE, resolveRule, type RgRule } from "./core/rule.js";
+export {
+  DARK_THEME,
+  LIGHT_THEME,
+  resolveTheme,
+  themeRgb,
+  withAlpha,
+  type RgTheme,
+  type RgThemeInput,
+} from "./core/theme.js";
 export { layoutGraph, type LayoutOptions } from "./core/layout.js";
 export type {
   SummarizeFn,

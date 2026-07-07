@@ -165,8 +165,8 @@ export function outputPortPos(n: GraphNode, i: number): [number, number] {
 }
 
 // --- demo graph: our take on the otoji jolly-finch-ibni pipeline ------
-// positions AND sizes sit ON the main-scale grid (50 wu at k=1) — corners
-// land on dots; the default graph obeys the snap rule it preaches
+// positions AND sizes sit ON the radix-8 lattice (main step 64 wu at k=1):
+// each node spans an integer 1..8 grids per axis — corners land on dots
 
 export function demoGraph(): Graph {
   const nodes: GraphNode[] = [
@@ -174,10 +174,10 @@ export function demoGraph(): Graph {
       id: "cam",
       title: "Camera",
       category: "source",
-      x: -550,
-      y: -200,
-      w: 200,
-      h: 100,
+      x: -512,
+      y: -192,
+      w: 256,
+      h: 128,
       inputs: [],
       outputs: [{ id: "image", label: "image", kind: "image" }],
       fields: [
@@ -189,10 +189,10 @@ export function demoGraph(): Graph {
       id: "mic",
       title: "Mic + VAD",
       category: "source",
-      x: -550,
-      y: 50,
-      w: 200,
-      h: 100,
+      x: -512,
+      y: 64,
+      w: 256,
+      h: 128,
       inputs: [],
       outputs: [{ id: "audio", label: "audio", kind: "audio" }],
       fields: [
@@ -204,10 +204,10 @@ export function demoGraph(): Graph {
       id: "vision",
       title: "Vision model",
       category: "model",
-      x: -250,
-      y: -250,
-      w: 250,
-      h: 150,
+      x: -192,
+      y: -256,
+      w: 256,
+      h: 192,
       inputs: [{ id: "image", label: "image", kind: "image" }],
       outputs: [
         { id: "image", label: "image", kind: "image" },
@@ -225,10 +225,10 @@ export function demoGraph(): Graph {
       id: "stt",
       title: "SenseVoice STT",
       category: "model",
-      x: -250,
-      y: 100,
-      w: 250,
-      h: 150,
+      x: -192,
+      y: 128,
+      w: 256,
+      h: 192,
       inputs: [{ id: "audio", label: "audio", kind: "audio" }],
       outputs: [{ id: "transcript", label: "transcript", kind: "text" }],
       fields: [["lang", "auto"]],
@@ -237,10 +237,10 @@ export function demoGraph(): Graph {
       id: "voice",
       title: "Voice sink",
       category: "sink",
-      x: 150,
-      y: -100,
-      w: 200,
-      h: 150,
+      x: 192,
+      y: -64,
+      w: 256,
+      h: 192,
       inputs: [
         { id: "transcript", label: "transcript", kind: "text" },
         { id: "labels", label: "labels", kind: "text" },
