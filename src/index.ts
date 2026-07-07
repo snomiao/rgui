@@ -18,6 +18,7 @@ export {
   gridRange,
   snap,
   snapSizeRadix,
+  sizeLayerStep,
   worldToScreen,
   screenToWorld,
   type ViewTransform,

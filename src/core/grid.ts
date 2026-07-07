@@ -67,6 +67,22 @@ export function finerStep(step: number, radix = DEFAULT_RULE.radix): number {
 }
 
 /**
+ * The layer a size LIVES on: the step L (radix power) where the size spans
+ * 1..radix grids. This is a node's intrinsic scale — its position snaps to
+ * this layer's lattice (or the viewing grid, whichever is coarser).
+ */
+export function sizeLayerStep(
+  size: number,
+  radix = DEFAULT_RULE.radix,
+  baseStep = 1,
+): number {
+  if (size <= 0) return baseStep;
+  let step = baseStep;
+  while (step * radix < size) step *= radix;
+  return step;
+}
+
+/**
  * The node-size law: a size must span an INTEGER number of grids between
  * 1 and radix at SOME layer. A size needing more than radix grids at a
  * layer promotes to the next layer, snapped to the upper limit —

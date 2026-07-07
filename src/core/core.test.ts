@@ -4,6 +4,7 @@ import {
   gridLevels,
   readableStep,
   snap,
+  sizeLayerStep,
   snapSizeRadix,
 } from "./grid";
 import { demoGraph, nodeHeight, type GraphNode } from "./graph";
@@ -47,6 +48,12 @@ describe("readable grid math (radix layers)", () => {
   test("finerStep is one radix layer down", () => {
     expect(finerStep(64, 8)).toBe(8);
     expect(finerStep(8, 8)).toBe(1);
+  });
+
+  test("sizeLayerStep: the layer a size lives on", () => {
+    expect(sizeLayerStep(200, 8)).toBe(64); // 4 grids @64
+    expect(sizeLayerStep(8, 8)).toBe(1); // 8 grids @1
+    expect(sizeLayerStep(513, 8)).toBe(512);
   });
 
   test("node-size law: 1..radix grids, promote past the limit", () => {

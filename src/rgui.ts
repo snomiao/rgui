@@ -65,6 +65,7 @@ import {
   gridLevels,
   screenToWorld,
   snap,
+  sizeLayerStep,
   snapSizeRadix,
   type ViewTransform,
 } from "./core/grid.js";
@@ -432,11 +433,12 @@ export function createRgui(
     const mainStep = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
     const nodes = graph.nodes.map((n) => {
       const h = nodeHeight(n);
+      const nstep = nodeSnapStep(mainStep, n);
       const [cx, cy] = projectWorldPt(n.x + n.w / 2, n.y + h / 2, n.z ?? 0);
       const clone = {
         ...n,
-        x: snap(cx - n.w / 2, mainStep),
-        y: snap(cy - h / 2, mainStep),
+        x: snap(cx - n.w / 2, nstep),
+        y: snap(cy - h / 2, nstep),
       };
       displayNodes.set(n.id, clone);
       return clone;
@@ -832,6 +834,22 @@ export function createRgui(
   const baseOf = (n: GraphNode): GraphNode =>
     graph.nodes.find((m) => m.id === n.id) ?? n;
 
+  /**
+   * a node's position snaps to ITS OWN scale layer (from the size law) or
+   * the viewing main grid, whichever is coarser — big nodes live on big
+   * lattices even when zoomed in
+   */
+  const nodeSnapStep = (viewStep: number, ...nodes: GraphNode[]) => {
+    let s = viewStep;
+    for (const n of nodes)
+      s = Math.max(
+        s,
+        sizeLayerStep(n.w, rule.radix),
+        sizeLayerStep(nodeHeight(n), rule.radix),
+      );
+    return s;
+  };
+
   let drag:
     | {
         type: "node";
@@ -1088,7 +1106,11 @@ export function createRgui(
         // space — no second snap there, or the alignment would belong to
         // the rotated plane instead of the visible one
         const h0 = nodeHeight(drag.node);
-        const [tdx, tdy] = [snap(wx - drag.dx, step), snap(wy - drag.dy, step)];
+        const nstep = nodeSnapStep(step, drag.node);
+        const [tdx, tdy] = [
+          snap(wx - drag.dx, nstep),
+          snap(wy - drag.dy, nstep),
+        ];
         const [bcx, bcy] = rotActive
           ? unprojectWorldPt(
               tdx + drag.node.w / 2,
@@ -1110,8 +1132,9 @@ export function createRgui(
           options.onNodeMove?.(drag.node.id, { x: nx, y: ny });
         }
       } else if (drag.type === "group") {
-        const ddx = snap(wx - drag.wx, step);
-        const ddy = snap(wy - drag.wy, step);
+        const gstep = nodeSnapStep(step, ...drag.nodes);
+        const ddx = snap(wx - drag.wx, gstep);
+        const ddy = snap(wy - drag.wy, gstep);
         if (ddx || ddy) {
           const bdx = rotActive ? Ainv[0] * ddx + Ainv[1] * ddy : ddx;
           const bdy = rotActive ? Ainv[2] * ddx + Ainv[3] * ddy : ddy;
@@ -1127,8 +1150,9 @@ export function createRgui(
       } else {
         // a cluster with a pinned member is bolted down
         if (drag.pseudo.members.some((n) => n.pinned)) return;
-        const ddx = snap(wx - drag.wx, step);
-        const ddy = snap(wy - drag.wy, step);
+        const pstep = nodeSnapStep(step, ...drag.pseudo.members.map(baseOf));
+        const ddx = snap(wx - drag.wx, pstep);
+        const ddy = snap(wy - drag.wy, pstep);
         if (ddx || ddy) {
           // display-space delta → base-space delta through the inverse map
           const bdx = rotActive ? Ainv[0] * ddx + Ainv[1] * ddy : ddx;
@@ -1537,8 +1561,9 @@ export function createRgui(
     snapGraph(opts?: { silent?: boolean }) {
       const step = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
       for (const n of graph.nodes) {
-        const nx = snap(n.x, step);
-        const ny = snap(n.y, step);
+        const nstep = nodeSnapStep(step, n);
+        const nx = snap(n.x, nstep);
+        const ny = snap(n.y, nstep);
         if (nx !== n.x || ny !== n.y) {
           n.x = nx;
           n.y = ny;

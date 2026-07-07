@@ -21,7 +21,7 @@ import {
   type Port,
 } from "./graph.js";
 import { flushSegments } from "./pack.js";
-import { gridLevels, snap } from "./grid.js";
+import { gridLevels, sizeLayerStep, snap } from "./grid.js";
 import { DEFAULT_RULE, type RgRule } from "./rule.js";
 
 export interface PseudoNode {
@@ -286,8 +286,14 @@ export function buildRenderGraph(
   const mainStep = gridLevels(k, rule.minGridPx, rule.radix)[0]!.step;
   for (const p of pseudo) {
     const r = pseudoRect(p, k, rule);
-    p.cx += snap(r.x, mainStep) - r.x;
-    p.cy += snap(r.y, mainStep) - r.y;
+    // a merged block also lives on ITS size's layer (or the view grid,
+    // whichever is coarser) — higher-order nodes on higher-order lattices
+    const pstep = Math.max(
+      mainStep,
+      sizeLayerStep(Math.max(r.w, r.h), rule.radix),
+    );
+    p.cx += snap(r.x, pstep) - r.x;
+    p.cy += snap(r.y, pstep) - r.y;
   }
   const expanded = graph.nodes.filter((n) => !nodeToPseudo.has(n.id));
   declutter(pseudo, k, rule, expanded);
