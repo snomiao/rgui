@@ -77,7 +77,9 @@ export {
 export {
   drawGraph,
   drawOffscreenIndicators,
+  offscreenIndicators,
   KIND_COLOR,
+  type OffscreenIndicator,
 } from "./render/graphLayer.js";
 
 import { createRgui } from "./rgui.js";

@@ -14,6 +14,7 @@ import {
   drawGraph,
   drawOffscreenIndicators,
   KIND_COLOR,
+  type OffscreenIndicator,
 } from "./render/graphLayer.js";
 import {
   inputPortPos,
@@ -122,6 +123,36 @@ export function createRgui(
   let graph: Graph = options.graph ?? { nodes: [], edges: [] };
   let lastRg: RenderGraph | null = null;
 
+  let lastIndicators: OffscreenIndicator[] = [];
+
+  /** smooth-pan the viewport so the given world point lands center-screen */
+  function panTo(cx: number, cy: number, durationMs = 280) {
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    const k = view.k;
+    const from = { x: view.x, y: view.y };
+    const to = { x: W / 2 - cx * k, y: H / 2 - cy * k };
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const u = Math.min(1, (now - t0) / durationMs);
+      const e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2; // easeInOut
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity
+          .translate(from.x + (to.x - from.x) * e, from.y + (to.y - from.y) * e)
+          .scale(k),
+      );
+      if (u < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function indicatorAt(sx: number, sy: number): OffscreenIndicator | null {
+    for (const it of lastIndicators)
+      if (Math.hypot(it.ax - sx, it.ay - sy) <= 12) return it;
+    return null;
+  }
+
   let selection = new Set<string>();
   function applySelection(next: Set<string>) {
     const changed =
@@ -178,7 +209,9 @@ export function createRgui(
     (ctx, t) => (lastRg = drawGraph(ctx, t, graph, rule)),
     (ctx, t) => drawSelectionLayer(ctx, t),
     (ctx, t, size) => {
-      if (lastRg) drawOffscreenIndicators(ctx, t, lastRg, size, rule);
+      lastIndicators = lastRg
+        ? drawOffscreenIndicators(ctx, t, lastRg, size, rule)
+        : [];
     },
     (ctx, t) => drawGhostWire(ctx, t),
   ]);
@@ -381,6 +414,12 @@ export function createRgui(
   }
 
   const onPointerDown = (ev: PointerEvent) => {
+    // off-screen indicators are UI chrome on top: click = go to the node
+    const ind = indicatorAt(ev.offsetX, ev.offsetY);
+    if (ind) {
+      panTo(ind.cx, ind.cy);
+      return;
+    }
     // ports win over node bodies (they overlap the node edge)
     const ph = portAt(ev.offsetX, ev.offsetY);
     if (ph && (options.onConnect || options.isValidConnection)) {
@@ -446,6 +485,7 @@ export function createRgui(
           snap(wx - drag.dx, step),
           snap(wy - drag.dy, step),
           graph.nodes,
+          { alignSnap: rule.alignSnapPx / view.k, direction: rule.direction },
         );
         if (nx !== drag.node.x || ny !== drag.node.y) {
           drag.node.x = nx;
@@ -576,6 +616,7 @@ export function createRgui(
       if (ev.type === "wheel") return true;
       const me = ev as MouseEvent;
       if (me.shiftKey) return false; // shift+drag = box select
+      if (indicatorAt(me.offsetX, me.offsetY)) return false; // indicator click
       if (
         (options.onConnect || options.isValidConnection) &&
         portAt(me.offsetX, me.offsetY)

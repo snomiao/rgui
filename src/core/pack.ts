@@ -43,9 +43,18 @@ export function resolveOverlap(
   x: number,
   y: number,
   others: GraphNode[],
+  opts?: {
+    /** cross-axis align magnet in WORLD units (0 disables) */
+    alignSnap?: number;
+    direction?: "ltr" | "rtl";
+  },
 ): { x: number; y: number } {
   const w = node.w;
   const h = nodeHeight(node);
+  const alignSnap = opts?.alignSnap ?? 0;
+  const rtl = opts?.direction === "rtl";
+  let contact: { rect: Rect; axis: "h" | "v" } | null = null;
+
   for (let iter = 0; iter < 8; iter++) {
     let hit: Rect | null = null;
     for (const o of others) {
@@ -62,10 +71,26 @@ export function resolveOverlap(
     const penX = Math.min(x + w, hit.x + hit.w) - Math.max(x, hit.x);
     const penY = Math.min(y + h, hit.y + hit.h) - Math.max(y, hit.y);
     if (penX < penY) {
-      // push horizontally to flush contact
+      // push horizontally to flush contact (side-by-side)
       x += x + w / 2 <= hit.x + hit.w / 2 ? -penX : penX;
+      contact = { rect: hit, axis: "h" };
     } else {
+      // push vertically to flush contact (stacked)
       y += y + h / 2 <= hit.y + hit.h / 2 ? -penY : penY;
+      contact = { rect: hit, axis: "v" };
+    }
+  }
+
+  // snap-align rule: snapped nodes read better aligned at their start point —
+  // horizontal snap aligns tops; vertical snap aligns the reading edge
+  if (contact && alignSnap > 0) {
+    if (contact.axis === "h") {
+      if (Math.abs(y - contact.rect.y) <= alignSnap) y = contact.rect.y;
+    } else if (rtl) {
+      const target = contact.rect.x + contact.rect.w - w;
+      if (Math.abs(x - target) <= alignSnap) x = target;
+    } else if (Math.abs(x - contact.rect.x) <= alignSnap) {
+      x = contact.rect.x;
     }
   }
   return { x, y };

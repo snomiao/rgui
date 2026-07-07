@@ -23,6 +23,14 @@ export interface RgRule {
   pseudo: { w: number; headerH: number; rowH: number; pad: number };
   /** min gap kept between decluttered pseudo-nodes (px) */
   declutterMarginPx: number;
+  /**
+   * snap-align magnet (px): when nodes snap flush, the cross axis aligns to
+   * the readable start point (horizontal snap → tops; vertical snap → left
+   * for LTR, right for RTL) if within this screen distance
+   */
+  alignSnapPx: number;
+  /** reading direction — decides the vertical-snap alignment edge */
+  direction: "ltr" | "rtl";
 }
 
 export const DEFAULT_RULE: RgRule = {
@@ -35,6 +43,8 @@ export const DEFAULT_RULE: RgRule = {
   clusterGapConnectedPx: 40,
   pseudo: { w: 200, headerH: 26, rowH: 18, pad: 8 },
   declutterMarginPx: 10,
+  alignSnapPx: 40,
+  direction: "ltr",
 };
 
 /** Merge a partial rule over the defaults. */

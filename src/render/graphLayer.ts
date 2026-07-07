@@ -383,57 +383,90 @@ function drawPort(
   ctx.stroke();
 }
 
+/** an off-screen marker: edge anchor + the world center it points at */
+export interface OffscreenIndicator {
+  /** anchor on the viewport edge (screen px) */
+  ax: number;
+  ay: number;
+  angle: number;
+  color: string;
+  /** world center of the off-screen target */
+  cx: number;
+  cy: number;
+}
+
 /**
  * Game-style off-screen indicators: for every node fully outside the
- * viewport, draw an arrow pinned to the viewport edge pointing at it —
- * zoomed in close, you stay aware of what lies outside.
+ * viewport, an arrow pinned to the viewport edge points at it — zoomed in
+ * close, you stay aware of what lies outside. Clicking one navigates there.
  */
+export function offscreenIndicators(
+  t: ViewTransform,
+  rg: RenderGraph,
+  size: { width: number; height: number },
+  rule: RgRule = DEFAULT_RULE,
+): OffscreenIndicator[] {
+  const { width: W, height: H } = size;
+  const m = 18; // edge inset for the markers
+  const clamp = (v: number, lo: number, hi: number) =>
+    Math.min(hi, Math.max(lo, v));
+
+  const out: OffscreenIndicator[] = [];
+  const add = (
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    color: string,
+  ) => {
+    if (x1 < 0 || x0 > W || y1 < 0 || y0 > H) {
+      const sx = (x0 + x1) / 2;
+      const sy = (y0 + y1) / 2;
+      const ax = clamp(sx, m, W - m);
+      const ay = clamp(sy, m, H - m);
+      out.push({
+        ax,
+        ay,
+        angle: Math.atan2(sy - ay, sx - ax),
+        color,
+        cx: (sx - t.x) / t.k,
+        cy: (sy - t.y) / t.k,
+      });
+    }
+  };
+  for (const n of rg.nodes)
+    add(
+      n.x * t.k + t.x,
+      n.y * t.k + t.y,
+      (n.x + n.w) * t.k + t.x,
+      (n.y + nodeHeight(n)) * t.k + t.y,
+      CATEGORY_COLOR[n.category],
+    );
+  for (const p of rg.pseudo) {
+    const r = pseudoRect(p, t.k, rule);
+    add(
+      r.x * t.k + t.x,
+      r.y * t.k + t.y,
+      (r.x + r.w) * t.k + t.x,
+      (r.y + r.h) * t.k + t.y,
+      p.category ? CATEGORY_COLOR[p.category] : PSEUDO_HEADER,
+    );
+  }
+  return out;
+}
+
 export function drawOffscreenIndicators(
   ctx: CanvasRenderingContext2D,
   t: ViewTransform,
   rg: RenderGraph,
   size: { width: number; height: number },
   rule: RgRule = DEFAULT_RULE,
-) {
-  const { width: W, height: H } = size;
-  const m = 18; // edge inset for the markers
-  const clamp = (v: number, lo: number, hi: number) =>
-    Math.min(hi, Math.max(lo, v));
-
-  const items: { x: number; y: number; color: string }[] = [];
-  for (const n of rg.nodes) {
-    const x0 = n.x * t.k + t.x;
-    const y0 = n.y * t.k + t.y;
-    const x1 = (n.x + n.w) * t.k + t.x;
-    const y1 = (n.y + nodeHeight(n)) * t.k + t.y;
-    if (x1 < 0 || x0 > W || y1 < 0 || y0 > H)
-      items.push({
-        x: (x0 + x1) / 2,
-        y: (y0 + y1) / 2,
-        color: CATEGORY_COLOR[n.category],
-      });
-  }
-  for (const p of rg.pseudo) {
-    const r = pseudoRect(p, t.k, rule);
-    const x0 = r.x * t.k + t.x;
-    const y0 = r.y * t.k + t.y;
-    const x1 = (r.x + r.w) * t.k + t.x;
-    const y1 = (r.y + r.h) * t.k + t.y;
-    if (x1 < 0 || x0 > W || y1 < 0 || y0 > H)
-      items.push({
-        x: (x0 + x1) / 2,
-        y: (y0 + y1) / 2,
-        color: p.category ? CATEGORY_COLOR[p.category] : PSEUDO_HEADER,
-      });
-  }
-
+): OffscreenIndicator[] {
+  const items = offscreenIndicators(t, rg, size, rule);
   for (const it of items) {
-    const ax = clamp(it.x, m, W - m);
-    const ay = clamp(it.y, m, H - m);
-    const ang = Math.atan2(it.y - ay, it.x - ax);
     ctx.save();
-    ctx.translate(ax, ay);
-    ctx.rotate(ang);
+    ctx.translate(it.ax, it.ay);
+    ctx.rotate(it.angle);
     // chevron pointing toward the off-screen node
     ctx.beginPath();
     ctx.moveTo(9, 0);
@@ -449,4 +482,5 @@ export function drawOffscreenIndicators(
     ctx.stroke();
     ctx.restore();
   }
+  return items;
 }
