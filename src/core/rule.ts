@@ -31,6 +31,12 @@ export interface RgRule {
   alignSnapPx: number;
   /** reading direction — decides the vertical-snap alignment edge */
   direction: "ltr" | "rtl";
+  /**
+   * port handle shape (default "chevron"): direction-bearing ">" pointing
+   * along the data flow — inputs point into the node, outputs point out —
+   * so in/out reads at a glance. "dot" restores plain circles.
+   */
+  portShape: "chevron" | "dot";
 }
 
 export const DEFAULT_RULE: RgRule = {
@@ -45,6 +51,7 @@ export const DEFAULT_RULE: RgRule = {
   declutterMarginPx: 10,
   alignSnapPx: 40,
   direction: "ltr",
+  portShape: "chevron",
 };
 
 /** Merge a partial rule over the defaults. */

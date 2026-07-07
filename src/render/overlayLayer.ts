@@ -32,6 +32,12 @@ export interface NodeHtmlOverlay {
    */
   scale?: "fixed" | "zoom";
   /**
+   * zoom mode only: hide when view.k drops below this (default 0.75) —
+   * a scaled-down control that can't be read must yield to the native
+   * summary. Hide always wins over scaling.
+   */
+  minScale?: number;
+  /**
    * pointer-events mode (default true). When true, only actual CONTROLS
    * inside the element receive pointer events (inputs, selects, buttons,
    * links, [contenteditable], [data-rgui-interactive]) — the background is
@@ -193,7 +199,12 @@ export function createOverlayManager(
       const y0 = n.y * k + view.y;
       const x1 = (n.x + n.w) * k + view.x;
       const y1 = (n.y + h) * k + view.y;
-      const readable = NODE_ROW_H * k >= rule.fieldMinPx;
+      // readability gate: zoom-scaled controls hide below their readable
+      // scale; fixed overlays follow the node's field readability
+      const readable =
+        m.ov.scale === "zoom"
+          ? k >= (m.ov.minScale ?? 0.75)
+          : NODE_ROW_H * k >= rule.fieldMinPx;
       const offscreen = x1 < 0 || y1 < 0 || x0 > W || y0 > H;
       const show = visible.has(id) && readable && !offscreen;
       m.wrap.style.display = show ? "" : "none";

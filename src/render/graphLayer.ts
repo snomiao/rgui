@@ -446,7 +446,14 @@ function drawNodePorts(
     for (const p of ports) {
       const pl = layout.get(`${n.id}/${dir}/${p.id}`);
       if (!pl || pl.hidden) continue;
-      drawPort(ctx, pl.x, pl.y, KIND_COLOR[p.kind], PORT_R);
+      drawPort(
+        ctx,
+        pl.x,
+        pl.y,
+        KIND_COLOR[p.kind],
+        PORT_R,
+        portDir(rule, dir, pl.edge),
+      );
       if (dir === "out" && labels) {
         ctx.fillStyle = KIND_COLOR[p.kind];
         if (pl.edge === "right") {
@@ -514,7 +521,7 @@ function drawPseudoNode(
   for (let i = 0; i < p.inputs.length; i++) {
     const port = p.inputs[i]!;
     const y = PSEUDO.headerH + PSEUDO.pad + (i + 0.5) * PSEUDO.rowH;
-    drawPort(ctx, 0, y, KIND_COLOR[port.kind], PORT_R);
+    drawPort(ctx, 0, y, KIND_COLOR[port.kind], PORT_R, portDir(rule, "in", "left"));
     ctx.fillStyle = KIND_COLOR[port.kind];
     ctx.textAlign = "left";
     ctx.fillText(port.label, PORT_R + 4, y);
@@ -522,7 +529,7 @@ function drawPseudoNode(
   for (let i = 0; i < p.outputs.length; i++) {
     const port = p.outputs[i]!;
     const y = PSEUDO.headerH + PSEUDO.pad + (i + 0.5) * PSEUDO.rowH;
-    drawPort(ctx, w, y, KIND_COLOR[port.kind], PORT_R);
+    drawPort(ctx, w, y, KIND_COLOR[port.kind], PORT_R, portDir(rule, "out", "right"));
     ctx.fillStyle = KIND_COLOR[port.kind];
     ctx.textAlign = "right";
     ctx.fillText(port.label, w - PORT_R - 4, y);
@@ -622,20 +629,54 @@ function drawSummaryContent(
   }
 }
 
+/**
+ * dir: +1 = flow points right, -1 = left, 0 = directionless dot.
+ * Chevrons read the data flow: inputs point INTO the node, outputs point
+ * OUT of it — LTR graphs show ">" on both edges.
+ */
 function drawPort(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   color: string,
   r: number,
+  dir: -1 | 0 | 1 = 0,
 ) {
   ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
+  if (dir === 0) {
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+  } else {
+    // ">" chevron arrowhead with a back notch
+    const d = dir;
+    ctx.moveTo(x - 2.5 * d, y - r);
+    ctx.lineTo(x + (r - 0.5) * d, y);
+    ctx.lineTo(x - 2.5 * d, y + r);
+    ctx.lineTo(x - 0.5 * d, y);
+    ctx.closePath();
+  }
   ctx.fillStyle = color;
   ctx.fill();
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = "#14161a";
   ctx.stroke();
+}
+
+/** chevron direction for a port: inputs point into the node, outputs out */
+function portDir(
+  rule: RgRule,
+  io: "in" | "out",
+  edge: "left" | "right",
+): -1 | 0 | 1 {
+  if (rule.portShape === "dot") return 0;
+  // out on right edge → right; out on left → left; in on left → right (into
+  // the node); in on right → left (into the node)
+  return io === "out"
+    ? edge === "right"
+      ? 1
+      : -1
+    : edge === "left"
+      ? 1
+      : -1;
 }
 
 /** an off-screen marker: edge anchor + the world center it points at */
