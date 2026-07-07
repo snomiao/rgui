@@ -130,6 +130,13 @@ export function buildRenderGraph(
    * merge — a pure rendering trick, base positions never change
    */
   xform?: readonly [number, number, number, number],
+  /**
+   * RG MONOTONICITY: memberships carried from the previous (finer) scale —
+   * while zooming out, an already-merged block never releases its children.
+   * Pass pairs from the last build's pseudo members when k decreased;
+   * omit when zooming in so blocks re-expand.
+   */
+  carry?: readonly [string, string][],
 ): RenderGraph {
   const [xa, xb, xc, xd] = xform ?? [1, 0, 0, 1];
   /** screen length of a world vector under the full view map */
@@ -203,6 +210,10 @@ export function buildRenderGraph(
   ]);
   for (const [a, b] of forcedPairs)
     if (eligible.has(a) && eligible.has(b)) union(a, b);
+  // carried memberships from the finer scale (zoom-out hysteresis)
+  if (carry)
+    for (const [a, b] of carry)
+      if (eligible.has(a) && eligible.has(b)) union(a, b);
   // 1) flush contact unions FIRST and unconditionally (snap > location)
   for (const seg of segments)
     if (eligible.has(seg.a.id) && eligible.has(seg.b.id))

@@ -171,6 +171,21 @@ describe("snap beats location (merge priority)", () => {
   });
 });
 
+describe("RG monotonicity (zoom-out hysteresis)", () => {
+  test("carried memberships keep a block together at a coarser scale", () => {
+    // two eligible nodes too far apart to merge naturally
+    const a = mkNode("a", 0, 0, 200, 1);
+    const b = mkNode("b", 5000, 0, 200, 1);
+    const g = { nodes: [a, b], edges: [] };
+    const k = 0.5; // both unreadable (68px*0.5=34 < 56), gap 4800*0.5 huge
+    const free = buildRenderGraph(g, k);
+    expect(free.pseudo.length).toBe(2); // separate blocks normally
+    const carried = buildRenderGraph(g, k, undefined, undefined, [["a", "b"]]);
+    expect(carried.pseudo.length).toBe(1); // carry keeps them one block
+    expect(carried.pseudo[0]!.members.length).toBe(2);
+  });
+});
+
 describe("flow order", () => {
   test("pseudo members sort by data flow, not insertion order", () => {
     // insert REVERSED: sink first, source last

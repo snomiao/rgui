@@ -71,9 +71,11 @@ export function drawGraph(
   summarize?: SummarizeFn,
   xform?: readonly [number, number, number, number],
   theme: RgTheme = DARK_THEME,
+  /** zoom-out hysteresis: memberships carried from the previous finer scale */
+  carry?: readonly [string, string][],
 ): RenderGraph {
   T = theme;
-  const rg = buildRenderGraph(graph, t.k, rule, xform);
+  const rg = buildRenderGraph(graph, t.k, rule, xform, carry);
 
   ctx.save();
   // draw in world space; regular strokes/text zoom with the world

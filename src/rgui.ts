@@ -281,6 +281,7 @@ export function createRgui(
     options.background === undefined ? theme.background : options.background;
   let graph: Graph = options.graph ?? { nodes: [], edges: [] };
   let lastRg: RenderGraph | null = null;
+  let lastBuildK = Infinity;
 
   let lastIndicators: OffscreenIndicator[] = [];
   let panels: Panel[] = options.panels ?? [];
@@ -554,7 +555,28 @@ export function createRgui(
     ...(options.layers ?? []),
     (ctx, t) => {
       dGraph = displayGraph();
-      lastRg = drawGraph(ctx, t, dGraph, rule, options.summarize, undefined, theme);
+      // RG monotonicity: zooming OUT carries the previous memberships so a
+      // merged block never releases its children mid-outzoom; zooming in
+      // (or same k: drags) drops the carry so structure can refine
+      const carry =
+        lastRg && t.k < lastBuildK - 1e-12
+          ? lastRg.pseudo.flatMap((p) =>
+              p.members
+                .slice(1)
+                .map((m, i) => [p.members[i]!.id, m.id] as [string, string]),
+            )
+          : undefined;
+      lastBuildK = t.k;
+      lastRg = drawGraph(
+        ctx,
+        t,
+        dGraph,
+        rule,
+        options.summarize,
+        undefined,
+        theme,
+        carry,
+      );
     },
     (ctx, t) => drawSelectionLayer(ctx, t),
     (ctx, t, size) => {
