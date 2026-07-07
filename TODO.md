@@ -13,6 +13,10 @@
   - rgui-agent pid: `ay ls rgui` で確認 / otoji-agent pid: `ay ls otoji` で確認
 - 相手の作業ログは `ay tail -n 50 <pid>` で読める
 
+## Milestone
+
+- **2026-07-08: otoji.org が React Flow を完全撤去、rgui が唯一の graph renderer に** (otoji PR #89)
+
 ## rgui 側タスク
 
 - [x] lib 化: `@snomiao/rgui` v0.1.0 — dist ESM + d.ts、`bun link` 登録済み
