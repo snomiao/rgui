@@ -225,9 +225,10 @@ export interface Rgui {
    */
   autoLayout(opts?: LayoutOptions & { animate?: boolean }): void;
   /**
-   * snap every node to the MAIN visible grid at the current scale —
-   * one call makes a generated/imported graph obey the snap rule.
-   * Fires onNodeMoveEnd per moved node (host broadcast) unless silent.
+   * snap every node — POSITION and SIZE — to the MAIN visible grid at the
+   * current scale; one call makes a generated/imported graph obey the snap
+   * rule. Fires onNodeMoveEnd/onNodeResizeEnd per changed node (host
+   * broadcast) unless silent.
    */
   snapGraph(opts?: { silent?: boolean }): void;
   /**
@@ -1500,6 +1501,16 @@ export function createRgui(
           n.x = nx;
           n.y = ny;
           if (!opts?.silent) options.onNodeMoveEnd?.(n.id, { x: nx, y: ny });
+        }
+        // size snaps too: w/h up to grid multiples, never below minimums
+        const minH = nodeMinHeight(n);
+        const nw = Math.max(96, snap(n.w, step) || step);
+        const nh = Math.max(minH, snap(nodeHeight(n), step) || step);
+        if (nw !== n.w || nh !== nodeHeight(n)) {
+          n.w = nw;
+          n.h = nh;
+          if (!opts?.silent)
+            options.onNodeResizeEnd?.(n.id, { w: nw, h: nodeHeight(n) });
         }
       }
       invalidate();
