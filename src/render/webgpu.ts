@@ -151,7 +151,7 @@ export function createWebGPUGridRenderer(
     canvas.height = Math.max(1, Math.round(height * dpr));
   }
 
-  const ready = (async () => {
+  const init = (async () => {
     if (typeof navigator === "undefined" || !navigator.gpu) return false;
     try {
       const adapter = await navigator.gpu.requestAdapter();
@@ -221,6 +221,24 @@ export function createWebGPUGridRenderer(
       return false;
     }
   })();
+  // some machines hang or crawl in requestAdapter/requestDevice — fall back
+  // quietly rather than lagging the page
+  let settled = false;
+  const ready = Promise.race([
+    init.then((ok) => {
+      settled = true;
+      return ok && !destroyed;
+    }),
+    new Promise<boolean>((res) =>
+      setTimeout(() => {
+        if (!settled) {
+          console.warn("[rgui] WebGPU init timed out; using canvas2d");
+          destroyed = true;
+        }
+        res(false);
+      }, 2500),
+    ),
+  ]);
 
   // growable scratch buffer reused across frames (allocation-free steady state)
   let scratch = new Float32Array(4096 * STRIDE);

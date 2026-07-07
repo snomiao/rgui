@@ -361,6 +361,25 @@ export function createRgui(
       displayNodes.set(n.id, clone);
       return clone;
     });
+    // 一格一物 holds for PROJECTED cards too: quantizing to a coarse grid
+    // (or heavy foreshortening) can land neighbors on the same lattice
+    // site — push them out to flush contact, exactly like dragged nodes
+    // (辺界消融 then fuses the contact; deeper zoom-out rg-merges)
+    for (let pass = 0; pass < 3; pass++) {
+      let moved = false;
+      for (const c of nodes) {
+        const r = resolveOverlap(c, c.x, c.y, nodes, {
+          alignSnap: 0,
+          direction: rule.direction,
+        });
+        if (r.x !== c.x || r.y !== c.y) {
+          c.x = r.x;
+          c.y = r.y;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
     return { nodes, edges: graph.edges };
   }
   let dGraph: Graph = graph;
@@ -735,6 +754,13 @@ export function createRgui(
         moved: boolean;
       }
     | { type: "pseudo"; pseudo: PseudoNode; wx: number; wy: number; moved: boolean }
+    | {
+        type: "group";
+        nodes: GraphNode[]; // base nodes of the selection (non-pinned)
+        wx: number;
+        wy: number;
+        moved: boolean;
+      }
     | { type: "wire"; from: PortHit; toSx: number; toSy: number }
     | {
         type: "marquee";
@@ -892,6 +918,15 @@ export function createRgui(
       return;
     }
     const [wx, wy] = screenToWorld(view, vx0, vy0);
+    if (hit.type === "node" && selection.has(hit.node.id) && selection.size > 1) {
+      // dragging a member of a multi-selection moves the whole selection
+      const members = [...selection]
+        .map((id) => graph.nodes.find((m) => m.id === id))
+        .filter((m): m is GraphNode => !!m && !m.pinned);
+      drag = { type: "group", nodes: members, wx, wy, moved: false };
+      canvas.setPointerCapture(ev.pointerId);
+      return;
+    }
     if (hit.type === "node") {
       const disp = hit.node; // display-space geometry
       const n = baseOf(disp);
@@ -979,6 +1014,21 @@ export function createRgui(
           drag.node.y = ny;
           drag.moved = true;
           options.onNodeMove?.(drag.node.id, { x: nx, y: ny });
+        }
+      } else if (drag.type === "group") {
+        const ddx = snap(wx - drag.wx, step);
+        const ddy = snap(wy - drag.wy, step);
+        if (ddx || ddy) {
+          const bdx = rotActive ? Ainv[0] * ddx + Ainv[1] * ddy : ddx;
+          const bdy = rotActive ? Ainv[2] * ddx + Ainv[3] * ddy : ddy;
+          for (const n of drag.nodes) {
+            n.x += bdx;
+            n.y += bdy;
+            options.onNodeMove?.(n.id, { x: n.x, y: n.y });
+          }
+          drag.wx += ddx;
+          drag.wy += ddy;
+          drag.moved = true;
         }
       } else {
         // a cluster with a pinned member is bolted down
@@ -1100,9 +1150,21 @@ export function createRgui(
       } else if (
         Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) < 4
       ) {
-        applySelection(new Set([drag.node.id]));
+        if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
+          // multi-select: toggle membership instead of replacing
+          const next = new Set(selection);
+          if (next.has(drag.node.id)) next.delete(drag.node.id);
+          else next.add(drag.node.id);
+          applySelection(next);
+        } else {
+          applySelection(new Set([drag.node.id]));
+        }
         options.onNodeClick?.(drag.node.id, { x: ev.offsetX, y: ev.offsetY });
       }
+    } else if (drag.type === "group") {
+      if (drag.moved)
+        for (const n of drag.nodes)
+          options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
     } else if (drag.type === "pseudo" && drag.moved) {
       // pseudo drags report every member's final BASE position
       for (const m of drag.pseudo.members) {

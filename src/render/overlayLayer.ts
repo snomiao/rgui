@@ -41,6 +41,13 @@ export interface NodeHtmlOverlay {
    */
   minScale?: number;
   /**
+   * "node": constrain the overlay to the node's screen rect (never larger
+   * than the node); overflowing content scrolls ("auto", default) or is
+   * cut ("hidden"). "viewport" (default): clipped by the viewport only.
+   */
+  clip?: "node" | "viewport" | "none";
+  overflow?: "hidden" | "auto";
+  /**
    * pointer-events mode (default true). When true, only actual CONTROLS
    * inside the element receive pointer events (inputs, selects, buttons,
    * links, [contenteditable], [data-rgui-interactive]) — the background is
@@ -248,6 +255,14 @@ export function createOverlayManager(
       let tx = anchor === "right" ? x1 + dx : x0 + dx;
       let ty = anchor === "below" ? y1 + dy : y0 + dy;
       if (opts?.transformPoint) [tx, ty] = opts.transformPoint(tx, ty);
+      if (m.ov.clip === "node") {
+        // never larger than the node's on-screen rect; wrapper becomes the
+        // scroller (so wheel over it scrolls, per scrollableConsumes)
+        m.wrap.style.width = `${Math.max(0, x1 - x0)}px`;
+        m.wrap.style.height = `${Math.max(0, y1 - y0)}px`;
+        m.wrap.style.overflow = m.ov.overflow ?? "auto";
+        m.wrap.style.pointerEvents = "auto";
+      }
       m.wrap.style.transformOrigin = "0 0";
       m.wrap.style.transform = scaled
         ? `translate(${tx}px, ${ty}px) scale(${applied})`
