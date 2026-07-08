@@ -251,10 +251,17 @@ for (const c of timeSource.categories) {
 }
 
 const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
+const axisBtn = document.querySelector<HTMLButtonElement>("#axis");
 function refreshChrome() {
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
     logBtn.setAttribute("aria-pressed", String(seriesLog));
+  }
+  if (axisBtn) {
+    axisBtn.style.display = current === "time" ? "" : "none";
+    const log = timeSource.isLogAxis();
+    axisBtn.textContent = log ? "log axis" : "linear axis";
+    axisBtn.setAttribute("aria-pressed", String(log));
   }
   filters.style.display = current === "time" ? "flex" : "none";
   searchWrap.style.display = current === "time" ? "" : "none";
@@ -262,6 +269,11 @@ function refreshChrome() {
     b.setAttribute("aria-pressed", String(b.dataset.src === current));
   }
 }
+axisBtn?.addEventListener("click", () => {
+  timeSource.setLogAxis(!timeSource.isLogAxis());
+  lane.fit(); // re-frame the biased fit in the new axis
+  refreshChrome();
+});
 seg.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-src]");
   if (!btn) return;

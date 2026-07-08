@@ -406,6 +406,10 @@ export interface TimelineSource extends LaneSource {
   strings(): string[];
   /** install a label translator (en → localized); default identity */
   setTranslate(fn: (s: string) => string): void;
+  /** true when the log (symlog) time axis is active (vs linear) */
+  isLogAxis(): boolean;
+  /** switch the time axis at runtime (host should re-fit afterwards) */
+  setLogAxis(on: boolean): void;
 }
 
 export function createTimelineSource(
@@ -474,32 +478,32 @@ export function createTimelineSource(
   // the whole 13.8-Gyr past AND the far future fit on one screen, each decade
   // of time taking a constant span. LIN (1 s) is the linear core near now, so
   // there's no singularity at yBP=0. LINEAR keeps worldY = −yBP (zoom to roam).
-  const LOG_AXIS = opts.logAxis ?? true;
+  let logAxis = opts.logAxis ?? true; // runtime-toggleable
   const LIN = SEC; // symlog linear threshold: 1 second
   const worldOf = (yBP: number) =>
-    LOG_AXIS
+    logAxis
       ? -Math.sign(yBP) * Math.log10(1 + Math.abs(yBP) / LIN)
       : -yBP;
   const yBPof = (worldY: number) => {
     const s = -worldY;
-    return LOG_AXIS
+    return logAxis
       ? Math.sign(s) * (Math.pow(10, Math.abs(s)) - 1) * LIN
       : s;
   };
   // influence LOD threshold, in current world units (years or log-decades)
   const influenceOf = (e: Ev) =>
     e.influence ??
-    (LOG_AXIS
+    (logAxis
       ? INFLUENCE_BASE_LOG * Math.pow(e.imp, 3)
       : INFLUENCE_BASE_LINEAR * Math.pow(e.imp, 4));
-  const INFLUENCE_DOTS = LOG_AXIS ? 3 : 12; // dots linger past the label cutoff
+  const influenceDots = () => (logAxis ? 3 : 12); // dots linger past label cutoff
 
   // world-span (units) a focus/search should frame around an event — its own
   // uncertainty widened for context, floored so precise events don't over-zoom
   const ctxWorld = (e: Ev) => {
     const s = spanOf(e);
     const w = Math.abs(worldOf(e.y - s) - worldOf(e.y + s));
-    return Math.max(w * 15, LOG_AXIS ? 1.2 : 1e-9);
+    return Math.max(w * 15, logAxis ? 1.2 : 1e-9);
   };
 
   let tr: (s: string) => string = (s) => s; // label translator (i18n)
@@ -610,7 +614,7 @@ export function createTimelineSource(
   ) {
     ctx.font = "10px ui-monospace, Menlo, monospace";
     ctx.textBaseline = "middle";
-    if (LOG_AXIS) {
+    if (logAxis) {
       // ticks at round times (past & future), positioned by their log worldY,
       // deconflicted by on-screen gap; labels are relative durations
       const ticks: number[] = [];
@@ -735,7 +739,7 @@ export function createTimelineSource(
     for (const { e, sy } of vis) {
       if (sy < HEADER_H - 2 || sy > H + 2) continue;
       const infl = influenceOf(e);
-      if (vspan > infl * INFLUENCE_DOTS) continue; // out of influence → hidden
+      if (vspan > infl * influenceDots()) continue; // out of influence → hidden
       const future = e.cat === "future";
       const inScale = vspan <= infl; // zoomed in enough to earn a label
       const labeled =
@@ -952,6 +956,11 @@ export function createTimelineSource(
       tr = fn;
       onUpdate();
     },
+    isLogAxis: () => logAxis,
+    setLogAxis(on) {
+      logAxis = on;
+      onUpdate();
+    },
     find(query, limit = 7) {
       const q = query.trim().toLowerCase();
       if (!q) return [];
@@ -980,7 +989,13 @@ export function createTimelineSource(
       min: worldOf(BIG_BANG) * 1.01,
       max: worldOf(-FUTURE_HORIZON) * 1.01,
     }),
-    maxZoom: LOG_AXIS ? 5000 : 5e6,
+    // bias the initial fit toward the PAST: frame Big Bang→now plus a thin
+    // future sliver; the sparse far future stays reachable by scrolling
+    fitExtent: () => ({
+      min: worldOf(BIG_BANG) * 1.01,
+      max: logAxis ? 2.5 : 0,
+    }),
+    maxZoom: 5e6,
     // viewport emptiness (target-density): 1 when a void, 0 once ≥ TARGET
     // in-scale events are on screen — drives scroll-into-void auto-zoom-out
     emptiness: (view) => {

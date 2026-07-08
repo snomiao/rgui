@@ -38,8 +38,14 @@ export interface LaneEnv {
 export interface LaneSource {
   /** short label (shown in the debug HUD) */
   title: string;
-  /** flow-axis world bounds, for scroll clamping and auto-fit */
+  /** flow-axis world bounds, for scroll clamping */
   extent(): { min: number; max: number };
+  /**
+   * bounds the initial auto-fit frames (default: extent). Lets a source bias
+   * the default view — e.g. the deep-time lane fits the PAST, leaving the
+   * sparse far-future reachable by scrolling within the full extent.
+   */
+  fitExtent?(): { min: number; max: number };
   /** draw the currently visible window; width is pinned, so lay x out in px */
   draw(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv): void;
   /**
@@ -203,7 +209,7 @@ export function createLane(
   }
 
   function fit() {
-    const { min, max } = source.extent();
+    const { min, max } = source.fitExtent?.() ?? source.extent();
     const span = Math.max(1e-9, max - min);
     view.zoomY = view.height > 0 ? view.height / span : 1;
     view.scrollY = min;
