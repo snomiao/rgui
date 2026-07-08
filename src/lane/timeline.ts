@@ -727,6 +727,21 @@ export function createTimelineSource(): TimelineSource {
     },
     extent: () => ({ min: worldOf(BIG_BANG) * 1.005, max: FUTURE_HORIZON * 1.02 }),
     maxZoom: 5e6,
+    // viewport emptiness (target-density): 1 when a void, 0 once ≥ TARGET
+    // in-scale events are on screen — drives scroll-into-void auto-zoom-out
+    emptiness: (view) => {
+      const TARGET = 5;
+      const top = screenToWorldY(view, 0);
+      const bot = screenToWorldY(view, view.height);
+      const vspan = view.height / view.zoomY;
+      let n = 0;
+      for (const e of points) {
+        if (!enabled.has(e.cat) || influenceOf(e) < vspan) continue;
+        const wy = worldOf(e.y);
+        if (wy >= top && wy <= bot) n++;
+      }
+      return Math.max(0, 1 - n / TARGET);
+    },
     // double-click an event → center it and zoom to ~its precision scale
     focusAt: (screenY, view) => {
       let best: Ev | null = null;

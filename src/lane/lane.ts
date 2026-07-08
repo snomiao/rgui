@@ -61,6 +61,12 @@ export interface LaneSource {
    * scroll to and the zoom to scale to (the target's natural scale), or null.
    */
   focusAt?: (screenY: number, view: LaneView) => { center: number; zoom: number } | null;
+  /**
+   * how empty the current viewport is (0 = dense, 1 = void). Scrolling into
+   * emptiness auto-zooms-out proportionally (rate = scroll-speed × emptiness),
+   * so the UI never dwells on a silly blank stretch. Omit → no auto-zoom.
+   */
+  emptiness?: (view: LaneView) => number;
 }
 
 export interface LaneOptions {
@@ -136,6 +142,20 @@ export function createLane(
     }
     const g = Math.exp(-(bestD * bestD) / (SNAP_SIGMA * SNAP_SIGMA));
     return rawScreenY + g * (bestTy - rawScreenY);
+  }
+
+  // Scrolling into empty space auto-zooms-out: rate ∝ scroll speed × emptiness.
+  // Self-limiting — zooming out reveals more content, emptiness drops, it eases.
+  const EMPTY_K = 0.0012;
+  function scrollDamp(dScreenPx: number) {
+    const emp = source.emptiness?.(view) ?? 0;
+    if (emp <= 0.02) return;
+    zoomAt(
+      view,
+      Math.exp(-EMPTY_K * Math.abs(dScreenPx) * emp),
+      view.height / 2,
+      zoomLimits(),
+    );
   }
 
   // Double-click focus: smoothly bring a point to the viewport centre and zoom
@@ -324,6 +344,7 @@ export function createLane(
       zoomAt(view, Math.exp(-dPx * WHEEL_BASE * accel), zoomAnchor(pointerY), zoomLimits());
     } else {
       view.scrollY += dPx / view.zoomY;
+      scrollDamp(dPx);
     }
     invalidate();
   }
@@ -367,7 +388,9 @@ export function createLane(
       pinchPrev = cur;
     } else {
       // single-pointer drag → move the content (drag down = scroll up)
-      view.scrollY -= (now.y - prev.y) / view.zoomY;
+      const dy = now.y - prev.y;
+      view.scrollY -= dy / view.zoomY;
+      scrollDamp(dy);
     }
     invalidate();
   }
@@ -410,7 +433,10 @@ export function createLane(
       const anchorY = pointerInside && pointerY != null ? pointerY : view.height / 2;
       zoomAt(view, Math.exp(-z.dy * ZOOM_SENS), zoomAnchor(anchorY), zoomLimits());
     }
-    if (s.dy) view.scrollY += s.dy / view.zoomY; // px → world units
+    if (s.dy) {
+      view.scrollY += s.dy / view.zoomY; // px → world units
+      scrollDamp(s.dy);
+    }
     if (s.dy || z.dy) invalidate();
     if (s.active || z.active) navRaf = requestAnimationFrame(navTick);
   }
