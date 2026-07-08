@@ -49,6 +49,7 @@ import {
   type Port,
 } from "./core/graph.js";
 import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
+import { AccModel2D } from "./core/accModel.js";
 import {
   clampSize,
   computePortLayout,
@@ -170,6 +171,21 @@ export interface RguiOptions {
    * - classic: wheel = zoom · plain drag on empty = pan · shift+drag = box select
    */
   input?: "figma" | "classic";
+  /**
+   * keyboard navigation (default true), modelled on CapsLockX's cursor accel:
+   * WASD pans, R/F zoom in/out (time-based acceleration — hold to speed up),
+   * N/P (or Tab / Shift+Tab) cycle focus between nodes, and ? toggles a
+   * shortcuts panel. Keys act only while the pointer is over the canvas (so a
+   * host app's own hotkeys keep working elsewhere) and never while typing in
+   * an input/textarea. Set false to disable entirely.
+   */
+  keyboard?: boolean;
+  /**
+   * keyboard pan / zoom acceleration rates (units per first-second of hold),
+   * fed to the CapsLockX AccModel. Defaults mirror CapsLockX: pan 1600, zoom
+   * 1600. Larger = faster.
+   */
+  keyboardSpeed?: { pan?: number; zoom?: number };
   /** plain click on a wire */
   onEdgeClick?: (edge: Edge, screen: { x: number; y: number }) => void;
   /** right-click / context-menu on a wire */
@@ -1544,19 +1560,246 @@ export function createRgui(
 
   const input = options.input ?? "figma";
   let spaceHeld = false;
+
+  // --- keyboard navigation (CapsLockX accel model) ------------------------
+  // WASD pans, R/F zoom, N/P (Tab/Shift+Tab) cycle node focus, ? shows help.
+  // The physics are the CapsLockX cursor-accel model (see core/accModel.ts):
+  // acceleration grows with how long a key is held, so a tap nudges and a
+  // hold ramps up — identical feel to moving the mouse in CapsLockX.
+  const kbEnabled = options.keyboard ?? true;
+  const panRate = options.keyboardSpeed?.pan ?? 1600;
+  const zoomRate = options.keyboardSpeed?.zoom ?? 1600;
+  // zoom displacement (units) → log-scale exponent per frame; tuned so a short
+  // R/F tap zooms a readable step while a hold accelerates smoothly.
+  const ZOOM_SENS = 0.0011;
+  const panModel = new AccModel2D(panRate);
+  const zoomModel = new AccModel2D(zoomRate);
+  let pointerInside = false;
+  let focusIndex = -1;
+
+  let navRaf = 0;
+  const navTick = () => {
+    navRaf = 0;
+    const now = performance.now();
+    const p = panModel.tick(now);
+    const z = zoomModel.tick(now);
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    let nx = view.x;
+    let ny = view.y;
+    let nk = view.k;
+    // pan is a screen-space translation (+right/+down key ⇒ camera moves that
+    // way, i.e. the scene translates the opposite way on screen)
+    nx -= p.dx;
+    ny -= p.dy;
+    if (z.dy) {
+      // R = pressUp ⇒ dy<0 ⇒ zoom in; keep the viewport-center world point put
+      const nk2 = Math.min(1e6, Math.max(1e-6, nk * Math.exp(-z.dy * ZOOM_SENS)));
+      const [wx, wy] = screenToWorld({ x: nx, y: ny, k: nk }, W / 2, H / 2);
+      nx = W / 2 - wx * nk2;
+      ny = H / 2 - wy * nk2;
+      nk = nk2;
+    }
+    if (nx !== view.x || ny !== view.y || nk !== view.k) {
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity.translate(nx, ny).scale(nk),
+      );
+    }
+    if (p.active || z.active) navRaf = requestAnimationFrame(navTick);
+  };
+  const navKick = () => {
+    if (!navRaf) navRaf = requestAnimationFrame(navTick);
+  };
+
+  /** cycle single-node focus (dir +1 = next, -1 = prev) and pan it center. */
+  const cycleFocus = (dir: number) => {
+    const ns = graph.nodes;
+    if (!ns.length) return;
+    if (focusIndex < 0 || focusIndex >= ns.length)
+      focusIndex = dir > 0 ? 0 : ns.length - 1;
+    else focusIndex = (focusIndex + dir + ns.length) % ns.length;
+    const n = ns[focusIndex]!;
+    applySelection(new Set([n.id]));
+    panTo(n.x + n.w / 2, n.y + nodeHeight(n) / 2);
+  };
+
+  // --- shortcuts panel (?) ------------------------------------------------
+  let helpEl: HTMLDivElement | null = null;
+  const toggleHelp = () => {
+    if (helpEl) {
+      helpEl.remove();
+      helpEl = null;
+      return;
+    }
+    const rows: [string, string][] = [
+      ["W A S D", "Pan"],
+      ["R / F", "Zoom in / out"],
+      ["N / P", "Focus next / prev node"],
+      ["Tab / ⇧Tab", "Focus next / prev node"],
+      ["Space + drag", "Pan"],
+      ["Scroll / pinch", "Pan / zoom"],
+      ["?", "Toggle this panel"],
+    ];
+    helpEl = document.createElement("div");
+    helpEl.className = "rgui-shortcuts";
+    Object.assign(helpEl.style, {
+      position: "fixed",
+      inset: "0",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background: "rgba(0,0,0,0.45)",
+      zIndex: "2147483000",
+      font: "13px/1.5 ui-sans-serif, system-ui, sans-serif",
+    } as CSSStyleDeclaration);
+    const card = document.createElement("div");
+    Object.assign(card.style, {
+      background: "#1b1e24",
+      color: "#e8eaed",
+      border: "1px solid #333842",
+      borderRadius: "12px",
+      padding: "20px 24px",
+      minWidth: "300px",
+      boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+    } as CSSStyleDeclaration);
+    card.innerHTML =
+      `<div style="font-weight:600;font-size:15px;margin-bottom:14px">` +
+      `Keyboard shortcuts</div>` +
+      `<table style="border-collapse:collapse;width:100%">` +
+      rows
+        .map(
+          ([keys, act]) =>
+            `<tr><td style="padding:4px 16px 4px 0;white-space:nowrap">` +
+            keys
+              .split(" ")
+              .map(
+                (k) =>
+                  `<kbd style="display:inline-block;padding:2px 7px;margin:0 2px 0 0;` +
+                  `background:#2a2e37;border:1px solid #3c424e;border-bottom-width:2px;` +
+                  `border-radius:5px;font:600 12px ui-monospace,monospace">${k}</kbd>`,
+              )
+              .join("") +
+            `</td><td style="padding:4px 0;color:#aab0bd">${act}</td></tr>`,
+        )
+        .join("") +
+      `</table>` +
+      `<div style="margin-top:14px;color:#7b8291;font-size:12px">` +
+      `Esc or ? to close</div>`;
+    helpEl.appendChild(card);
+    helpEl.addEventListener("pointerdown", (e) => {
+      if (e.target === helpEl) toggleHelp();
+    });
+    document.body.appendChild(helpEl);
+  };
+
+  const typingInField = (ev: KeyboardEvent) => {
+    const t = ev.target as HTMLElement | null;
+    return !!(
+      t &&
+      (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)
+    );
+  };
+
   const onKeyDown = (ev: KeyboardEvent) => {
     if (ev.code === "Space" && !ev.repeat) {
-      const t = ev.target as HTMLElement | null;
-      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      if (typingInField(ev)) return;
       spaceHeld = true;
       canvas.style.cursor = "grab";
+      return;
     }
+    if (!kbEnabled) return;
+    // ? closes the help panel from anywhere; Esc closes it too
+    if (helpEl && ev.key === "Escape") {
+      ev.preventDefault();
+      toggleHelp();
+      return;
+    }
+    if (typingInField(ev)) return;
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return; // leave OS/app chords
+    if (ev.key === "?") {
+      ev.preventDefault();
+      toggleHelp();
+      return;
+    }
+    // focus cycling works whenever the canvas is engaged
+    const engaged = pointerInside || document.activeElement === canvas;
+    if (engaged && (ev.key === "n" || (ev.key === "Tab" && !ev.shiftKey))) {
+      ev.preventDefault();
+      cycleFocus(1);
+      return;
+    }
+    if (engaged && (ev.key === "p" || (ev.key === "Tab" && ev.shiftKey))) {
+      ev.preventDefault();
+      cycleFocus(-1);
+      return;
+    }
+    if (!engaged) return;
+    const now = performance.now();
+    switch (ev.key.toLowerCase()) {
+      case "a":
+        panModel.pressLeft(now);
+        break;
+      case "d":
+        panModel.pressRight(now);
+        break;
+      case "w":
+        panModel.pressUp(now);
+        break;
+      case "s":
+        panModel.pressDown(now);
+        break;
+      case "r":
+        zoomModel.pressUp(now);
+        break;
+      case "f":
+        zoomModel.pressDown(now);
+        break;
+      default:
+        return;
+    }
+    ev.preventDefault();
+    navKick();
   };
   const onKeyUp = (ev: KeyboardEvent) => {
     if (ev.code === "Space") spaceHeld = false;
+    if (!kbEnabled) return;
+    switch (ev.key.toLowerCase()) {
+      case "a":
+        panModel.releaseLeft();
+        break;
+      case "d":
+        panModel.releaseRight();
+        break;
+      case "w":
+        panModel.releaseUp();
+        break;
+      case "s":
+        panModel.releaseDown();
+        break;
+      case "r":
+        zoomModel.releaseUp();
+        break;
+      case "f":
+        zoomModel.releaseDown();
+        break;
+    }
+  };
+  const onPointerEnter = () => {
+    pointerInside = true;
+  };
+  const onPointerLeave = () => {
+    pointerInside = false;
+    // releasing focus stops runaway pan if a key is still logically "down"
+    panModel.stop();
+    zoomModel.stop();
   };
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
+  if (kbEnabled) {
+    canvas.addEventListener("pointerenter", onPointerEnter);
+    canvas.addEventListener("pointerleave", onPointerLeave);
+  }
 
   /**
    * figma wheel: ctrl/pinch + discrete mouse wheel = zoom; 2-finger = pan.
@@ -1913,7 +2156,11 @@ export function createRgui(
       overlays.destroy();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      canvas.removeEventListener("pointerenter", onPointerEnter);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("wheel", onWheel);
+      if (navRaf) cancelAnimationFrame(navRaf);
+      helpEl?.remove();
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
       sel.on(".zoom", null);

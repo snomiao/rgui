@@ -100,6 +100,24 @@ The `Rgui` object returned by `rgui(canvas, options)` carries the current view t
 `invalidate()`, and `destroy()`. `demoGraph()` returns a ready-made pipeline for smoke
 testing — pass it first to see the behavior.
 
+## Keyboard navigation
+
+Enabled by default (`keyboard: false` to opt out). The pan/zoom feel is the
+[CapsLockX](https://github.com/snomiao/CapsLockX) time-based acceleration model — a tap
+nudges, a hold ramps up — ported from its Rust source of truth (`core/accModel.ts`).
+Keys act only while the pointer is over the canvas, and never while typing in a field.
+
+| Keys | Action |
+| --- | --- |
+| `W` `A` `S` `D` | Pan (hold to accelerate) |
+| `R` / `F` | Zoom in / out (about viewport center) |
+| `N` / `P` — or `Tab` / `⇧Tab` | Focus next / previous node (selects + pans it to center) |
+| `Space` + drag | Pan |
+| `?` | Toggle the shortcuts panel |
+
+Tune the acceleration with `keyboardSpeed: { pan?, zoom? }` (units per first-second of
+hold; defaults 1600 / 1600, matching CapsLockX).
+
 ## RgRule — customizing the readability thresholds
 
 Every readability decision in rgui is concentrated in a single `RgRule` object. Tune these
@@ -181,8 +199,8 @@ is framework-agnostic pure functions and plain data.
   `onCanvasContextMenu`), viewer methods (`setGraph`, `snapGraph`, `autoLayout`, `fitView`,
   `setView`, `setRotation3`, `setSelection`, `setPanels`, `setNodeOverlay`, `resizeNode`,
   `setTheme`, e2e accessors `portScreenPos`/`edgeMidScreen`), options (`rule`, `summarize`,
-  `panels`, `input: "figma" | "classic"`, `renderer: "auto" | "canvas2d" | "webgpu"`,
-  `maxDpr`, `background`, `theme`)
+  `panels`, `input: "figma" | "classic"`, `keyboard`, `keyboardSpeed`,
+  `renderer: "auto" | "canvas2d" | "webgpu"`, `maxDpr`, `background`, `theme`)
 - **Grid math** (`core/grid`): `readableStep`, `gridLevels`, `finerStep`, `gridRange`,
   `snap`, `snapSizeRadix`, `sizeLayerStep`, `worldToScreen`, `screenToWorld`
 - **Rules** (`core/rule`): `DEFAULT_RULE`, `resolveRule`, type `RgRule`
