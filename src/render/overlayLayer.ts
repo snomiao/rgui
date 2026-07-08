@@ -266,9 +266,15 @@ export function createOverlayManager(
       if (opts?.transformPoint) [tx, ty] = opts.transformPoint(tx, ty);
       if (m.ov.clip === "node") {
         // never larger than the node's on-screen rect; wrapper becomes the
-        // scroller (so wheel over it scrolls, per scrollableConsumes)
-        m.wrap.style.width = `${Math.max(0, x1 - x0)}px`;
-        m.wrap.style.height = `${Math.max(0, y1 - y0)}px`;
+        // scroller (so wheel over it scrolls, per scrollableConsumes).
+        // NOTE: the `scale(applied)` transform below ALSO scales this box, so a
+        // literal (x1-x0) here becomes (x1-x0)×applied on screen — the clip window
+        // then shrinks to node×applied (double-scaled: node×k²), cutting the
+        // content off (worse as you zoom out). Pre-divide by applied so the box is
+        // exactly the node's screen rect AFTER the transform. (diagnosed via otoji)
+        const s = scaled && applied > 0 ? applied : 1;
+        m.wrap.style.width = `${Math.max(0, (x1 - x0) / s)}px`;
+        m.wrap.style.height = `${Math.max(0, (y1 - y0) / s)}px`;
         m.wrap.style.overflow = m.ov.overflow ?? "auto";
         m.wrap.style.pointerEvents = "auto";
       }
