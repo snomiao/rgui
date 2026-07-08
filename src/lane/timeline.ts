@@ -360,14 +360,49 @@ export function createTimelineSource(): TimelineSource {
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
   const worldOf = (yBP: number) => -yBP;
 
-  const activeTracks = (W: number) => {
+  // A track's "demand" = proximity-weighted importance mass of its events:
+  // near/on-screen important events pull hard, distant ones fade (exp falloff).
+  function trackDemand(cat: Cat, view: LaneView): number {
+    if (cat === "periodic") {
+      let c = 0;
+      for (const cy of CYCLES) {
+        const px = cy.period * view.zoomY;
+        if (px >= 9 && px <= view.height * 1.6) c++;
+      }
+      return c * 0.7;
+    }
+    const H = view.height;
+    let d = 0;
+    for (const e of points) {
+      if (e.cat !== cat) continue;
+      const sy = worldToScreenY(view, worldOf(e.y));
+      const off = sy < 0 ? -sy : sy > H ? sy - H : 0; // px outside the viewport
+      d += e.imp * Math.exp(-off / H);
+    }
+    return d;
+  }
+
+  // Track widths scale with demand, squashed to [W_MIN, W_MAX] via a smooth
+  // saturating map D/(D+C) (Michaelis–Menten). W_MAX/W_MIN caps how much a hot
+  // track can dominate; the map is continuous in the view so widths glide.
+  const W_MIN = 1;
+  const W_MAX = 4;
+  const DEMAND_HALF = 1.3; // demand at which a track reaches half its extra width
+  const activeTracks = (view: LaneView) => {
     const active = CAT_META.filter((m) => enabled.has(m.cat));
-    const tw = (W - TRACK_X0) / Math.max(1, active.length);
-    return active.map((m, i) => ({
-      meta: m,
-      x0: TRACK_X0 + i * tw,
-      w: tw,
-    }));
+    const weights = active.map((m) => {
+      const D = trackDemand(m.cat, view);
+      return W_MIN + (W_MAX - W_MIN) * (D / (D + DEMAND_HALF));
+    });
+    const sum = weights.reduce((a, b) => a + b, 0) || 1;
+    const availW = view.width - TRACK_X0;
+    let x = TRACK_X0;
+    return active.map((m, i) => {
+      const w = (availW * weights[i]!) / sum;
+      const track = { meta: m, x0: x, w };
+      x += w;
+      return track;
+    });
   };
 
   function draw(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
@@ -380,7 +415,7 @@ export function createTimelineSource(): TimelineSource {
     drawEras(ctx, view, theme, H);
     drawRuler(ctx, view, theme, W, H, topW, botW);
 
-    const tracks = activeTracks(W);
+    const tracks = activeTracks(view);
     // faint track lanes + separators
     for (const t of tracks) {
       ctx.fillStyle = withAlpha(t.meta.color, 0.04);
@@ -758,15 +793,18 @@ export function createTimelineSource(): TimelineSource {
       const ctxWindow = Math.max(spanOf(best) * 30, 1e-9); // ~its own scale
       return { center: worldOf(best.y), zoom: view.height / ctxWindow };
     },
-    // the zoom anchor gravitates to nearby enabled events (and the now line)
+    // the zoom anchor gravitates to nearby enabled events (and the now line);
+    // each carries its track-centre x so the snap is track-aware
     snapTargets: (view) => {
+      const tracks = activeTracks(view);
+      const cx = new Map(tracks.map((t) => [t.meta.cat, t.x0 + t.w / 2]));
       const top = screenToWorldY(view, -40);
       const bot = screenToWorldY(view, view.height + 40);
-      const out: number[] = [0]; // the "now" line is always a target
+      const out: { y: number; x?: number }[] = [{ y: 0 }]; // now line: any x
       for (const e of points) {
         if (!enabled.has(e.cat) || e.imp < 0.45) continue;
         const wy = worldOf(e.y);
-        if (wy >= top && wy <= bot) out.push(wy);
+        if (wy >= top && wy <= bot) out.push({ y: wy, x: cx.get(e.cat) });
       }
       return out;
     },

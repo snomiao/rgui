@@ -50,12 +50,14 @@ export interface LaneSource {
   /** extra HUD line (e.g. hovered path / value under the cursor) */
   hudLine?: (view: LaneView) => string | null;
   /**
-   * notable world-Y positions the zoom anchor gravitates toward. When the
-   * cursor is near one, zooming keeps THAT point fixed (so a not-quite-aimed
-   * target doesn't drift off-screen); far from any, plain cursor zoom. The
+   * notable points the zoom anchor gravitates toward: world-y plus an optional
+   * screen-x (e.g. a track centre). When the cursor is near one, zooming keeps
+   * THAT point fixed (so a not-quite-aimed target doesn't drift off-screen);
+   * far from any, plain cursor zoom. With x, the pull is track-aware — an event
+   * in the hovered track wins over an equally-timed event in another track. The
    * pull is a smooth gaussian, not a hard snap.
    */
-  snapTargets?: (view: LaneView) => number[];
+  snapTargets?: (view: LaneView) => { y: number; x?: number }[];
   /**
    * double-click focus: given the click's screen-y, return the world center to
    * scroll to and the zoom to scale to (the target's natural scale), or null.
@@ -130,17 +132,21 @@ export function createLane(
   function zoomAnchor(rawScreenY: number): number {
     const targets = source.snapTargets?.(view);
     if (!targets || !targets.length) return rawScreenY;
+    // pick the target nearest in 2-D (dy² + dx²): x makes it track-aware, so an
+    // event under the hovered track beats an equally-timed one elsewhere
     let bestTy = rawScreenY;
-    let bestD = Infinity;
-    for (const wy of targets) {
-      const ty = worldToScreenY(view, wy);
-      const d = Math.abs(ty - rawScreenY);
-      if (d < bestD) {
-        bestD = d;
+    let bestD2 = Infinity;
+    for (const t of targets) {
+      const ty = worldToScreenY(view, t.y);
+      const dy = ty - rawScreenY;
+      const dx = t.x != null && pointerX != null ? t.x - pointerX : 0;
+      const d2 = dy * dy + dx * dx;
+      if (d2 < bestD2) {
+        bestD2 = d2;
         bestTy = ty;
       }
     }
-    const g = Math.exp(-(bestD * bestD) / (SNAP_SIGMA * SNAP_SIGMA));
+    const g = Math.exp(-bestD2 / (SNAP_SIGMA * SNAP_SIGMA));
     return rawScreenY + g * (bestTy - rawScreenY);
   }
 
@@ -312,8 +318,9 @@ export function createLane(
   resize();
   window.addEventListener("scroll", refreshRect, { passive: true });
 
-  // hover position → zoom-center visualization
+  // hover position → zoom-center visualization + track-aware snap
   let pointerY: number | null = null;
+  let pointerX: number | null = null;
   let pointerInside = false;
 
   // ── input ───────────────────────────────────────────────────────────────
@@ -331,6 +338,7 @@ export function createLane(
     e.preventDefault();
     focusAnim = null; // user took over
     pointerY = localY(e);
+    pointerX = localX(e);
     pointerInside = true;
     const dPx = wheelDeltaPx(e);
     if (e.ctrlKey || e.metaKey) {
@@ -371,6 +379,7 @@ export function createLane(
   }
   function onPointerMove(e: PointerEvent) {
     pointerY = localY(e); // hover → zoom-center marker
+    pointerX = localX(e);
     pointerInside = true;
     const prev = pointers.get(e.pointerId);
     if (!prev) {
