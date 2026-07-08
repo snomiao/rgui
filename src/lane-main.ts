@@ -366,5 +366,33 @@ themeToggle?.addEventListener("click", () => {
   lane.setTheme(next);
 });
 
+// ── i18n: translate labels into the browser's language (progressive) ──────
+// Uses the built-in browser Translator API when available; renders English
+// first and swaps in translations as they arrive. No-op when unavailable or
+// the browser is already English.
+async function initI18n() {
+  const lang = (navigator.language || "en").split("-")[0];
+  if (lang === "en") return;
+  const T = (globalThis as unknown as { Translator?: any }).Translator;
+  if (!T?.create) return;
+  try {
+    const avail = await T.availability?.({ sourceLanguage: "en", targetLanguage: lang });
+    if (avail === "unavailable") return;
+    const translator = await T.create({ sourceLanguage: "en", targetLanguage: lang });
+    const cache = new Map<string, string>();
+    for (const s of timeSource.strings()) {
+      try {
+        cache.set(s, await translator.translate(s));
+      } catch {
+        /* keep the English original for this string */
+      }
+    }
+    timeSource.setTranslate((s) => cache.get(s) ?? s);
+  } catch {
+    /* Translator API unavailable — stay English */
+  }
+}
+void initI18n();
+
 // expose for host debugging / e2e
 (window as unknown as { lane: typeof lane }).lane = lane;

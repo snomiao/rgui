@@ -397,6 +397,10 @@ export interface TimelineSource extends LaneSource {
   find(query: string, limit?: number): SearchHit[];
   /** called when lazily-fetched events arrive (host wires it to invalidate) */
   setOnUpdate(fn: () => void): void;
+  /** every English UI string (labels/details/headers/eras/cycles), for i18n */
+  strings(): string[];
+  /** install a label translator (en → localized); default identity */
+  setTranslate(fn: (s: string) => string): void;
 }
 
 export function createTimelineSource(): TimelineSource {
@@ -459,6 +463,7 @@ export function createTimelineSource(): TimelineSource {
 
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
   const worldOf = (yBP: number) => -yBP;
+  let tr: (s: string) => string = (s) => s; // label translator (i18n)
 
   // A track's "demand" = proximity-weighted importance mass of its events:
   // near/on-screen important events pull hard, distant ones fade (exp falloff).
@@ -549,7 +554,7 @@ export function createTimelineSource(): TimelineSource {
     ctx.font = "10px ui-monospace, Menlo, monospace";
     for (const t of tracks) {
       ctx.fillStyle = t.meta.color;
-      ctx.fillText(fit(ctx, t.meta.label, t.w - 8), t.x0 + 6, HEADER_H / 2);
+      ctx.fillText(fit(ctx, tr(t.meta.label), t.w - 8), t.x0 + 6, HEADER_H / 2);
     }
 
     drawOffscreen(ctx, theme, W, H, topW, botW);
@@ -611,11 +616,8 @@ export function createTimelineSource(): TimelineSource {
         ctx.font = "11px ui-monospace, Menlo, monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(
-          ctx.measureText(era.label).width < b - a - 8 ? era.label : "",
-          0,
-          0,
-        );
+        const el = tr(era.label);
+        ctx.fillText(ctx.measureText(el).width < b - a - 8 ? el : "", 0, 0);
         ctx.restore();
       }
     }
@@ -720,14 +722,14 @@ export function createTimelineSource(): TimelineSource {
       ctx.font = "12px ui-monospace, Menlo, monospace";
       ctx.textAlign = "left";
       ctx.fillStyle = future ? theme.textDim : theme.text;
-      ctx.fillText(fit(ctx, e.label, w - 18), cx + 8, sy);
+      ctx.fillText(fit(ctx, tr(e.label), w - 18), cx + 8, sy);
       // detail on a second line when the track has spare vertical room
       if (e.detail) {
         const nextGap = placed.every((p) => p === sy || Math.abs(p - sy) > 26);
         if (nextGap) {
           ctx.font = "9px ui-monospace, Menlo, monospace";
           ctx.fillStyle = theme.textMuted;
-          ctx.fillText(fit(ctx, e.detail, w - 18), cx + 8, sy + 11);
+          ctx.fillText(fit(ctx, tr(e.detail), w - 18), cx + 8, sy + 11);
         }
       }
     }
@@ -784,7 +786,7 @@ export function createTimelineSource(): TimelineSource {
       ctx.font = "10px ui-monospace, Menlo, monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(`${c.label} · ${fmtDur(c.period)}`, 0, 0);
+      ctx.fillText(`${tr(c.label)} · ${fmtDur(c.period)}`, 0, 0);
       ctx.restore();
     });
   }
@@ -816,11 +818,11 @@ export function createTimelineSource(): TimelineSource {
     const cx = (TRACK_X0 + W) / 2;
     if (aboveN) {
       const dist = above ? fmtDur(topW - worldOf(above.y)) : "";
-      badge(ctx, theme, cx, HEADER_H + 12, "▲", above?.label, dist, aboveN);
+      badge(ctx, theme, cx, HEADER_H + 12, "▲", above ? tr(above.label) : undefined, dist, aboveN);
     }
     if (belowN) {
       const dist = below ? fmtDur(worldOf(below.y) - botW) : "";
-      badge(ctx, theme, cx, H - 12, "▼", below?.label, dist, belowN);
+      badge(ctx, theme, cx, H - 12, "▼", below ? tr(below.label) : undefined, dist, belowN);
     }
   }
 
@@ -863,6 +865,21 @@ export function createTimelineSource(): TimelineSource {
     },
     setOnUpdate(fn) {
       onUpdate = fn;
+    },
+    strings() {
+      const s = new Set<string>();
+      for (const e of points) {
+        s.add(e.label);
+        if (e.detail) s.add(e.detail);
+      }
+      for (const m of CAT_META) s.add(m.label);
+      for (const era of ERAS) s.add(era.label);
+      for (const c of CYCLES) s.add(c.label);
+      return [...s];
+    },
+    setTranslate(fn) {
+      tr = fn;
+      onUpdate();
     },
     find(query, limit = 7) {
       const q = query.trim().toLowerCase();
