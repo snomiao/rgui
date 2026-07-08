@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>rgui · lane — 1-D semantic zoom</title>
+    <link rel="icon" type="image/gif" href="./assets/rgui-icon-32.gif" />
+    <link rel="alternate icon" type="image/png" href="./assets/rgui-icon-32.png" />
+    <meta
+      name="description"
+      content="rgui lane — limited-visual-width mode. Zoom is a renormalization-group flow along ONE axis: content grows taller and reveals more detail, but its width never changes. For folder trees and time series (1-D data)."
+    />
+    <script>
+      // set the theme BEFORE first paint (no flash): saved choice, else OS
+      document.documentElement.dataset.theme =
+        localStorage.getItem("rgui-theme") ??
+        (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    </script>
+    <style>
+      :root {
+        --bg: #1c2126;
+        --text: #e6e9ec;
+        --text-dim: #aeb6bf;
+        --text-muted: #8b949e;
+        --text-faint: #5c6570;
+        --border: #3a4048;
+        --panel: rgba(20, 22, 26, 0.85);
+        --panel-strong: rgba(20, 22, 26, 0.92);
+        --accent: #ffd60a;
+      }
+      :root[data-theme="light"] {
+        --bg: #f3f1ea;
+        --text: #22262b;
+        --text-dim: #4c545c;
+        --text-muted: #69737d;
+        --text-faint: #98a1aa;
+        --border: #cfc9bc;
+        --panel: rgba(252, 251, 247, 0.88);
+        --panel-strong: rgba(252, 251, 247, 0.94);
+        --accent: #c8860a;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      #viewer {
+        position: relative;
+        z-index: 1;
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        touch-action: none;
+        cursor: ns-resize;
+      }
+      /* top toolbar: dataset switch · title · home + theme */
+      #bar {
+        position: fixed;
+        top: 10px;
+        left: 12px;
+        right: 12px;
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        pointer-events: none;
+      }
+      #bar > * {
+        pointer-events: auto;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+      .seg button {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--text-dim);
+        font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        padding: 8px 13px;
+        cursor: pointer;
+        transition: color 120ms, background 120ms;
+      }
+      .seg button + button {
+        border-left: 1px solid var(--border);
+      }
+      .seg button[aria-pressed="true"] {
+        color: var(--bg);
+        background: var(--accent);
+      }
+      .seg button:not([aria-pressed="true"]):hover {
+        color: var(--accent);
+      }
+      .grow {
+        flex: 1;
+      }
+      #wordmark {
+        font-weight: 700;
+        font-size: 13px;
+        letter-spacing: -0.02em;
+        color: var(--text);
+        text-decoration: none;
+      }
+      #wordmark span {
+        color: var(--text-muted);
+        font-weight: 500;
+      }
+      .icon-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--border);
+        border-radius: 50%;
+        background: var(--panel);
+        color: var(--text-dim);
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+        text-decoration: none;
+        transition: border-color 120ms, color 120ms, transform 120ms;
+      }
+      .icon-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      #theme-toggle:hover {
+        transform: rotate(-15deg);
+      }
+      #logscale[aria-pressed="true"] {
+        background: var(--accent);
+        color: var(--bg);
+        border-color: var(--accent);
+      }
+      /* event-type filter chips (deep-time view only) */
+      #filters {
+        position: fixed;
+        top: 54px;
+        left: 12px;
+        z-index: 30;
+        display: none;
+        flex-wrap: wrap;
+        gap: 6px;
+        max-width: 40vw;
+      }
+      #filters .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 9px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: var(--panel);
+        color: var(--text-muted);
+        font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        cursor: pointer;
+        user-select: none;
+        transition: color 120ms, border-color 120ms, opacity 120ms;
+      }
+      #filters .chip .swatch {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      #filters .chip[aria-pressed="false"] {
+        opacity: 0.42;
+      }
+      #filters .chip[aria-pressed="true"] {
+        color: var(--text);
+        border-color: var(--text-faint);
+      }
+      #debug {
+        position: fixed;
+        bottom: 10px;
+        left: 12px;
+        z-index: 30;
+        padding: 6px 8px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        color: var(--text);
+        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre;
+        pointer-events: none;
+        user-select: none;
+      }
+      #debug .dim {
+        color: var(--text-muted);
+      }
+      #debug .hi {
+        color: var(--accent);
+      }
+      #hint {
+        position: fixed;
+        bottom: 12px;
+        right: 12px;
+        z-index: 30;
+        max-width: 46ch;
+        text-align: right;
+        color: var(--text-faint);
+        font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        pointer-events: none;
+        user-select: none;
+      }
+      #hint b {
+        color: var(--text-muted);
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewer"></canvas>
+
+    <div id="bar">
+      <div class="seg" id="dataset" role="group" aria-label="dataset">
+        <button data-src="tree" aria-pressed="true">📁 Folder tree</button>
+        <button data-src="time" aria-pressed="false">🌌 Deep time</button>
+        <button data-src="series" aria-pressed="false">📈 Signal</button>
+      </div>
+      <button class="icon-btn" id="logscale" title="Toggle symlog value axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log</button>
+      <div class="grow"></div>
+      <a id="wordmark" href="./index.html">RGUI<span> · lane</span></a>
+      <a class="icon-btn" id="home" href="./index.html" title="Infinite-canvas demo">⊞</a>
+      <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">◐</button>
+    </div>
+
+    <div id="filters" role="group" aria-label="event types"></div>
+
+    <div id="debug"></div>
+    <div id="hint">
+      <b>scroll</b> = move · <b>⌘/ctrl-scroll</b> or <b>pinch</b> = zoom (faster the harder you flick) · <b>R/F</b> = zoom · <b>W/S</b> = scroll<br />
+      zoom grows height &amp; detail — width never changes
+    </div>
+
+    <script type="module" src="/src/lane-main.ts"></script>
+  </body>
+</html>
