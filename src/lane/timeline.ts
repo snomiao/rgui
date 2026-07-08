@@ -238,6 +238,40 @@ const CIV: Ev[] = [
   { y: PRESENT_YEAR - 1868, label: "Meiji Restoration", imp: 0.58, cat: "human", detail: "Japan modernizes", span: 3 },
 ];
 
+// programming languages — first appearance (Software track)
+const LANGS: Ev[] = [
+  { y: PRESENT_YEAR - 1957, label: "Fortran", imp: 0.56, cat: "repo", detail: "first appeared", span: 0.5 },
+  { y: PRESENT_YEAR - 1958, label: "Lisp", imp: 0.55, cat: "repo", detail: "McCarthy", span: 0.5 },
+  { y: PRESENT_YEAR - 1959, label: "COBOL", imp: 0.5, cat: "repo", span: 0.5 },
+  { y: PRESENT_YEAR - 1972, label: "C", imp: 0.6, cat: "repo", detail: "Ritchie, Bell Labs", span: 0.5 },
+  { y: PRESENT_YEAR - 1983, label: "C++", imp: 0.55, cat: "repo", detail: "Stroustrup", span: 0.5 },
+  { y: PRESENT_YEAR - 1991, label: "Python", imp: 0.58, cat: "repo", detail: "van Rossum", span: 0.5 },
+  { y: PRESENT_YEAR - 1995, label: "Java · JavaScript · Ruby · PHP", imp: 0.58, cat: "repo", detail: "the 1995 wave", span: 0.5 },
+  { y: PRESENT_YEAR - 2009, label: "Go", imp: 0.52, cat: "repo", detail: "Google", span: 0.5 },
+  { y: PRESENT_YEAR - 2010, label: "Rust", imp: 0.54, cat: "repo", detail: "Mozilla", span: 0.5 },
+  { y: PRESENT_YEAR - 2012, label: "TypeScript", imp: 0.54, cat: "repo", detail: "Microsoft", span: 0.5 },
+  { y: PRESENT_YEAR - 2014, label: "Swift", imp: 0.5, cat: "repo", detail: "Apple", span: 0.5 },
+];
+
+// births of historical figures (Humans track)
+const BORN: Ev[] = [
+  { y: PRESENT_YEAR + 563, label: "Buddha born", imp: 0.6, cat: "human", detail: "Siddhārtha Gautama" },
+  { y: PRESENT_YEAR + 551, label: "Confucius born", imp: 0.6, cat: "human" },
+  { y: PRESENT_YEAR + 470, label: "Socrates born", imp: 0.56, cat: "human" },
+  { y: PRESENT_YEAR + 384, label: "Aristotle born", imp: 0.56, cat: "human" },
+  { y: PRESENT_YEAR + 100, label: "Julius Caesar born", imp: 0.54, cat: "human" },
+  { y: PRESENT_YEAR + 4, label: "Jesus born", imp: 0.62, cat: "human", detail: "~4 BCE" },
+  { y: PRESENT_YEAR - 570, label: "Muhammad born", imp: 0.6, cat: "human" },
+  { y: PRESENT_YEAR - 1452, label: "Leonardo da Vinci born", imp: 0.58, cat: "human" },
+  { y: PRESENT_YEAR - 1564, label: "Galileo · Shakespeare born", imp: 0.58, cat: "human", detail: "both 1564" },
+  { y: PRESENT_YEAR - 1643, label: "Isaac Newton born", imp: 0.6, cat: "human" },
+  { y: PRESENT_YEAR - 1756, label: "Mozart born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1809, label: "Darwin · Lincoln born", imp: 0.56, cat: "human", detail: "same day, 1809" },
+  { y: PRESENT_YEAR - 1867, label: "Marie Curie born", imp: 0.56, cat: "human" },
+  { y: PRESENT_YEAR - 1879, label: "Einstein born", imp: 0.62, cat: "human", span: 0.5 },
+  { y: PRESENT_YEAR - 1912, label: "Alan Turing born", imp: 0.58, cat: "human", span: 0.5 },
+];
+
 // predicted future events (negative years BP = ahead of now)
 const FUTURE: Ev[] = [
   { y: PRESENT_YEAR - 2038, label: "Year 2038 problem", imp: 0.5, cat: "future", detail: "32-bit Unix time overflows" },
@@ -351,9 +385,9 @@ export interface TimelineSource extends LaneSource {
 }
 
 export function createTimelineSource(): TimelineSource {
-  const points: Ev[] = [...EVENTS, ...LINUX, ...CIV, ...FUTURE].sort(
-    (a, b) => b.y - a.y,
-  );
+  const points: Ev[] = [
+    ...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE,
+  ].sort((a, b) => b.y - a.y);
   const byCat = new Map<Cat, Ev[]>();
   for (const e of points) (byCat.get(e.cat) ?? byCat.set(e.cat, []).get(e.cat)!).push(e);
 
