@@ -2,12 +2,12 @@
  * rgui lane source — deep time (Big Bang → far future), the widest 1-D zoom.
  *
  * One lane spanning ~13.8 billion years of past and ~10 billion of predicted
- * future — roughly 25 orders of magnitude once you reach dated releases. The
- * world axis is LINEAR "years before present": now ≈ 0, the Big Bang at −13.8e9
- * (top), the far future below. Keeping *now* at 0 is what lets a linear axis
- * work without a log scale — float precision is highest near 0, exactly where
- * the finest events (dated releases, eclipses) live, while the coarse ends need
- * no sub-year precision anyway.
+ * future — roughly 25 orders of magnitude of time. The world axis is a LOG
+ * (symlog) map of "years before present" by default: worldY = ∓log10(1+|yBP|/1s)
+ * so the WHOLE sweep — Big Bang (top) → now → far future (bottom) — fits on one
+ * screen, each decade of time taking a constant span, with a 1-second linear
+ * core so there is no singularity at now. Zoom just adds label density. Pass
+ * { logAxis:false } for the linear axis (worldY = −yBP; roam by zooming).
  *
  * Features layered onto the one-axis semantic zoom:
  *   • adaptive time ruler (Gyr → Myr → kyr → year → date → time)
@@ -107,11 +107,10 @@ function spanOf(e: Ev): number {
  * the whole-universe scale while a minor one only appears once you zoom into
  * its neighbourhood. `imp^4` makes the fade-out steep.
  */
-const INFLUENCE_BASE = 5.5e10; // > full extent, so imp≈1 is always labelled
-const INFLUENCE_DOTS = 12; // dots linger this many × past the label cutoff
-function influenceOf(e: Ev): number {
-  return e.influence ?? INFLUENCE_BASE * Math.pow(e.imp, 4);
-}
+// influence-scale LOD is computed per-instance (units differ: years on a
+// linear axis, log-decades on a log axis) — see createTimelineSource.
+const INFLUENCE_BASE_LINEAR = 5.5e10; // > full extent (years) → imp≈1 always
+const INFLUENCE_BASE_LOG = 45; // > full extent (log-decades) → imp≈1 always
 
 interface Era {
   from: number; // older bound (years BP)
@@ -319,6 +318,12 @@ const STEPS = [
   1 / 52, DAY, 6 * HOUR, HOUR, 10 * MIN, MIN, 10 * SEC, SEC,
 ];
 
+// round-time anchors for the LOG ruler — one clean tick per decade of time
+const NICE_TIMES = [
+  SEC, 10 * SEC, MIN, 10 * MIN, HOUR, 6 * HOUR, DAY, 7 * DAY, 30 * DAY,
+  1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10,
+];
+
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 function fmtLabel(yBP: number, step: number): string {
@@ -403,7 +408,9 @@ export interface TimelineSource extends LaneSource {
   setTranslate(fn: (s: string) => string): void;
 }
 
-export function createTimelineSource(): TimelineSource {
+export function createTimelineSource(
+  opts: { logAxis?: boolean } = {},
+): TimelineSource {
   let points: Ev[] = [
     ...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE,
   ].sort((a, b) => b.y - a.y);
@@ -427,15 +434,14 @@ export function createTimelineSource(): TimelineSource {
   }
   function maybeFetch(view: LaneView) {
     if (!enabled.has("repo")) return;
-    const span = view.height / view.zoomY; // years visible
-    const centerYBP = -screenToWorldY(view, view.height / 2);
-    if (span > 3 || centerYBP < -0.2 || centerYBP > 35) return; // git-era, zoomed in
-    const key = "linux:" + Math.round(centerYBP * 3); // ~4-month buckets
+    const topYBP = yBPof(screenToWorldY(view, -20)); // older edge (years BP)
+    const botYBP = Math.max(0, yBPof(screenToWorldY(view, view.height + 20)));
+    // active when the recent (git-era) window is in view and narrow enough
+    if (topYBP < 0 || topYBP > 40 || topYBP - botYBP > 6) return;
+    const key = "linux:" + Math.round(((topYBP + botYBP) / 2) * 3);
     if (fetchedKeys.has(key) || inflight) return;
     fetchedKeys.add(key);
     inflight = true;
-    const topYBP = -screenToWorldY(view, -20);
-    const botYBP = Math.max(0, -screenToWorldY(view, view.height + 20));
     const sinceISO = new Date((PRESENT_EPOCH - topYBP * SPY) * 1000).toISOString();
     const untilISO = new Date((PRESENT_EPOCH - botYBP * SPY) * 1000).toISOString();
     fetch(
@@ -462,7 +468,40 @@ export function createTimelineSource(): TimelineSource {
   }
 
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
-  const worldOf = (yBP: number) => -yBP;
+
+  // ── axis transform ────────────────────────────────────────────────────────
+  // LOG (default): symlog centred at "now" — worldY = ∓log10(1+|yBP|/LIN), so
+  // the whole 13.8-Gyr past AND the far future fit on one screen, each decade
+  // of time taking a constant span. LIN (1 s) is the linear core near now, so
+  // there's no singularity at yBP=0. LINEAR keeps worldY = −yBP (zoom to roam).
+  const LOG_AXIS = opts.logAxis ?? true;
+  const LIN = SEC; // symlog linear threshold: 1 second
+  const worldOf = (yBP: number) =>
+    LOG_AXIS
+      ? -Math.sign(yBP) * Math.log10(1 + Math.abs(yBP) / LIN)
+      : -yBP;
+  const yBPof = (worldY: number) => {
+    const s = -worldY;
+    return LOG_AXIS
+      ? Math.sign(s) * (Math.pow(10, Math.abs(s)) - 1) * LIN
+      : s;
+  };
+  // influence LOD threshold, in current world units (years or log-decades)
+  const influenceOf = (e: Ev) =>
+    e.influence ??
+    (LOG_AXIS
+      ? INFLUENCE_BASE_LOG * Math.pow(e.imp, 3)
+      : INFLUENCE_BASE_LINEAR * Math.pow(e.imp, 4));
+  const INFLUENCE_DOTS = LOG_AXIS ? 3 : 12; // dots linger past the label cutoff
+
+  // world-span (units) a focus/search should frame around an event — its own
+  // uncertainty widened for context, floored so precise events don't over-zoom
+  const ctxWorld = (e: Ev) => {
+    const s = spanOf(e);
+    const w = Math.abs(worldOf(e.y - s) - worldOf(e.y + s));
+    return Math.max(w * 15, LOG_AXIS ? 1.2 : 1e-9);
+  };
+
   let tr: (s: string) => string = (s) => s; // label translator (i18n)
 
   // A track's "demand" = proximity-weighted importance mass of its events:
@@ -569,13 +608,35 @@ export function createTimelineSource(): TimelineSource {
     topW: number,
     botW: number,
   ) {
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    ctx.textBaseline = "middle";
+    if (LOG_AXIS) {
+      // ticks at round times (past & future), positioned by their log worldY,
+      // deconflicted by on-screen gap; labels are relative durations
+      const ticks: number[] = [];
+      for (const t of NICE_TIMES) ticks.push(t, -t);
+      ticks.sort((a, b) => worldOf(a) - worldOf(b)); // top → bottom
+      let lastSy = -Infinity;
+      for (const yBP of ticks) {
+        const sy = worldToScreenY(view, worldOf(yBP));
+        if (sy < -20 || sy > H + 20 || sy - lastSy < 30) continue;
+        lastSy = sy;
+        ctx.strokeStyle = withAlpha(theme.textFaint, 0.12);
+        ctx.beginPath();
+        ctx.moveTo(RULER_W, sy + 0.5);
+        ctx.lineTo(W, sy + 0.5);
+        ctx.stroke();
+        ctx.fillStyle = theme.textMuted;
+        ctx.textAlign = "right";
+        ctx.fillText((yBP < 0 ? "+" : "") + fmtDur(Math.abs(yBP)), RULER_W - 6, sy);
+      }
+      return;
+    }
     let step = STEPS[0]!;
     for (const s of STEPS) {
       if (s * view.zoomY >= 66) step = s;
       else break;
     }
-    ctx.font = "10px ui-monospace, Menlo, monospace";
-    ctx.textBaseline = "middle";
     for (let g = Math.floor(topW / step) * step; g <= botW + step; g += step) {
       const sy = worldToScreenY(view, g);
       if (sy < -20 || sy > H + 20) continue;
@@ -689,10 +750,10 @@ export function createTimelineSource(): TimelineSource {
       }
       placed.push(sy);
       const span = spanOf(e);
-      if (span > 0 && span * view.zoomY * 2 >= 10) {
+      const yTop = span > 0 ? worldToScreenY(view, worldOf(e.y + span)) : sy;
+      const yBot = span > 0 ? worldToScreenY(view, worldOf(e.y - span)) : sy;
+      if (span > 0 && yBot - yTop >= 10) {
         // fuzzy time → soft uncertainty band (a blurred interval) + nominal line
-        const yTop = worldToScreenY(view, worldOf(e.y + span));
-        const yBot = worldToScreenY(view, worldOf(e.y - span));
         const a = Math.max(yTop, -2);
         const b = Math.min(yBot, H + 2);
         const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
@@ -745,10 +806,20 @@ export function createTimelineSource(): TimelineSource {
     topW: number,
     botW: number,
   ) {
-    // a cycle is "active" when its period is resolvable at this zoom
+    // visible time window (years BP); ticks are computed in TIME then mapped
+    // through worldOf, so this works on both linear and log axes
+    const topYBP = yBPof(topW);
+    const botYBP = Math.max(0, yBPof(botW));
+    const midYBP = (topYBP + botYBP) / 2 || 1;
+    // a cycle is "active" when its period is locally resolvable on screen
+    const localPx = (c: Cycle) =>
+      Math.abs(
+        worldToScreenY(view, worldOf(midYBP)) -
+          worldToScreenY(view, worldOf(midYBP + c.period)),
+      );
     const active = CYCLES.filter((c) => {
-      const px = c.period * view.zoomY;
-      return px >= 9 && px <= H * 1.6;
+      const px = localPx(c);
+      return px >= 6 && px <= H * 1.6;
     });
     if (!active.length) {
       ctx.font = "10px ui-monospace, Menlo, monospace";
@@ -761,18 +832,18 @@ export function createTimelineSource(): TimelineSource {
     const sub = w / active.length;
     active.forEach((c, i) => {
       const cx = x0 + i * sub + sub / 2;
-      const fromW = worldOf(c.from ?? BIG_BANG);
-      const toW = worldOf(c.to ?? 0);
-      const lo = Math.max(topW, fromW);
-      const hi = Math.min(botW, toW);
+      const lo = Math.max(botYBP, c.to ?? 0);
+      const hi = Math.min(topYBP, c.from ?? BIG_BANG);
       ctx.strokeStyle = withAlpha(c.color, 0.7);
       ctx.lineWidth = 1;
       let n = 0;
-      const first = Math.ceil(lo / c.period);
-      const last = Math.floor(hi / c.period);
-      for (let k = first; k <= last && n < 240; k++, n++) {
-        const sy = worldToScreenY(view, k * c.period);
-        if (sy < HEADER_H || sy > H) continue;
+      let lastSy = Infinity;
+      const first = Math.floor(lo / c.period);
+      const last = Math.ceil(hi / c.period);
+      for (let k = first; k <= last && n < 400; k++, n++) {
+        const sy = worldToScreenY(view, worldOf(k * c.period));
+        if (sy < HEADER_H || sy > H || Math.abs(sy - lastSy) < 3) continue;
+        lastSy = sy;
         ctx.beginPath();
         ctx.moveTo(cx - 4, sy + 0.5);
         ctx.lineTo(cx + 4, sy + 0.5);
@@ -817,11 +888,11 @@ export function createTimelineSource(): TimelineSource {
     }
     const cx = (TRACK_X0 + W) / 2;
     if (aboveN) {
-      const dist = above ? fmtDur(topW - worldOf(above.y)) : "";
+      const dist = above ? fmtDur(Math.abs(above.y - yBPof(topW))) : "";
       badge(ctx, theme, cx, HEADER_H + 12, "▲", above ? tr(above.label) : undefined, dist, aboveN);
     }
     if (belowN) {
-      const dist = below ? fmtDur(worldOf(below.y) - botW) : "";
+      const dist = below ? fmtDur(Math.abs(yBPof(botW) - below.y)) : "";
       badge(ctx, theme, cx, H - 12, "▼", below ? tr(below.label) : undefined, dist, belowN);
     }
   }
@@ -902,11 +973,14 @@ export function createTimelineSource(): TimelineSource {
         cat: e.cat,
         color: CAT_COLOR[e.cat],
         center: worldOf(e.y),
-        scale: Math.max(spanOf(e) * 30, 1e-9),
+        scale: ctxWorld(e),
       }));
     },
-    extent: () => ({ min: worldOf(BIG_BANG) * 1.005, max: FUTURE_HORIZON * 1.02 }),
-    maxZoom: 5e6,
+    extent: () => ({
+      min: worldOf(BIG_BANG) * 1.01,
+      max: worldOf(-FUTURE_HORIZON) * 1.01,
+    }),
+    maxZoom: LOG_AXIS ? 5000 : 5e6,
     // viewport emptiness (target-density): 1 when a void, 0 once ≥ TARGET
     // in-scale events are on screen — drives scroll-into-void auto-zoom-out
     emptiness: (view) => {
@@ -935,8 +1009,7 @@ export function createTimelineSource(): TimelineSource {
         }
       }
       if (!best) return null;
-      const ctxWindow = Math.max(spanOf(best) * 30, 1e-9); // ~its own scale
-      return { center: worldOf(best.y), zoom: view.height / ctxWindow };
+      return { center: worldOf(best.y), zoom: view.height / ctxWorld(best) };
     },
     // the zoom anchor gravitates to nearby enabled events (and the now line);
     // each carries its track-centre x so the snap is track-aware
@@ -955,7 +1028,7 @@ export function createTimelineSource(): TimelineSource {
     },
     draw,
     hudLine: (view) => {
-      const yBP = -screenToWorldY(view, view.height / 2);
+      const yBP = yBPof(screenToWorldY(view, view.height / 2));
       if (yBP > BIG_BANG) return "before time";
       if (yBP < 0) return `in ${fmtDur(-yBP)}`; // future
       if (yBP >= 1e6) return fmtLabel(yBP, 1e6);
