@@ -225,6 +225,8 @@ if (restored.scrollY != null || restored.zoomY != null) {
     zoomY: restored.zoomY ?? undefined,
   });
 }
+// redraw when the timeline lazily fetches web data (Linux commits)
+timeSource.setOnUpdate(() => lane.invalidate());
 
 // ── dataset switcher ──────────────────────────────────────────────────────
 const seg = document.querySelector<HTMLDivElement>("#dataset")!;

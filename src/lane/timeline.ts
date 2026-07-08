@@ -395,14 +395,67 @@ export interface TimelineSource extends LaneSource {
   setEnabled(cat: Cat, on: boolean): void;
   /** substring search over event labels/details, ranked by importance */
   find(query: string, limit?: number): SearchHit[];
+  /** called when lazily-fetched events arrive (host wires it to invalidate) */
+  setOnUpdate(fn: () => void): void;
 }
 
 export function createTimelineSource(): TimelineSource {
-  const points: Ev[] = [
+  let points: Ev[] = [
     ...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE,
   ].sort((a, b) => b.y - a.y);
-  const byCat = new Map<Cat, Ev[]>();
-  for (const e of points) (byCat.get(e.cat) ?? byCat.set(e.cat, []).get(e.cat)!).push(e);
+  let byCat = new Map<Cat, Ev[]>();
+  function reindex() {
+    byCat = new Map();
+    for (const e of points)
+      (byCat.get(e.cat) ?? byCat.set(e.cat, []).get(e.cat)!).push(e);
+  }
+  reindex();
+
+  // ── lazy web fetch: real Linux-kernel commits at the commit scale ─────────
+  let onUpdate: () => void = () => {};
+  const fetchedKeys = new Set<string>();
+  let inflight = false;
+  function ingest(evs: Ev[]) {
+    if (!evs.length) return;
+    points = points.concat(evs).sort((a, b) => b.y - a.y);
+    reindex();
+    onUpdate();
+  }
+  function maybeFetch(view: LaneView) {
+    if (!enabled.has("repo")) return;
+    const span = view.height / view.zoomY; // years visible
+    const centerYBP = -screenToWorldY(view, view.height / 2);
+    if (span > 3 || centerYBP < -0.2 || centerYBP > 35) return; // git-era, zoomed in
+    const key = "linux:" + Math.round(centerYBP * 3); // ~4-month buckets
+    if (fetchedKeys.has(key) || inflight) return;
+    fetchedKeys.add(key);
+    inflight = true;
+    const topYBP = -screenToWorldY(view, -20);
+    const botYBP = Math.max(0, -screenToWorldY(view, view.height + 20));
+    const sinceISO = new Date((PRESENT_EPOCH - topYBP * SPY) * 1000).toISOString();
+    const untilISO = new Date((PRESENT_EPOCH - botYBP * SPY) * 1000).toISOString();
+    fetch(
+      `https://api.github.com/repos/torvalds/linux/commits?since=${sinceISO}&until=${untilISO}&per_page=40`,
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: Array<{ commit: { message: string; author: { date: string } } }>) => {
+        if (!Array.isArray(data)) return;
+        ingest(
+          data.map((c) => ({
+            y: (PRESENT_EPOCH - Date.parse(c.commit.author.date) / 1000) / SPY,
+            label: (String(c.commit.message).split("\n")[0] ?? "").slice(0, 72),
+            detail: "torvalds/linux",
+            imp: 0.3,
+            cat: "repo" as Cat,
+            span: 0.5 * DAY,
+          })),
+        );
+      })
+      .catch(() => {})
+      .finally(() => {
+        inflight = false;
+      });
+  }
 
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
   const worldOf = (yBP: number) => -yBP;
@@ -459,6 +512,7 @@ export function createTimelineSource(): TimelineSource {
     const topW = screenToWorldY(view, 0);
     const botW = screenToWorldY(view, H);
 
+    maybeFetch(view); // lazily pull real commits when zoomed to their scale
     drawEras(ctx, view, theme, H);
     drawRuler(ctx, view, theme, W, H, topW, botW);
 
@@ -806,6 +860,9 @@ export function createTimelineSource(): TimelineSource {
     isEnabled: (cat) => enabled.has(cat),
     setEnabled(cat, on) {
       on ? enabled.add(cat) : enabled.delete(cat);
+    },
+    setOnUpdate(fn) {
+      onUpdate = fn;
     },
     find(query, limit = 7) {
       const q = query.trim().toLowerCase();

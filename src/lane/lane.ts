@@ -132,7 +132,8 @@ export function createLane(
   // not-quite-aimed target doesn't drift off-screen as you keep zooming. The
   // pull is gaussian: ~full lock within SNAP_SIGMA px, fading to plain cursor
   // zoom farther out — smooth, never a hard switch.
-  const SNAP_SIGMA = 44; // px capture radius
+  const SNAP_SIGMA = 84; // px capture radius (wide)
+  const SNAP_BOOST = 1.8; // >1 → a full-snap plateau near the core, smooth edges
   function zoomAnchor(rawScreenY: number): number {
     const targets = source.snapTargets?.(view);
     if (!targets || !targets.length) return rawScreenY;
@@ -150,7 +151,8 @@ export function createLane(
         bestTy = ty;
       }
     }
-    const g = Math.exp(-bestD2 / (SNAP_SIGMA * SNAP_SIGMA));
+    // boosted gaussian: ≈1 (full lock) across the core, still eases at the edge
+    const g = Math.min(1, SNAP_BOOST * Math.exp(-bestD2 / (SNAP_SIGMA * SNAP_SIGMA)));
     return rawScreenY + g * (bestTy - rawScreenY);
   }
 
