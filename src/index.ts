@@ -131,6 +131,8 @@ export {
   panelLayout,
   drawPanels,
   panelHitAt,
+  panelSnap,
+  panelCoverage,
   PANEL,
   type Panel,
   type PanelItem,

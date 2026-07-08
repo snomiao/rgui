@@ -18,6 +18,13 @@ import {
   type GraphNode,
 } from "./graph";
 import { kindColor, categoryColor, KIND_COLOR } from "../render/graphLayer";
+import {
+  panelCoverage,
+  panelSnap,
+  PANEL,
+  type Panel,
+  type PanelRect,
+} from "../render/panelLayer";
 import { buildRenderGraph, pseudoRect } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
@@ -503,5 +510,42 @@ describe("open kinds & categories", () => {
     expect(kindColor("report")).toBe(c); // deterministic
     expect(categoryColor("team")).toMatch(/^#[0-9a-f]{6}$/);
     expect(categoryColor("team")).not.toBe(categoryColor("member"));
+  });
+});
+
+describe("panels: drag snap + boundary dissolution", () => {
+  const rect = (id: string, x: number, y: number, w = 180, h = 100): PanelRect => ({
+    panel: { id, title: id, items: [] } as Panel,
+    x,
+    y,
+    w,
+    h,
+    itemsY: y + PANEL.headerH + PANEL.pad,
+  });
+
+  test("panelSnap: viewport margin, edge alignment and flush contact", () => {
+    const size = { width: 800, height: 600 };
+    // near the left margin → snaps onto it
+    expect(panelSnap(9, 300, 180, 100, [], size).x).toBe(PANEL.margin);
+    // beyond the threshold → untouched
+    expect(panelSnap(40, 300, 180, 100, [], size)).toEqual({ x: 40, y: 300 });
+    const o = rect("o", 200, 200);
+    // dropping just below another panel → flush below + left edges align
+    const snapped = panelSnap(195, 296, 180, 100, [o], size);
+    expect(snapped).toEqual({ x: 200, y: 300 });
+    // flush against the right side
+    expect(panelSnap(385, 210, 180, 100, [o], size).x).toBe(380);
+    // far away on the orthogonal axis → panel candidates don't apply
+    expect(panelSnap(195, 500, 180, 100, [o], size).x).toBe(195);
+  });
+
+  test("panelCoverage: flush panels dissolve their shared border", () => {
+    const a = rect("a", 100, 100, 180, 100);
+    const b = rect("b", 100, 200, 180, 80); // flush below a
+    const cov = panelCoverage([a, b]);
+    expect(cov.get("a")!.bottom).toEqual([{ from: 100, to: 280 }]);
+    expect(cov.get("b")!.top).toEqual([{ from: 100, to: 280 }]);
+    // separated panels share nothing
+    expect(panelCoverage([a, rect("c", 100, 320)]).size).toBe(0);
   });
 });

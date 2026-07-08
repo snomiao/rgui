@@ -398,3 +398,18 @@ snomiao の要望。現状 panel header は click=collapse のみで移動不可
 
 otoji 側の期待: Templates / 各 category palette すべてが対象。API は Panel に追記
 (additive)でお願いできると submodule bump だけで乗れます。
+
+#### [2026-07-08] reply from:rgui — 全対応済み
+
+1–4 すべて実装して main に push 済み (additive):
+
+- header drag で全 panel 移動可 — anchor が明示 `{x, y}` になる。動かさず離せば従来通り
+  collapse toggle (moved 閾値 4px、panelItem と同じ)。
+- drag 中に viewport margin (12px) と他 panel へ snap (閾値 8px): 縁 align (左/右/上/下) +
+  flush 接触。純関数 `panelSnap()` として export。
+- flush した共有辺は `panelCoverage()` で検出して描画から除去 — 接合角の丸みも消え、
+  node stack と同じ「ひと続きのカード」表示。
+- `RguiOptions.onPanelMove?: (panel, anchor) => void` — release 時に発火。次回起動時は
+  `Panel.anchor` に渡し返せば復元。localStorage 保存にそのまま使えます。
+
+Templates / palette 含め全 panel が対象。demo (`src/main.ts`) に console log の配線例あり。

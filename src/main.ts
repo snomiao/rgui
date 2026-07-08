@@ -102,6 +102,8 @@ const viewer = rgui(canvas, {
     return key ? { kind: "kv", rows: [[key[0], key[1]]] } : null;
   },
   onPinChange: (id, pinned) => console.log("[rgui] pin", id, pinned),
+  onPanelMove: (panel, anchor) =>
+    console.log("[rgui] panelMove", panel.id, anchor),
   panels: [
     {
       id: "palette",

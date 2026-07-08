@@ -22,6 +22,8 @@ import {
   drawPanels,
   panelHitAt,
   panelLayout,
+  panelSnap,
+  PANEL,
   type Panel,
   type PanelItem,
   type PanelRect,
@@ -124,6 +126,14 @@ export interface RguiOptions {
    * click-to-add (Panel.onItemClick) and drag-onto-canvas (Panel.onItemDrop)
    */
   panels?: Panel[];
+  /**
+   * a panel was moved by a header drag (fires on release): its anchor is
+   * now an explicit screen position — persist it (e.g. localStorage) and
+   * pass it back via Panel.anchor on the next run. While dragging, panels
+   * snap to the viewport margins and flush against other panels; flush
+   * boundaries dissolve like snapped nodes.
+   */
+  onPanelMove?: (panel: Panel, anchor: { x: number; y: number }) => void;
   /**
    * summarize rule: when a node is too small for its fields ("small") or
    * nodes merge into a pseudo-node ("pseudo"), rgui asks for compact
@@ -945,6 +955,16 @@ export function createRgui(
         downY: number;
         moved: boolean;
       }
+    | {
+        type: "panel";
+        panel: Panel;
+        /** pointer offset from the panel's top-left at grab time */
+        dx: number;
+        dy: number;
+        downX: number;
+        downY: number;
+        moved: boolean;
+      }
     | null = null;
 
   function drawGhostWire(ctx: CanvasRenderingContext2D, t: ViewTransform) {
@@ -1005,6 +1025,16 @@ export function createRgui(
     return null;
   }
 
+  /** capture-safe: a pointer can be gone by capture time (pen lifted,
+   * synthetic events) — losing capture is fine, throwing mid-drag is not */
+  const capturePointer = (ev: PointerEvent) => {
+    try {
+      canvas.setPointerCapture(ev.pointerId);
+    } catch {
+      /* no active pointer */
+    }
+  };
+
   const onPointerDown = (ev: PointerEvent) => {
     if (spaceHeld && input === "figma") return; // space+drag = pan (d3 owns it)
     // chrome hit-tests use RAW screen coords; graph logic uses VIEW coords
@@ -1013,8 +1043,18 @@ export function createRgui(
     const ph2 = panelHitAt(lastPanelRects, ev.offsetX, ev.offsetY);
     if (ph2) {
       if (ph2.type === "header") {
-        ph2.rect.panel.collapsed = !ph2.rect.panel.collapsed;
-        invalidate();
+        // header press starts a panel drag; releasing without moving is
+        // the old click → collapse toggle
+        drag = {
+          type: "panel",
+          panel: ph2.rect.panel,
+          dx: ev.offsetX - ph2.rect.x,
+          dy: ev.offsetY - ph2.rect.y,
+          downX: ev.offsetX,
+          downY: ev.offsetY,
+          moved: false,
+        };
+        capturePointer(ev);
       } else if (ph2.type === "item") {
         drag = {
           type: "panelItem",
@@ -1026,7 +1066,7 @@ export function createRgui(
           downY: ev.offsetY,
           moved: false,
         };
-        canvas.setPointerCapture(ev.pointerId);
+        capturePointer(ev);
       }
       return; // body clicks are consumed (panel blocks the canvas below)
     }
@@ -1041,7 +1081,7 @@ export function createRgui(
     const gripNode = gripHit && baseOf(gripHit);
     if (gripNode && !gripNode.pinned) {
       drag = { type: "resize", node: gripNode, moved: false };
-      canvas.setPointerCapture(ev.pointerId);
+      capturePointer(ev);
       return;
     }
     // pin glyph toggles pinned state
@@ -1057,7 +1097,7 @@ export function createRgui(
     const ph = portAt(vx0, vy0);
     if (ph && (options.onConnect || options.isValidConnection)) {
       drag = { type: "wire", from: ph, toSx: vx0, toSy: vy0 };
-      canvas.setPointerCapture(ev.pointerId);
+      capturePointer(ev);
       return;
     }
     const hit = hitAt(vx0, vy0);
@@ -1077,7 +1117,7 @@ export function createRgui(
           y1: ev.offsetY,
           button: ev.button,
         };
-        canvas.setPointerCapture(ev.pointerId);
+        capturePointer(ev);
       }
       return;
     }
@@ -1092,7 +1132,7 @@ export function createRgui(
         .map((id) => graph.nodes.find((m) => m.id === id))
         .filter((m): m is GraphNode => !!m && !m.pinned);
       drag = { type: "group", nodes: members, wx, wy, moved: false };
-      canvas.setPointerCapture(ev.pointerId);
+      capturePointer(ev);
       return;
     }
     if (hit.type === "node") {
@@ -1133,7 +1173,7 @@ export function createRgui(
         moved: false,
       };
     }
-    canvas.setPointerCapture(ev.pointerId);
+    capturePointer(ev);
   };
 
   const onPointerMove = (ev: PointerEvent) => {
@@ -1180,6 +1220,27 @@ export function createRgui(
           Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4
         )
           drag.moved = true;
+      } else if (drag.type === "panel") {
+        if (
+          Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4
+        )
+          drag.moved = true;
+        if (drag.moved) {
+          // dragging makes the anchor an explicit screen position; snap to
+          // the viewport margins and flush against the other panels
+          const dp = drag.panel;
+          const rect = lastPanelRects.find((r) => r.panel === dp);
+          const w = rect?.w ?? dp.w ?? PANEL.defaultW;
+          const h = rect?.h ?? PANEL.headerH;
+          dp.anchor = panelSnap(
+            ev.offsetX - drag.dx,
+            ev.offsetY - drag.dy,
+            w,
+            h,
+            lastPanelRects.filter((r) => r.panel !== dp),
+            { width: canvas.clientWidth, height: canvas.clientHeight },
+          );
+        }
       } else if (drag.type === "marquee") {
         drag.x1 = ev.offsetX;
         drag.y1 = ev.offsetY;
@@ -1283,6 +1344,17 @@ export function createRgui(
           w: drag.node.w,
           h: nodeHeight(drag.node),
         });
+      drag = null;
+      invalidate();
+      return;
+    }
+    if (drag.type === "panel") {
+      if (!drag.moved) {
+        // plain header click keeps its old meaning: collapse toggle
+        drag.panel.collapsed = !drag.panel.collapsed;
+      } else if (typeof drag.panel.anchor === "object") {
+        options.onPanelMove?.(drag.panel, drag.panel.anchor);
+      }
       drag = null;
       invalidate();
       return;
