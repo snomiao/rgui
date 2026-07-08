@@ -24,4 +24,8 @@ export {
 } from "./lane.js";
 export { createTreeSource, type FileNode } from "./tree.js";
 export { createSeriesSource, type SeriesOptions } from "./timeseries.js";
-export { createTimelineSource, type TimelineSource } from "./timeline.js";
+export {
+  createTimelineSource,
+  type TimelineSource,
+  type SearchHit,
+} from "./timeline.js";

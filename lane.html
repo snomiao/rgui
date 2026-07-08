@@ -140,6 +140,68 @@
         color: var(--bg);
         border-color: var(--accent);
       }
+      /* search-to-focus */
+      #search {
+        width: 180px;
+        padding: 7px 11px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--text);
+        font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        outline: none;
+      }
+      #search:focus {
+        border-color: var(--accent);
+        width: 240px;
+      }
+      #search::placeholder {
+        color: var(--text-faint);
+      }
+      #suggest {
+        position: absolute;
+        top: 36px;
+        left: 0;
+        right: 0;
+        display: none;
+        flex-direction: column;
+        background: var(--panel-strong);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        overflow: hidden;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      #suggest:not(:empty) {
+        display: flex;
+      }
+      #suggest .hit {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        cursor: pointer;
+        border-bottom: 1px solid var(--border);
+        font: 500 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--text);
+      }
+      #suggest .hit:last-child {
+        border-bottom: 0;
+      }
+      #suggest .hit:hover,
+      #suggest .hit.active {
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      #suggest .hit .swatch {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      #suggest .hit .det {
+        color: var(--text-muted);
+        font-size: 10px;
+      }
       /* event-type filter chips (deep-time view only) */
       #filters {
         position: fixed;
@@ -225,6 +287,10 @@
         <button data-src="time" aria-pressed="false">🌌 Deep time</button>
         <button data-src="series" aria-pressed="false">📈 Signal</button>
       </div>
+      <div id="searchwrap" style="display: none; position: relative;">
+        <input id="search" type="search" placeholder="Search events…" autocomplete="off" spellcheck="false" />
+        <div id="suggest"></div>
+      </div>
       <button class="icon-btn" id="logscale" title="Toggle symlog value axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log</button>
       <div class="grow"></div>
       <a id="wordmark" href="./index.html">RGUI<span> · lane</span></a>
@@ -236,7 +302,7 @@
 
     <div id="debug"></div>
     <div id="hint">
-      <b>scroll</b> = move · <b>⌘/ctrl-scroll</b> or <b>pinch</b> = zoom (faster the harder you flick) · <b>R/F</b> = zoom · <b>W/S</b> = scroll<br />
+      <b>scroll</b> = move · <b>⌘/ctrl-scroll</b> or <b>pinch</b> = zoom (faster the harder you flick) · <b>R/F</b> or <b>D/A</b> = zoom · <b>W/S</b> = scroll · <b>dbl-click</b> = focus<br />
       zoom grows height &amp; detail — width never changes
     </div>
 

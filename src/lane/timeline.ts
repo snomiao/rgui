@@ -378,10 +378,23 @@ const TRACK_X0 = ERA_X + ERA_W + 8;
 const HEADER_H = 17; // sticky track-header strip
 const LABEL_GAP = 15; // min px between event labels within a track
 
+export interface SearchHit {
+  label: string;
+  detail?: string;
+  cat: Cat;
+  color: string;
+  /** viewport-center world-y to focus */
+  center: number;
+  /** world-span to fit (→ zoom = viewportHeight / scale) */
+  scale: number;
+}
+
 export interface TimelineSource extends LaneSource {
   readonly categories: readonly CatMeta[];
   isEnabled(cat: Cat): boolean;
   setEnabled(cat: Cat, on: boolean): void;
+  /** substring search over event labels/details, ranked by importance */
+  find(query: string, limit?: number): SearchHit[];
 }
 
 export function createTimelineSource(): TimelineSource {
@@ -793,6 +806,30 @@ export function createTimelineSource(): TimelineSource {
     isEnabled: (cat) => enabled.has(cat),
     setEnabled(cat, on) {
       on ? enabled.add(cat) : enabled.delete(cat);
+    },
+    find(query, limit = 7) {
+      const q = query.trim().toLowerCase();
+      if (!q) return [];
+      const hits: Array<{ e: Ev; rank: number }> = [];
+      for (const e of points) {
+        if (!enabled.has(e.cat)) continue;
+        const label = e.label.toLowerCase();
+        const inLabel = label.includes(q);
+        if (!inLabel && !e.detail?.toLowerCase().includes(q)) continue;
+        // rank: label-start > label-contains > detail; then importance
+        const rank =
+          (label.startsWith(q) ? 2 : inLabel ? 1 : 0) + e.imp;
+        hits.push({ e, rank });
+      }
+      hits.sort((a, b) => b.rank - a.rank);
+      return hits.slice(0, limit).map(({ e }) => ({
+        label: e.label,
+        detail: e.detail,
+        cat: e.cat,
+        color: CAT_COLOR[e.cat],
+        center: worldOf(e.y),
+        scale: Math.max(spanOf(e) * 30, 1e-9),
+      }));
     },
     extent: () => ({ min: worldOf(BIG_BANG) * 1.005, max: FUTURE_HORIZON * 1.02 }),
     maxZoom: 5e6,

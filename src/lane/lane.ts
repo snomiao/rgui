@@ -97,6 +97,10 @@ export interface Lane {
   setTheme(theme: RgThemeInput): void;
   /** re-fit the whole extent into the viewport */
   fit(): void;
+  /** restore an explicit view (won't be clobbered by auto-fit) */
+  setView(v: { scrollY?: number; zoomY?: number }): void;
+  /** animate to a focus target (center world-y + zoom), like double-click */
+  focus(target: { center: number; zoom: number }): void;
   destroy(): void;
 }
 
@@ -466,9 +470,11 @@ export function createLane(
     const now = performance.now();
     switch (e.key.toLowerCase()) {
       case "r": // zoom in
+      case "d": // zoom in (alias)
         zoomModel.pressUp(now);
         break;
       case "f": // zoom out
+      case "a": // zoom out (alias)
         zoomModel.pressDown(now);
         break;
       case "w":
@@ -489,9 +495,11 @@ export function createLane(
     if (!kbEnabled) return;
     switch (e.key.toLowerCase()) {
       case "r":
+      case "d":
         zoomModel.releaseUp();
         break;
       case "f":
+      case "a":
         zoomModel.releaseDown();
         break;
       case "w":
@@ -530,6 +538,16 @@ export function createLane(
     setTheme(next) {
       theme = resolveTheme(next);
       invalidate();
+    },
+    setView(v) {
+      if (v.zoomY != null) view.zoomY = v.zoomY;
+      if (v.scrollY != null) view.scrollY = v.scrollY;
+      fitted = true; // treat as an explicit view; don't auto-fit over it
+      focusAnim = null;
+      invalidate();
+    },
+    focus(target) {
+      focusTo(target.center, target.zoom);
     },
     destroy() {
       if (raf) cancelAnimationFrame(raf);

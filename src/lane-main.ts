@@ -184,14 +184,47 @@ const sources: Record<string, LaneSource> = {
   time: timeSource,
   series: buildSeries(),
 };
-let current = "tree";
+// ── URL-hash deep links (#src=…&y=scrollY&z=zoomY) ────────────────────────
+function parseHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const src = p.get("src");
+  const y = p.get("y");
+  const z = p.get("z");
+  return {
+    src: src && sources[src] ? src : null,
+    scrollY: y != null && isFinite(+y) ? +y : null,
+    zoomY: z != null && isFinite(+z) ? +z : null,
+  };
+}
+const restored = parseHash();
+let current = restored.src ?? "tree";
+
+let hashTimer = 0;
+function writeHash() {
+  const p = new URLSearchParams();
+  p.set("src", current);
+  p.set("y", lane.view.scrollY.toPrecision(8));
+  p.set("z", lane.view.zoomY.toPrecision(6));
+  history.replaceState(null, "", "#" + p.toString());
+}
+function scheduleHash() {
+  clearTimeout(hashTimer);
+  hashTimer = window.setTimeout(writeHash, 250);
+}
 
 const lane = createLane(canvas, {
-  source: sources.tree!,
+  source: sources[current]!,
   theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
   debug,
   maxDpr: 2,
+  onFrame: scheduleHash,
 });
+if (restored.scrollY != null || restored.zoomY != null) {
+  lane.setView({
+    scrollY: restored.scrollY ?? undefined,
+    zoomY: restored.zoomY ?? undefined,
+  });
+}
 
 // ── dataset switcher ──────────────────────────────────────────────────────
 const seg = document.querySelector<HTMLDivElement>("#dataset")!;
@@ -215,12 +248,17 @@ for (const c of timeSource.categories) {
   filters.appendChild(chip);
 }
 
+const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
 function refreshChrome() {
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
     logBtn.setAttribute("aria-pressed", String(seriesLog));
   }
   filters.style.display = current === "time" ? "flex" : "none";
+  searchWrap.style.display = current === "time" ? "" : "none";
+  for (const b of seg.querySelectorAll("button")) {
+    b.setAttribute("aria-pressed", String(b.dataset.src === current));
+  }
 }
 seg.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-src]");
@@ -229,11 +267,82 @@ seg.addEventListener("click", (e) => {
   const src = sources[key];
   if (!src) return;
   current = key;
-  for (const b of seg.querySelectorAll("button")) {
-    b.setAttribute("aria-pressed", String(b === btn));
-  }
   lane.setSource(src);
+  clearSearch();
   refreshChrome();
+  scheduleHash();
+});
+
+// ── search-to-focus (deep-time dataset) ──────────────────────────────────
+const searchEl = document.querySelector<HTMLInputElement>("#search")!;
+const suggestEl = document.querySelector<HTMLDivElement>("#suggest")!;
+type Hit = ReturnType<typeof timeSource.find>[number];
+let hits: Hit[] = [];
+let activeIdx = -1;
+
+const esc = (s: string) =>
+  s.replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!,
+  );
+function renderSuggest() {
+  suggestEl.innerHTML = hits
+    .map(
+      (h, i) =>
+        `<div class="hit${i === activeIdx ? " active" : ""}" data-i="${i}">` +
+        `<span class="swatch" style="background:${h.color}"></span>` +
+        `<span>${esc(h.label)}</span>` +
+        (h.detail ? `<span class="det">${esc(h.detail)}</span>` : "") +
+        `</div>`,
+    )
+    .join("");
+}
+function clearSearch() {
+  searchEl.value = "";
+  hits = [];
+  activeIdx = -1;
+  renderSuggest();
+}
+function doSearch() {
+  const q = searchEl.value;
+  hits = current === "time" && q.trim() ? timeSource.find(q, 7) : [];
+  activeIdx = hits.length ? 0 : -1;
+  renderSuggest();
+}
+function focusHit(h: Hit) {
+  lane.focus({ center: h.center, zoom: lane.view.height / h.scale });
+  hits = [];
+  renderSuggest();
+  searchEl.blur();
+}
+searchEl.addEventListener("input", doSearch);
+searchEl.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") {
+    activeIdx = Math.min(hits.length - 1, activeIdx + 1);
+    renderSuggest();
+    e.preventDefault();
+  } else if (e.key === "ArrowUp") {
+    activeIdx = Math.max(0, activeIdx - 1);
+    renderSuggest();
+    e.preventDefault();
+  } else if (e.key === "Enter") {
+    if (hits[activeIdx]) focusHit(hits[activeIdx]!);
+  } else if (e.key === "Escape") {
+    clearSearch();
+    searchEl.blur();
+  }
+});
+// mousedown (not click) so it fires before the input's blur clears the list
+suggestEl.addEventListener("mousedown", (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>(".hit");
+  if (!el) return;
+  e.preventDefault();
+  focusHit(hits[+el.dataset.i!]!);
+});
+searchEl.addEventListener("blur", () => {
+  setTimeout(() => {
+    hits = [];
+    renderSuggest();
+  }, 120);
 });
 
 // ── log-scale toggle (only for the Signal dataset) ────────────────────────
