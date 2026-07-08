@@ -28,8 +28,8 @@ export interface NodeHtmlOverlay {
    * "fixed" (default): screen-constant size, position glued to the node.
    * "zoom": scales with view.k like part of the node (lay out for k=1).
    * "fit": rgui measures the element's natural size and applies
-   *   scale = min(1, node screen area / natural size) — the control always
-   *   fits the node's on-screen area, whatever the node type's size.
+   *   scale = min(maxScale, node screen area / natural size) — the control fits
+   *   the node's on-screen area, whatever the node type's size.
    * In zoom/fit modes, when the applied scale drops below `minScale` the
    * overlay hides and the native/summarized content takes over.
    */
@@ -40,6 +40,14 @@ export interface NodeHtmlOverlay {
    * Hide always wins over scaling.
    */
   minScale?: number;
+  /**
+   * fit mode: cap on the applied scale (default 1 — never upscale past the
+   * element's natural size, keeping it crisp). Raise above 1 to let a small
+   * overlay UPSCALE to fill a larger node (it grows past natural size, so it
+   * fills the node's screen rect instead of sitting at native size with the
+   * node showing around it — at the cost of some blur on a bitmap/canvas child).
+   */
+  maxScale?: number;
   /**
    * "node": constrain the overlay to the node's screen rect (never larger
    * than the node); overflowing content scrolls ("auto", default) or is
@@ -211,8 +219,8 @@ export function createOverlayManager(
       const y0 = n.y * k + view.y;
       const x1 = (n.x + n.w) * k + view.x;
       const y1 = (n.y + h) * k + view.y;
-      // applied scale: zoom follows view.k; fit measures the element and
-      // fills the node's screen area (never upscaling past natural size)
+      // applied scale: zoom follows view.k; fit measures the element and fills
+      // the node's screen area, capped at maxScale (default 1 = no upscaling)
       const el = m.ov.el;
       let applied = 1;
       if (m.ov.scale === "zoom") {
@@ -221,12 +229,13 @@ export function createOverlayManager(
         const nw = el.offsetWidth || 1;
         const nh = el.offsetHeight || 1;
         const anchor0 = m.ov.anchor ?? "right";
+        const cap = m.ov.maxScale ?? 1; // default: never upscale past natural size
         applied =
           anchor0 === "over"
-            ? Math.min(1, (x1 - x0) / nw, (y1 - y0) / nh)
+            ? Math.min(cap, (x1 - x0) / nw, (y1 - y0) / nh)
             : anchor0 === "right"
-              ? Math.min(1, (y1 - y0) / nh)
-              : Math.min(1, (x1 - x0) / nw);
+              ? Math.min(cap, (y1 - y0) / nh)
+              : Math.min(cap, (x1 - x0) / nw);
       }
       // readability gate: scaled controls hide below their readable scale
       // (hide wins over scaling → the summarized content takes over);
