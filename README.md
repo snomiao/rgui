@@ -146,6 +146,21 @@ Everything above zoom is governed by a small set of composable laws:
   `first`/`last`/`count`, or custom), declared on the node via `fieldRules`, on the host via
   `fieldSummarize()`, or defaulting to mode. Booleans are ordered — OR ≡ max, AND ≡ min.
   Advanced combinators: `ordered()` (severity/latest), `topK()` (histogram), `quantile()`.
+- **Containment scopes the emergence** — `GraphNode.parent` declares that a node lives
+  INSIDE another (a structural relation like an edge, never a style tag). The container
+  renders as an open frame around its children — the sanctioned exception to one-cell-one-
+  thing: a child occupies its container's cell at a finer grid layer. Emergent merging works
+  only *within* a scope (a team's members merge into the team, never into the neighboring
+  team), and once every child falls below readability the container **absorbs** them into
+  one block named by the container. Levels absorb one at a time — teams collapse into team
+  blocks long before the company collapses into one company block — so an org chart's
+  leader/members/team/company hierarchy IS its RG-level ladder. Dragging a frame carries
+  its contents; `orgChartGraph()` demos the whole ladder.
+- **Any domain renders** — `SignalKind` and `NodeCategory` are open string types: built-ins
+  keep their hand-picked palette, any other name (`"report"`, `"team"`, …) gets a stable
+  derived color via `kindColor()`/`categoryColor()` — or assign into `KIND_COLOR`/
+  `CATEGORY_COLOR` to pick exact colors. Media pipelines, org charts, dependency graphs —
+  no registration required.
 - **Selection is RG-level aware** — blocks containing selected members render selected;
   zooming out and back restores the exact original multi-selection; modifying selection at
   a higher level acts on the whole block. Double-click selects a snapped stack.
@@ -171,8 +186,10 @@ is framework-agnostic pure functions and plain data.
 - **Grid math** (`core/grid`): `readableStep`, `gridLevels`, `finerStep`, `gridRange`,
   `snap`, `snapSizeRadix`, `sizeLayerStep`, `worldToScreen`, `screenToWorld`
 - **Rules** (`core/rule`): `DEFAULT_RULE`, `resolveRule`, type `RgRule`
-- **Graph model** (`core/graph`): `demoGraph`, `nodeHeight`, `bodyRect`, port positions,
-  types `Graph`, `GraphNode` (incl. `z`, `pinned`, `fieldRules`, `body`, `draw`, `overlay`)
+- **Graph model** (`core/graph`): `demoGraph`, `orgChartGraph`, `nodeHeight`, `bodyRect`,
+  port positions, containment helpers (`childrenOf`, `descendantsOf`, `containerIds`,
+  `containmentOf`), types `Graph`, `GraphNode` (incl. `z`, `pinned`, `parent`, `fieldRules`,
+  `body`, `draw`, `overlay`)
 - **Semantic-zoom LOD** (`core/lod`): `buildRenderGraph`, `pseudoRect`, `pseudoPortPos`
 - **Packing** (`core/pack`): `resolveOverlap`, `flushSegments`, `flushComponents`,
   `computePortLayout`, `clampSize`
@@ -180,7 +197,8 @@ is framework-agnostic pure functions and plain data.
   `ordered`, `topK`, `quantile`, type `MergeRule`
 - **Layout** (`core/layout`): `layoutGraph`
 - **Renderers** (`render`): Canvas 2D layers, `createWebGPUGridRenderer` (grid underlay),
-  panels (`panelLayout`/`drawPanels`), HTML overlays (`createOverlayManager`), `KIND_COLOR`
+  panels (`panelLayout`/`drawPanels`), HTML overlays (`createOverlayManager`),
+  `KIND_COLOR`/`CATEGORY_COLOR` + `kindColor`/`categoryColor`
 
 TypeScript type definitions are bundled. To read the source directly, the raw TypeScript is
 available from the `@snomiao/rgui/src` subpath.

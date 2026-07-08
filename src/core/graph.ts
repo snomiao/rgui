@@ -4,9 +4,14 @@
  * input ports on the left edge, output ports on the right edge.
  */
 
-export type SignalKind = "image" | "audio" | "text" | "ctl";
+/**
+ * Signal kinds are OPEN: the built-ins get hand-picked colors, any other
+ * string gets a stable derived color — rgui renders any domain's graph
+ * (media pipelines, org charts, dependency graphs) without registration.
+ */
+export type SignalKind = "image" | "audio" | "text" | "ctl" | (string & {});
 
-export type NodeCategory = "source" | "model" | "sink";
+export type NodeCategory = "source" | "model" | "sink" | (string & {});
 
 export interface Port {
   id: string;
@@ -47,6 +52,16 @@ export interface GraphNode {
    * anchor other nodes snap around. Toggled via the header pin glyph.
    */
   pinned?: boolean;
+  /**
+   * CONTAINMENT: id of the node this one lives inside. A node referenced
+   * as someone's parent becomes a CONTAINER — it renders as an open frame
+   * around its children and, once every child falls below readability, it
+   * absorbs them into one block titled by the container (org-chart teams,
+   * subgraphs). Containment is a structural relation like an edge, not a
+   * style tag, and it is the sanctioned exception to one-cell-one-thing:
+   * a child occupies its container's cell at a finer grid layer.
+   */
+  parent?: string;
   /**
    * explicit height override (world units) — resize grows the live-body
    * region; ignored when below the derived minimum (rows + bodyRows)
@@ -159,6 +174,55 @@ export function nodeScale(
     x: sizeLayerStep(n.w, radix),
     y: sizeLayerStep(nodeHeight(n), radix),
   };
+}
+
+// --- containment ------------------------------------------------------
+
+/** direct children of a container node */
+export function childrenOf(graph: Graph, id: string): GraphNode[] {
+  return graph.nodes.filter((n) => n.parent === id);
+}
+
+/** every node transitively inside a container */
+export function descendantsOf(graph: Graph, id: string): GraphNode[] {
+  const out: GraphNode[] = [];
+  const q = [id];
+  while (q.length) {
+    const cur = q.pop()!;
+    for (const n of graph.nodes)
+      if (n.parent === cur) {
+        out.push(n);
+        q.push(n.id);
+      }
+  }
+  return out;
+}
+
+/** ids of every node that contains others (has at least one child) */
+export function containerIds(graph: Graph): Set<string> {
+  const out = new Set<string>();
+  for (const n of graph.nodes) if (n.parent) out.add(n.parent);
+  return out;
+}
+
+/**
+ * Containment predicate factory. `related(a, b)` is true when one node
+ * contains the other (any depth). Containment overlap is SANCTIONED — a
+ * child occupies its container's cell at a finer layer — so overlap
+ * resolution, size clamping and flush-stack logic must skip related pairs.
+ */
+export function containmentOf(nodes: GraphNode[]): {
+  inside: (a: string, b: string) => boolean;
+  related: (a: string, b: string) => boolean;
+} {
+  const parent = new Map<string, string | undefined>(
+    nodes.map((n) => [n.id, n.parent]),
+  );
+  const inside = (a: string, b: string): boolean => {
+    for (let c = parent.get(a); c; c = parent.get(c)) if (c === b) return true;
+    return false;
+  };
+  return { inside, related: (a, b) => inside(a, b) || inside(b, a) };
 }
 
 /** world-space rect of the reserved live-body region (null if none) */
@@ -319,6 +383,108 @@ export function demoGraph(): Graph {
       to: { node: "voice", port: "rate" },
       dashed: true,
     },
+  ];
+
+  return { nodes, edges };
+}
+
+// --- demo: org chart — containment drives the RG levels ----------------
+// teams are CONTAINER nodes; zooming out, each team absorbs its people
+// into one team block (headcount sums, roles collect into a set), then the
+// company absorbs the teams — leader/members/team/company ARE the RG levels.
+// Custom kinds ("report") and categories ("org"/"team"/"lead"/"member")
+// show the open type system: unknown names get stable derived colors.
+
+export function orgChartGraph(): Graph {
+  const person = (
+    id: string,
+    title: string,
+    parent: string,
+    x: number,
+    y: number,
+    role: string,
+    lead = false,
+  ): GraphNode => ({
+    id,
+    title,
+    category: lead ? "lead" : "member",
+    parent,
+    x,
+    y,
+    w: 256,
+    h: 128,
+    // everyone reports to someone except the top of the tree
+    inputs:
+      lead && parent === "company"
+        ? []
+        : [{ id: "lead", label: "lead", kind: "report" }],
+    outputs: lead ? [{ id: "reports", label: "reports", kind: "report" }] : [],
+    fields: [
+      ["role", role],
+      ["headcount", "1"],
+    ],
+    fieldRules: { headcount: "sum", role: "set" },
+  });
+
+  const nodes: GraphNode[] = [
+    {
+      id: "company",
+      title: "Acme Inc.",
+      category: "org",
+      x: -128,
+      y: -128,
+      w: 2048,
+      h: 1536,
+      inputs: [],
+      outputs: [],
+      fields: [["dept", "Product"]],
+    },
+    {
+      id: "team-eng",
+      title: "Engineering",
+      category: "team",
+      parent: "company",
+      x: 0,
+      y: 0,
+      w: 1024,
+      h: 512,
+      inputs: [],
+      outputs: [],
+      fields: [],
+    },
+    {
+      id: "team-design",
+      title: "Design",
+      category: "team",
+      parent: "company",
+      x: 0,
+      y: 640,
+      w: 1024,
+      h: 512,
+      inputs: [],
+      outputs: [],
+      fields: [],
+    },
+    // clear of the teams so the CEO's own collapsed block (screen-constant
+    // minimum size) never collides with a team block while zooming out
+    person("ceo", "Mori (CEO)", "company", 1536, 128, "CEO", true),
+    person("lead-eng", "Aoi (EM)", "team-eng", 64, 64, "EM", true),
+    person("eng-a", "Riku", "team-eng", 576, 64, "backend"),
+    person("eng-b", "Hana", "team-eng", 576, 256, "frontend"),
+    person("lead-des", "Sora (DM)", "team-design", 64, 704, "DM", true),
+    person("des-a", "Yui", "team-design", 576, 704, "visual"),
+  ];
+
+  const report = (from: string, to: string): Edge => ({
+    from: { node: from, port: "reports" },
+    to: { node: to, port: "lead" },
+  });
+  const edges: Edge[] = [
+    report("ceo", "lead-eng"),
+    report("ceo", "lead-des"),
+    report("lead-eng", "eng-a"),
+    report("lead-eng", "eng-b"),
+    report("lead-des", "des-a"),
   ];
 
   return { nodes, edges };

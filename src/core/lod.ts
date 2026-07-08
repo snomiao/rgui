@@ -143,6 +143,44 @@ export function buildRenderGraph(
   const px = (gx: number, gy: number) =>
     Math.hypot(xa * gx + xb * gy, xc * gx + xd * gy) * k;
   const kH = Math.hypot(xb, xd) * k; // apparent vertical scale
+  // CONTAINMENT: declared hierarchy scopes the emergent merging — nodes
+  // merge by location/connection only WITHIN their container (a team's
+  // members merge into the team, never into the neighboring team), and a
+  // container absorbs its children once they all fall below readability.
+  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const parentOf = new Map<string, string>();
+  const childIds = new Map<string, string[]>();
+  for (const n of graph.nodes)
+    if (n.parent && nodeById.has(n.parent)) {
+      parentOf.set(n.id, n.parent);
+      let c = childIds.get(n.parent);
+      if (!c) childIds.set(n.parent, (c = []));
+      c.push(n.id);
+    }
+  const scope = (id: string) => parentOf.get(id) ?? "";
+  const isAncestor = (a: string, b: string): boolean => {
+    for (let c = parentOf.get(b); c; c = parentOf.get(c)) if (c === a) return true;
+    return false;
+  };
+  const depthOf = (id: string) => {
+    let d = 0;
+    for (let c = parentOf.get(id); c; c = parentOf.get(c)) d++;
+    return d;
+  };
+  /** a block lives in the scope of its outermost member — an absorbed
+   * team block acts at the level of the team node, not its people */
+  const pseudoScope = (p: PseudoNode): string => {
+    let best = p.members[0]!;
+    let bd = depthOf(best.id);
+    for (const m of p.members) {
+      const d = depthOf(m.id);
+      if (d < bd) {
+        bd = d;
+        best = m;
+      }
+    }
+    return scope(best.id);
+  };
   // SNAP BEATS LOCATION, and stacks RG TOGETHER: when ANY member of a
   // flush-contact stack crosses the (more generous) collapseSnappedPx
   // threshold, the WHOLE stack promotes to the next level as one — no
@@ -157,7 +195,8 @@ export function buildRenderGraph(
     return r;
   };
   for (const seg of segments)
-    stackRoot.set(findRoot(seg.a.id), findRoot(seg.b.id));
+    if (scope(seg.a.id) === scope(seg.b.id))
+      stackRoot.set(findRoot(seg.a.id), findRoot(seg.b.id));
   const stacks = new Map<string, GraphNode[]>();
   for (const n of graph.nodes) {
     if (!stackRoot.has(n.id) && !segments.some((s0) => s0.a === n || s0.b === n))
@@ -208,15 +247,45 @@ export function buildRenderGraph(
     ...unreadable.map((n) => n.id),
     ...extraEligible,
   ]);
+  // CONTAINER ABSORPTION: once every child of a container is below
+  // readability, the container joins them and the whole subtree becomes
+  // one block titled by the container. Nested levels stay distinct: a
+  // child that is ITSELF a container only counts once its own frame is
+  // unreadable — teams collapse into team blocks long before the company
+  // collapses into one company block (hierarchy levels ARE the RG levels)
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [cid, kids] of childIds) {
+      if (eligible.has(cid)) continue;
+      const ready = kids.every(
+        (id) =>
+          eligible.has(id) &&
+          (!childIds.has(id) ||
+            nodeHeight(nodeById.get(id)!) * kH < rule.collapsePx),
+      );
+      if (ready) {
+        eligible.add(cid);
+        grew = true;
+      }
+    }
+  }
+  for (const [cid, kids] of childIds)
+    if (eligible.has(cid))
+      for (const id of kids) if (eligible.has(id)) union(cid, id);
   for (const [a, b] of forcedPairs)
     if (eligible.has(a) && eligible.has(b)) union(a, b);
   // carried memberships from the finer scale (zoom-out hysteresis)
   if (carry)
     for (const [a, b] of carry)
       if (eligible.has(a) && eligible.has(b)) union(a, b);
-  // 1) flush contact unions FIRST and unconditionally (snap > location)
+  // 1) flush contact unions FIRST and unconditionally (snap > location) —
+  // within one containment scope only: frames keep their contents
   for (const seg of segments)
-    if (eligible.has(seg.a.id) && eligible.has(seg.b.id))
+    if (
+      eligible.has(seg.a.id) &&
+      eligible.has(seg.b.id) &&
+      scope(seg.a.id) === scope(seg.b.id)
+    )
       union(seg.a.id, seg.b.id);
   // 1.5) CHAIN CONTRACTION: interior nodes of a linear chain (in-degree 1,
   // out-degree 1) union unconditionally when unreadable — the chain's
@@ -235,7 +304,8 @@ export function buildRenderGraph(
       isMiddle(e.from.node) &&
       isMiddle(e.to.node) &&
       eligible.has(e.from.node) &&
-      eligible.has(e.to.node)
+      eligible.has(e.to.node) &&
+      scope(e.from.node) === scope(e.to.node)
     )
       union(e.from.node, e.to.node);
   // 2) then proximity/connection with their pixel budgets
@@ -244,6 +314,7 @@ export function buildRenderGraph(
     for (let j = i + 1; j < elig.length; j++) {
       const a = elig[i]!;
       const b = elig[j]!;
+      if (scope(a.id) !== scope(b.id)) continue; // merge within scope only
       const wired = connected.has([a.id, b.id].sort().join("|"));
       const budget = wired ? rule.clusterGapConnectedPx : rule.clusterGapPx;
       if (rectGapView(a, b, px) < budget) union(a.id, b.id);
@@ -294,13 +365,27 @@ export function buildRenderGraph(
     const solo = members.length === 1;
     const isChainRun =
       members.length > 1 && members.every((n) => isMiddle(n.id));
+    // a container fully represented in the cluster NAMES the block — the
+    // outermost one wins ("Engineering", not "Aoi (EM) +3"). Ambiguous
+    // (two unrelated containers merged) falls back to the count title.
+    const idsIn = new Set(members.map((n) => n.id));
+    const owners = members.filter((n) => {
+      const kids = childIds.get(n.id);
+      return !!kids && kids.every((id) => idsIn.has(id));
+    });
+    const outermost = owners.filter(
+      (o) => !owners.some((q) => q !== o && isAncestor(q.id, o.id)),
+    );
+    const owner = outermost.length === 1 ? outermost[0] : undefined;
     const p: PseudoNode = {
       id: members.map((n) => n.id).join("+"),
-      title: solo
-        ? members[0]!.title
-        : isChainRun
-          ? `⋯ ×${members.length}`
-          : `${members[0]!.title} +${members.length - 1}`,
+      title: owner
+        ? owner.title
+        : solo
+          ? members[0]!.title
+          : isChainRun
+            ? `⋯ ×${members.length}`
+            : `${members[0]!.title} +${members.length - 1}`,
       cx: (Math.min(...xs) + Math.max(...xs)) / 2,
       cy: (Math.min(...ys) + Math.max(...ys)) / 2,
       bw: Math.max(...xs) - Math.min(...xs),
@@ -308,7 +393,7 @@ export function buildRenderGraph(
       members,
       inputs: [],
       outputs: [],
-      category: solo ? members[0]!.category : undefined,
+      category: owner?.category ?? (solo ? members[0]!.category : undefined),
     };
     collapsed.push(p);
     for (const n of members) nodeToPseudo.set(n.id, p);
@@ -402,6 +487,10 @@ export function buildRenderGraph(
     ) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
     for (let i = 0; i < rects.length; i++) {
       for (let j = i + 1; j < rects.length; j++) {
+        // colliding blocks merge only WITHIN one containment scope —
+        // across scopes declutter pushes them apart instead, so the
+        // hierarchy's abstractions never bleed into each other
+        if (pseudoScope(rects[i]!.p) !== pseudoScope(rects[j]!.p)) continue;
         if (hits(rects[i]!.r, rects[j]!.r)) {
           forcedPairs.push([
             rects[i]!.p.members[0]!.id,
@@ -411,6 +500,10 @@ export function buildRenderGraph(
         }
       }
       for (const n of expanded) {
+        // a block INSIDE its own container frame is sanctioned overlap —
+        // that's containment, not a collision
+        if (rects[i]!.p.members.every((m) => isAncestor(n.id, m.id))) continue;
+        if (scope(n.id) !== pseudoScope(rects[i]!.p)) continue;
         const nr = { x: n.x, y: n.y, w: n.w, h: nodeHeight(n) };
         if (hits(rects[i]!.r, nr)) {
           extraEligible.add(n.id);
@@ -422,7 +515,7 @@ export function buildRenderGraph(
     if (changed) continue; // rebuild with the new unions
   }
 
-  declutter(pseudo, k, rule, expanded);
+  declutter(pseudo, k, rule, expanded, isAncestor);
 
   return {
     nodes: expanded,
@@ -442,6 +535,7 @@ function declutter(
   k: number,
   rule: RgRule,
   obstacles: GraphNode[] = [],
+  isAncestor?: (a: string, b: string) => boolean,
 ) {
   const margin = rule.declutterMarginPx / k;
   for (let iter = 0; iter < 10; iter++) {
@@ -450,6 +544,9 @@ function declutter(
     for (const p of pseudo) {
       const r = pseudoRect(p, k, rule);
       for (const o of obstacles) {
+        // a block stays INSIDE its own container frame — never pushed out
+        if (isAncestor && p.members.every((m) => isAncestor(o.id, m.id)))
+          continue;
         const oh = nodeHeight(o);
         const ox =
           Math.min(r.x + r.w, o.x + o.w) - Math.max(r.x, o.x) + margin;

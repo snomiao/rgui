@@ -41,20 +41,49 @@ import {
   type SideCoverage,
 } from "../core/pack.js";
 import type { ViewTransform } from "../core/grid.js";
-import { DARK_THEME, type RgTheme } from "../core/theme.js";
+import { DARK_THEME, withAlpha, type RgTheme } from "../core/theme.js";
 
-export const KIND_COLOR: Record<SignalKind, string> = {
+export const KIND_COLOR: Record<string, string> = {
   image: "#2dd4bf", // teal
   audio: "#fb923c", // orange
   text: "#60a5fa", // blue
   ctl: "#facc15", // yellow
 };
 
-const CATEGORY_COLOR: Record<GraphNode["category"], string> = {
+export const CATEGORY_COLOR: Record<string, string> = {
   source: "#e07a3f", // bitwig orange
   model: "#4f8fd0", // bitwig blue
   sink: "#5cb87a", // green
 };
+
+/** stable derived color for names outside the built-in palettes — any
+ * domain's kinds/categories render without registration (assign into
+ * KIND_COLOR / CATEGORY_COLOR to pick exact colors) */
+function hashColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++)
+    h = (h * 31 + name.charCodeAt(i)) % 360;
+  // hsl(h, 45%, 55%) emitted as hex so theme utils (withAlpha) can parse it
+  const s = 0.45;
+  const l = 0.55;
+  const f = (o: number) => {
+    const t = (o + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const v = l - a * Math.max(-1, Math.min(t - 3, 9 - t, 1));
+    return Math.round(v * 255)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+export function kindColor(kind: SignalKind): string {
+  return KIND_COLOR[kind] ?? hashColor(kind);
+}
+
+export function categoryColor(category: GraphNode["category"]): string {
+  return CATEGORY_COLOR[category] ?? hashColor(category);
+}
 
 /**
  * Active theme for this draw pass. Rendering is synchronous, so the exported
@@ -92,8 +121,28 @@ export function drawGraph(
   const cover = sideCoverage(segments);
   const layout = computePortLayout(graph, rg.nodes, segments);
 
-  for (const n of rg.nodes)
+  // containers render as OPEN FRAMES behind their children — outermost
+  // first, so nested frames and the cards inside stay on top
+  const isContainer = new Set<string>();
+  const parentOf = new Map<string, string>();
+  for (const n of graph.nodes)
+    if (n.parent) {
+      isContainer.add(n.parent);
+      parentOf.set(n.id, n.parent);
+    }
+  const depth = (id: string) => {
+    let d = 0;
+    for (let c = parentOf.get(id); c; c = parentOf.get(c)) d++;
+    return d;
+  };
+  const frames = rg.nodes
+    .filter((n) => isContainer.has(n.id))
+    .sort((a, b) => depth(a.id) - depth(b.id));
+  for (const n of frames) drawContainerFrame(ctx, n, t.k, rule, layout);
+  for (const n of rg.nodes) {
+    if (isContainer.has(n.id)) continue;
     drawNode(ctx, n, t.k, rule, cover.get(n.id), layout, summarize);
+  }
   for (const p of rg.pseudo) drawPseudoNode(ctx, p, t.k, rule, summarize);
 
   // wires draw ON TOP of nodes: connections carry the meaning of the graph
@@ -113,7 +162,7 @@ export function drawGraph(
     const from = endpointPlaced(e.from, layout, t.k, rule);
     const to = endpointPlaced(e.to, layout, t.k, rule);
     const style = e.source.style;
-    const color = style?.color ?? KIND_COLOR[e.kind];
+    const color = style?.color ?? kindColor(e.kind);
     const width = style?.width ?? 2;
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.min(width, width / t.k); // cap at `width` screen px
@@ -216,7 +265,7 @@ function drawSolderJoint(
   ctx.lineTo(-3, r);
   ctx.lineTo(-0.5, 0);
   ctx.closePath();
-  ctx.fillStyle = KIND_COLOR[e.kind];
+  ctx.fillStyle = kindColor(e.kind);
   ctx.globalAlpha = 0.95;
   ctx.fill();
   ctx.lineWidth = Math.min(1.5, 1.5 / k);
@@ -314,7 +363,7 @@ function drawNode(
 
   // single block: no header band — the category speaks through the title
   // color, so a node (and a fused stack) reads as one uninterrupted shape
-  ctx.fillStyle = CATEGORY_COLOR[n.category];
+  ctx.fillStyle = categoryColor(n.category);
   ctx.font = "bold 13px system-ui, sans-serif";
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
@@ -381,6 +430,56 @@ function drawNode(
     ctx.restore();
   }
 
+  drawNodePorts(ctx, n, k, rule, layout);
+  drawResizeGrip(ctx, n, h);
+}
+
+/**
+ * Container frame: an open region that HOLDS other nodes — accent border,
+ * title and a near-transparent tint, so the children (finer grid citizens
+ * living in this cell) read through it. Ports, pin and resize grip still
+ * work: a container is a real node, not chrome.
+ */
+function drawContainerFrame(
+  ctx: CanvasRenderingContext2D,
+  n: GraphNode,
+  k: number,
+  rule: RgRule,
+  layout: Map<string, PortPlacement>,
+) {
+  const h = nodeHeight(n);
+  const accent = categoryColor(n.category);
+  ctx.beginPath();
+  ctx.roundRect(n.x, n.y, n.w, h, 10);
+  ctx.fillStyle = withAlpha(accent, 0.05);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = withAlpha(accent, 0.6);
+  ctx.stroke();
+
+  ctx.fillStyle = accent;
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillText(n.title, n.x + NODE_PAD, n.y + NODE_HEADER_H / 2 + 0.5);
+
+  // containers may declare a few fields — same rows as a card, and the
+  // author leaves that strip clear when placing children
+  if (NODE_ROW_H * k >= rule.fieldMinPx) {
+    ctx.font = "11px system-ui, sans-serif";
+    for (let i = 0; i < n.fields.length; i++) {
+      const [key, v] = n.fields[i]!;
+      const y = n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H;
+      ctx.fillStyle = T.textMuted;
+      ctx.textAlign = "left";
+      ctx.fillText(key, n.x + NODE_PAD + 10, y);
+      ctx.fillStyle = T.text;
+      ctx.textAlign = "right";
+      ctx.fillText(v, n.x + n.w - NODE_PAD - 10, y);
+    }
+  }
+
+  drawNodePin(ctx, n);
   drawNodePorts(ctx, n, k, rule, layout);
   drawResizeGrip(ctx, n, h);
 }
@@ -486,12 +585,12 @@ function drawNodePorts(
         ctx,
         pl.x,
         pl.y,
-        KIND_COLOR[p.kind],
+        kindColor(p.kind),
         PORT_R,
         portDir(rule, dir, pl.edge),
       );
       if (dir === "out" && labels) {
-        ctx.fillStyle = KIND_COLOR[p.kind];
+        ctx.fillStyle = kindColor(p.kind);
         if (pl.edge === "right") {
           ctx.textAlign = "left";
           ctx.fillText(p.label, pl.x + PORT_R + 4, pl.y);
@@ -528,7 +627,7 @@ function drawPseudoNode(
   const h = rect.h * k;
   const r = 8;
 
-  const accent = p.category ? CATEGORY_COLOR[p.category] : T.pseudoHeader;
+  const accent = p.category ? categoryColor(p.category) : T.pseudoHeader;
 
   // stacked-cards shadow hints "this is a group" (groups only)
   if (!p.category) {
@@ -557,16 +656,16 @@ function drawPseudoNode(
   for (let i = 0; i < p.inputs.length; i++) {
     const port = p.inputs[i]!;
     const y = PSEUDO.headerH + PSEUDO.pad + (i + 0.5) * PSEUDO.rowH;
-    drawPort(ctx, 0, y, KIND_COLOR[port.kind], PORT_R, portDir(rule, "in", "left"));
-    ctx.fillStyle = KIND_COLOR[port.kind];
+    drawPort(ctx, 0, y, kindColor(port.kind), PORT_R, portDir(rule, "in", "left"));
+    ctx.fillStyle = kindColor(port.kind);
     ctx.textAlign = "left";
     ctx.fillText(port.label, PORT_R + 4, y);
   }
   for (let i = 0; i < p.outputs.length; i++) {
     const port = p.outputs[i]!;
     const y = PSEUDO.headerH + PSEUDO.pad + (i + 0.5) * PSEUDO.rowH;
-    drawPort(ctx, w, y, KIND_COLOR[port.kind], PORT_R, portDir(rule, "out", "right"));
-    ctx.fillStyle = KIND_COLOR[port.kind];
+    drawPort(ctx, w, y, kindColor(port.kind), PORT_R, portDir(rule, "out", "right"));
+    ctx.fillStyle = kindColor(port.kind);
     ctx.textAlign = "right";
     ctx.fillText(port.label, w - PORT_R - 4, y);
   }
@@ -790,7 +889,7 @@ export function offscreenIndicators(
       n.y * t.k + t.y,
       (n.x + n.w) * t.k + t.x,
       (n.y + nodeHeight(n)) * t.k + t.y,
-      CATEGORY_COLOR[n.category],
+      categoryColor(n.category),
     );
   for (const p of rg.pseudo) {
     const r = pseudoRect(p, t.k, rule);
@@ -799,7 +898,7 @@ export function offscreenIndicators(
       r.y * t.k + t.y,
       (r.x + r.w) * t.k + t.x,
       (r.y + r.h) * t.k + t.y,
-      p.category ? CATEGORY_COLOR[p.category] : T.pseudoHeader,
+      p.category ? categoryColor(p.category) : T.pseudoHeader,
     );
   }
   return out;

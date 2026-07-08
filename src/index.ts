@@ -55,7 +55,12 @@ export {
   bodyRect,
   inputPortPos,
   outputPortPos,
+  childrenOf,
+  descendantsOf,
+  containerIds,
+  containmentOf,
   demoGraph,
+  orgChartGraph,
   NODE_HEADER_H,
   NODE_ROW_H,
   NODE_PAD,
@@ -108,6 +113,9 @@ export {
   offscreenIndicators,
   pinPos,
   KIND_COLOR,
+  CATEGORY_COLOR,
+  kindColor,
+  categoryColor,
   type OffscreenIndicator,
 } from "./render/graphLayer.js";
 export {

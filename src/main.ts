@@ -1,10 +1,18 @@
 /** Demo app — dogfoods the library exactly as a consumer would. */
-import rgui, { demoGraph } from "./index";
+import rgui, { demoGraph, orgChartGraph } from "./index";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
 const debug = document.querySelector<HTMLDivElement>("#debug")!;
 
 const graph = demoGraph();
+
+// second domain on the same canvas: an org chart built from CONTAINER
+// nodes — teams hold their people, and zooming out makes each team absorb
+// its members into one team block (containment IS the RG hierarchy)
+const org = orgChartGraph();
+for (const n of org.nodes) n.y += 896; // below the media pipeline, on-lattice
+graph.nodes.push(...org.nodes);
+graph.edges.push(...org.edges);
 
 // edge styling demo: label + custom width on the labels wire
 const labelsEdge = graph.edges.find((e) => e.from.port === "labels")!;

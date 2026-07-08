@@ -14,7 +14,7 @@ import {
   drawGraph,
   drawOffscreenIndicators,
   pinPos,
-  KIND_COLOR,
+  kindColor,
   type OffscreenIndicator,
 } from "./render/graphLayer.js";
 import {
@@ -35,6 +35,8 @@ import {
   type WebGPUGridRenderer,
 } from "./render/webgpu.js";
 import {
+  containmentOf,
+  descendantsOf,
   inputPortPos,
   nodeHeight,
   nodeMinHeight,
@@ -384,6 +386,9 @@ export function createRgui(
   /** per-frame display graph: center-projected node positions, same ids */
   let displayNodes = new Map<string, GraphNode>();
   function displayGraph(): Graph {
+    // containment overlap is sanctioned — a child sits INSIDE its
+    // container's cell — so overlap detection/resolution skips related pairs
+    const { related } = containmentOf(graph.nodes);
     if (!rotActive) {
       // even unrotated, RENDERED overlap is not allowed (一格一物): overlaps
       // created by group drags or host position updates pack to flush
@@ -394,6 +399,7 @@ export function createRgui(
         for (let j = i + 1; j < graph.nodes.length; j++) {
           const a = graph.nodes[i]!;
           const b = graph.nodes[j]!;
+          if (related(a.id, b.id)) continue;
           if (
             a.x < b.x + b.w &&
             a.x + a.w > b.x &&
@@ -415,10 +421,13 @@ export function createRgui(
       for (let pass = 0; pass < 3; pass++) {
         let moved = false;
         for (const c of nodes) {
-          const r = resolveOverlap(c, c.x, c.y, nodes, {
-            alignSnap: 0,
-            direction: rule.direction,
-          });
+          const r = resolveOverlap(
+            c,
+            c.x,
+            c.y,
+            nodes.filter((o) => !related(c.id, o.id)),
+            { alignSnap: 0, direction: rule.direction },
+          );
           if (r.x !== c.x || r.y !== c.y) {
             c.x = r.x;
             c.y = r.y;
@@ -452,10 +461,13 @@ export function createRgui(
     for (let pass = 0; pass < 3; pass++) {
       let moved = false;
       for (const c of nodes) {
-        const r = resolveOverlap(c, c.x, c.y, nodes, {
-          alignSnap: 0,
-          direction: rule.direction,
-        });
+        const r = resolveOverlap(
+          c,
+          c.x,
+          c.y,
+          nodes.filter((o) => !related(c.id, o.id)),
+          { alignSnap: 0, direction: rule.direction },
+        );
         if (r.x !== c.x || r.y !== c.y) {
           c.x = r.x;
           c.y = r.y;
@@ -769,17 +781,21 @@ export function createRgui(
         return { type: "pseudo", pseudo: p };
     }
     const visible = lastRg?.nodes ?? dGraph.nodes;
+    // container frames sit BEHIND their children: cards hit first, and
+    // among nested frames the innermost (smallest) one wins
+    const hasKids = new Set(
+      graph.nodes.filter((n) => n.parent).map((n) => n.parent!),
+    );
+    let frameHit: GraphNode | null = null;
     for (let i = visible.length - 1; i >= 0; i--) {
       const n = visible[i]!;
-      if (
-        wx >= n.x &&
-        wx <= n.x + n.w &&
-        wy >= n.y &&
-        wy <= n.y + nodeHeight(n)
-      )
-        return { type: "node", node: n };
+      const h = nodeHeight(n);
+      if (wx < n.x || wx > n.x + n.w || wy < n.y || wy > n.y + h) continue;
+      if (!hasKids.has(n.id)) return { type: "node", node: n };
+      if (!frameHit || n.w * h < frameHit.w * nodeHeight(frameHit))
+        frameHit = n;
     }
-    return null;
+    return frameHit ? { type: "node", node: frameHit } : null;
   }
 
   /** screen-px hit radius for ports (zoom-invariant) */
@@ -883,6 +899,11 @@ export function createRgui(
     | {
         type: "node";
         node: GraphNode;
+        /** container contents ride along (base nodes, pinned stay put) */
+        subtree: GraphNode[];
+        /** overlap obstacles: containment relatives are exempt (a child
+         * moves INSIDE its frame; a frame moves OVER its children) */
+        obstacles: GraphNode[];
         dx: number;
         dy: number;
         downX: number;
@@ -934,9 +955,9 @@ export function createRgui(
     ctx.save();
     ctx.strokeStyle = target
       ? ok
-        ? KIND_COLOR[drag.from.port.kind]
+        ? kindColor(drag.from.port.kind)
         : theme.danger // invalid target
-      : KIND_COLOR[drag.from.port.kind];
+      : kindColor(drag.from.port.kind);
     ctx.globalAlpha = 0.9;
     ctx.lineWidth = 2;
     ctx.setLineDash([7, 5]);
@@ -1062,8 +1083,12 @@ export function createRgui(
     }
     const [wx, wy] = screenToWorld(view, vx0, vy0);
     if (hit.type === "node" && selection.has(hit.node.id) && selection.size > 1) {
-      // dragging a member of a multi-selection moves the whole selection
-      const members = [...selection]
+      // dragging a member of a multi-selection moves the whole selection —
+      // selected containers bring their contents along
+      const ids = new Set(selection);
+      for (const id of selection)
+        for (const d of descendantsOf(graph, id)) ids.add(d.id);
+      const members = [...ids]
         .map((id) => graph.nodes.find((m) => m.id === id))
         .filter((m): m is GraphNode => !!m && !m.pinned);
       drag = { type: "group", nodes: members, wx, wy, moved: false };
@@ -1073,9 +1098,12 @@ export function createRgui(
     if (hit.type === "node") {
       const disp = hit.node; // display-space geometry
       const n = baseOf(disp);
+      const { related } = containmentOf(graph.nodes);
       drag = {
         type: "node",
         node: n,
+        subtree: descendantsOf(graph, n.id).filter((c) => !c.pinned),
+        obstacles: graph.nodes.filter((o) => !related(n.id, o.id)),
         // offsets measured against the DISPLAY rect the user grabbed
         dx: wx - disp.x,
         dy: wy - disp.y,
@@ -1130,7 +1158,15 @@ export function createRgui(
           nodeMinHeight(n),
           snapSizeRadix(wy - n.y, rule.radix),
         );
-        const { w, h } = clampSize(n, wantW, wantH, graph.nodes);
+        // containment relatives don't clamp: a frame resizes over its
+        // children, a child resizes within its frame
+        const rel = containmentOf(graph.nodes).related;
+        const { w, h } = clampSize(
+          n,
+          wantW,
+          wantH,
+          graph.nodes.filter((o) => !rel(n.id, o.id)),
+        );
         if (w !== n.w || h !== nodeHeight(n)) {
           n.w = w;
           n.h = h;
@@ -1173,12 +1209,20 @@ export function createRgui(
           drag.node,
           bcx - drag.node.w / 2,
           bcy - h0 / 2,
-          graph.nodes,
+          drag.obstacles,
           { alignSnap: rule.alignSnapPx / view.k, direction: rule.direction },
         );
         if (nx !== drag.node.x || ny !== drag.node.y) {
+          // a container carries its contents: children move by the same delta
+          const ddx = nx - drag.node.x;
+          const ddy = ny - drag.node.y;
           drag.node.x = nx;
           drag.node.y = ny;
+          for (const c of drag.subtree) {
+            c.x += ddx;
+            c.y += ddy;
+            options.onNodeMove?.(c.id, { x: c.x, y: c.y });
+          }
           drag.moved = true;
           options.onNodeMove?.(drag.node.id, { x: nx, y: ny });
         }
@@ -1323,6 +1367,8 @@ export function createRgui(
           x: drag.node.x,
           y: drag.node.y,
         });
+        for (const c of drag.subtree)
+          options.onNodeMoveEnd?.(c.id, { x: c.x, y: c.y });
       } else if (
         Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) < 4
       ) {
@@ -1713,11 +1759,12 @@ export function createRgui(
     resizeNode(nodeId: string, size: { w?: number; h?: number }) {
       const n = graph.nodes.find((m) => m.id === nodeId);
       if (!n) return;
+      const rel = containmentOf(graph.nodes).related;
       const { w, h } = clampSize(
         n,
         Math.max(96, size.w ?? n.w),
         Math.max(nodeMinHeight(n), size.h ?? nodeHeight(n)),
-        graph.nodes,
+        graph.nodes.filter((o) => !rel(n.id, o.id)),
       );
       n.w = w;
       n.h = h;

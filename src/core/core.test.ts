@@ -7,7 +7,17 @@ import {
   sizeLayerStep,
   snapSizeRadix,
 } from "./grid";
-import { demoGraph, nodeHeight, nodeScale, type GraphNode } from "./graph";
+import {
+  childrenOf,
+  containmentOf,
+  demoGraph,
+  descendantsOf,
+  nodeHeight,
+  nodeScale,
+  orgChartGraph,
+  type GraphNode,
+} from "./graph";
+import { kindColor, categoryColor, KIND_COLOR } from "../render/graphLayer";
 import { buildRenderGraph, pseudoRect } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
@@ -403,5 +413,95 @@ describe("rg rule", () => {
     expect(DEFAULT_RULE.clusterGapConnectedPx).toBeGreaterThan(
       DEFAULT_RULE.clusterGapPx,
     );
+  });
+});
+
+describe("containment", () => {
+  test("childrenOf / descendantsOf / containmentOf walk the hierarchy", () => {
+    const g = orgChartGraph();
+    expect(childrenOf(g, "team-eng").map((n) => n.id)).toEqual([
+      "lead-eng",
+      "eng-a",
+      "eng-b",
+    ]);
+    // descendants of the company include people two levels down
+    const all = descendantsOf(g, "company").map((n) => n.id);
+    expect(all).toContain("team-eng");
+    expect(all).toContain("eng-b");
+    const { inside, related } = containmentOf(g.nodes);
+    expect(inside("eng-a", "company")).toBe(true); // transitive
+    expect(inside("company", "eng-a")).toBe(false); // directional
+    expect(related("company", "eng-a")).toBe(true);
+    expect(related("eng-a", "des-a")).toBe(false); // cousins are unrelated
+  });
+
+  test("org-chart demo obeys the node-size law", () => {
+    for (const n of orgChartGraph().nodes) {
+      expect(snapSizeRadix(n.w, 8)).toBe(n.w);
+      expect(snapSizeRadix(nodeHeight(n), 8)).toBe(nodeHeight(n));
+    }
+  });
+
+  test("teams absorb their people; the company frame stays expanded", () => {
+    const g = orgChartGraph();
+    // people (h=128) unreadable at k=0.4 (51px < 56); team frames (h=512)
+    // still very readable (205px) — each team becomes ONE block named by
+    // the team, and the company keeps rendering as a frame
+    const rg = buildRenderGraph(g, 0.4);
+    const titles = rg.pseudo.map((p) => p.title).sort();
+    expect(titles).toContain("Engineering");
+    expect(titles).toContain("Design");
+    expect(rg.nodes.map((n) => n.id)).toContain("company");
+    // the Engineering block holds the container AND its people
+    const eng = rg.pseudo.find((p) => p.title === "Engineering")!;
+    expect(eng.members.map((m) => m.id).sort()).toEqual(
+      ["eng-a", "eng-b", "lead-eng", "team-eng"].sort(),
+    );
+  });
+
+  test("zoomed far out, the company absorbs everything into one block", () => {
+    const g = orgChartGraph();
+    // team frames (h=512) unreadable at k=0.05 (26px < 56)
+    const rg = buildRenderGraph(g, 0.05);
+    expect(rg.pseudo.length).toBe(1);
+    expect(rg.pseudo[0]!.title).toBe("Acme Inc.");
+    expect(rg.nodes.length).toBe(0);
+  });
+
+  test("containment is a merge barrier: cousins never merge across teams", () => {
+    // a and b sit 8 world units apart (4px at k=0.5) but belong to
+    // DIFFERENT containers; each container also holds a big readable
+    // sibling so neither container absorbs. Without the barrier the pair
+    // would proximity-merge instantly.
+    const nodes: GraphNode[] = [
+      { ...mkNode("c1", 0, 0, 512, 0), h: 512 },
+      { ...mkNode("c2", 5000, 0, 512, 0), h: 512 },
+      { ...mkNode("a2", 64, 64, 128, 0), h: 256, parent: "c1" },
+      { ...mkNode("b2", 5064, 64, 128, 0), h: 256, parent: "c2" },
+      { ...mkNode("a", 2000, 600, 128, 1), parent: "c1" },
+      { ...mkNode("b", 2136, 600, 128, 1), parent: "c2" },
+    ];
+    const rg = buildRenderGraph({ nodes, edges: [] }, 0.5);
+    for (const p of rg.pseudo)
+      expect(p.members.map((m) => m.id).sort()).not.toEqual(["a", "b"]);
+    // control: strip the containment and the same geometry merges
+    const flat = nodes.map((n) => ({ ...n, parent: undefined }));
+    const free = buildRenderGraph({ nodes: flat, edges: [] }, 0.5);
+    expect(
+      free.pseudo.some((p) =>
+        ["a", "b"].every((id) => p.members.some((m) => m.id === id)),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("open kinds & categories", () => {
+  test("built-ins keep their palette; unknown names get stable colors", () => {
+    expect(kindColor("audio")).toBe(KIND_COLOR.audio!);
+    const c = kindColor("report");
+    expect(c).toMatch(/^#[0-9a-f]{6}$/);
+    expect(kindColor("report")).toBe(c); // deterministic
+    expect(categoryColor("team")).toMatch(/^#[0-9a-f]{6}$/);
+    expect(categoryColor("team")).not.toBe(categoryColor("member"));
   });
 });
