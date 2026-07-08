@@ -62,7 +62,8 @@
     "build": "tsgo --noEmit && vite build",
     "build:lib": "vite build --config vite.lib.config.ts && tsgo -p tsconfig.build.json",
     "typecheck": "tsgo --noEmit",
-    "preview": "vite preview",
+    "preview": "vite preview --strictPort --port 5184",
+    "preview:fresh": "bun run build && vite preview --strictPort --port 5184",
     "prepublishOnly": "bun run build:lib"
   },
   "devDependencies": {
