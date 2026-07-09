@@ -88,6 +88,16 @@ export interface GraphNode {
     anchor?: "right" | "below" | "over";
     offset?: { x: number; y: number };
     interactive?: boolean;
+    /** "fixed" (screen-constant, default) | "zoom" (scales with view.k) |
+     * "fit" (scales to fill the node's screen area). See NodeHtmlOverlay. */
+    scale?: "fixed" | "zoom" | "fit";
+    /** zoom/fit: hide once the applied scale drops below this (default 0.75) */
+    minScale?: number;
+    /** fit: cap on the applied scale (default 1 — never upscale past natural) */
+    maxScale?: number;
+    /** clip the overlay to the node rect / viewport / not at all */
+    clip?: "node" | "viewport" | "none";
+    overflow?: "hidden" | "auto";
     destroy?: () => void;
   };
   /**
@@ -174,6 +184,12 @@ export function nodeHeight(n: GraphNode): number {
  * snaps, and selects like any node, and is connectable if given `outputs`.
  *   graph.nodes.push(annotationNode({ id, x, y, w: 240, el: myCard,
  *     title: "What is this?" }))
+ *
+ * `scale` controls how the HTML body tracks zoom: "fixed" (screen-constant,
+ * default — keeps buttons/text readable) or "fit"/"zoom" to scale with the
+ * card's world frame (with minScale/maxScale). Passing BOTH `el` and `draw`
+ * works well: the HTML body shows up close, and the canvas `draw` acts as a
+ * lower-detail fallback once the overlay hides (below minScale / too small).
  */
 export function annotationNode(opts: {
   id: string;
@@ -183,13 +199,23 @@ export function annotationNode(opts: {
   h?: number;
   /** rich HTML body glued over the card (interactive) */
   el?: HTMLElement;
-  /** or a canvas-draw body (screen px within the card rect) */
+  /** or a canvas-draw body (screen px within the card rect); also a good LOD
+   * fallback drawn when the `el` overlay hides at small scales */
   draw?: (ctx: CanvasRenderingContext2D, rect: { width: number; height: number }) => void;
   title?: string;
   /** card fill (default node background) */
   bg?: string;
   /** make the card connectable by giving it output ports */
   outputs?: Port[];
+  /** overlay scale mode (default "fixed" — screen-constant) */
+  scale?: "fixed" | "zoom" | "fit";
+  /** zoom/fit: hide below this applied scale (default 0.75) */
+  minScale?: number;
+  /** fit: cap on the applied scale (default 1) */
+  maxScale?: number;
+  /** clip the HTML body to the card / viewport / not at all */
+  clip?: "node" | "viewport" | "none";
+  overflow?: "hidden" | "auto";
 }): GraphNode {
   return {
     id: opts.id,
@@ -206,7 +232,16 @@ export function annotationNode(opts: {
     note: true,
     draw: opts.draw,
     overlay: opts.el
-      ? { el: opts.el, anchor: "over", interactive: true }
+      ? {
+          el: opts.el,
+          anchor: "over",
+          interactive: true,
+          scale: opts.scale,
+          minScale: opts.minScale,
+          maxScale: opts.maxScale,
+          clip: opts.clip,
+          overflow: opts.overflow,
+        }
       : undefined,
   };
 }
