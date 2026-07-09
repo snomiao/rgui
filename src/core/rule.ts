@@ -14,10 +14,12 @@ export interface RgRule {
    */
   radix: number;
   /**
-   * how a node's two axes pick their snap layer (default "per-axis"):
-   * "per-axis" lets each axis promote alone (2 × 9 grids → 2 × 16);
-   * "finest-axis" gives the node ONE cell, named by its shorter axis, and
-   * lets the longer axis run past radix grids (2 × 9 stays 2 × 9).
+   * how many layers a node's LONGER axis may descend toward its shorter one
+   * (default "sibling" = one). "per-axis" (zero) lets each axis promote
+   * alone, so 2 × 9 grids snaps to 2 × 16 at radix 8. "sibling" drops the
+   * long axis one layer to meet the short one: 2 × 9 stays 2 × 9, while a
+   * 1:256 node still pays only 9 cells rather than 513. "finest-axis"
+   * (unbounded) hands the whole node the short axis's cell.
    */
   sizeLaw: SizeLaw;
   /** a node collapses into a pseudo-node below this screen height (px) */
@@ -60,7 +62,7 @@ export interface RgRule {
 export const DEFAULT_RULE: RgRule = {
   minGridPx: 48,
   radix: 8,
-  sizeLaw: "per-axis",
+  sizeLaw: "sibling",
   collapsePx: 56,
   collapseSnappedPx: 84,
   fieldMinPx: 9,

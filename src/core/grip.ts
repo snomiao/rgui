@@ -22,6 +22,7 @@ import {
   type GraphNode,
 } from "./graph.js";
 import { clampSize } from "./pack.js";
+import { DEFAULT_RULE } from "./rule.js";
 
 /** magnification band a rescale may reach */
 export const MIN_SCALE = 0.25;
@@ -56,10 +57,10 @@ export function gripResize(
   cy: number,
   others: GraphNode[],
   radix: number,
-  law: SizeLaw = "per-axis",
+  law: SizeLaw = DEFAULT_RULE.sizeLaw,
 ): GripSize {
-  // the two axes snap TOGETHER: under "finest-axis" the shorter one names
-  // the cell both are counted in, so a squat node keeps a fine height
+  // the two axes snap TOGETHER: the shorter one pulls the longer down
+  // toward its layer, as far as the active size law allows
   const snapped = snapNodeSize(cx - n.x, cy - n.y, radix, law);
   const wantW = Math.max(nodeMinWidth(n), snapped.w);
   const wantH = Math.max(nodeMinHeight(n), snapped.h);
@@ -84,7 +85,7 @@ export function gripRescale(
   cy: number,
   others: GraphNode[],
   radix: number,
-  law: SizeLaw = "per-axis",
+  law: SizeLaw = DEFAULT_RULE.sizeLaw,
 ): GripSize {
   const { w: bw, h: bh } = base;
   const dx = cx - n.x;
@@ -92,8 +93,8 @@ export function gripRescale(
   const floor = MIN_SCALE / base.scale;
   let f = (dx * bw + dy * bh) / (bw * bw + bh * bh);
   if (!(f > 0)) f = floor; // corner at or behind the node's origin
-  // snap the width to the lattice — under "finest-axis" the height the
-  // ratio implies gets a vote on which layer that lattice is
+  // snap the width to the lattice — unless the law is "per-axis", the
+  // height the ratio implies gets a vote on which layer that lattice is
   const step = sizeStepFor(bw * f, bh * f, radix, law);
   f = (Math.max(1, Math.ceil((bw * f) / step - 1e-9)) * step) / bw;
   // a magnified node is still a node: keep it in a sane band

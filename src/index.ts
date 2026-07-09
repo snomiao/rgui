@@ -20,6 +20,8 @@ export {
   snapSizeRadix,
   snapNodeSize,
   sizeStepFor,
+  sizeStepsFor,
+  sizeLawDepth,
   type SizeLaw,
   sizeLayerStep,
   worldToScreen,

@@ -744,6 +744,13 @@ describe("size law: which layer do the two axes agree on?", () => {
     }
   });
 
+  test("sibling is the default, and the default-arg path honors it", () => {
+    expect(DEFAULT_RULE.sizeLaw).toBe("sibling");
+    // omitting the law must match asking for sibling explicitly
+    expect(snapNodeSize(2, 9, 4)).toEqual(snapNodeSize(2, 9, 4, "sibling"));
+    expect(snapNodeSize(2, 9, 8)).toEqual({ w: 2, h: 9 });
+  });
+
   test("sibling: the long axis drops exactly ONE layer toward the short one", () => {
     // taku's radix-4 cases. 9 needs layer 16, descends to 4 → 3 cells = 12
     // under depth 0; sibling lets it drop once more, to layer 1 → 9.

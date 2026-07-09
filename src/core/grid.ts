@@ -109,12 +109,14 @@ export function snapSizeRadix(
  * shorter one. The three named laws are one number in disguise — the count
  * of layers the long axis may drop, floored at the short axis's own layer:
  *
- * - "per-axis" (depth 0, default): the long axis stays on the layer the
+ * - "per-axis" (depth 0): the long axis stays on the layer the
  *   size law hands it. A 9-grid height at radix 8 has outgrown layer 1, so
  *   it sits on layer 8 as 2 grids — 16 fine grids. The other axis has no
  *   say. (At radix 4 the same 9 lands on layer 4 as 3 grids: 12.)
- * - "sibling" (depth 1): the long axis may drop ONE layer toward the short
- *   one. 2 × 9 becomes 2 × 9; 2 × 513 becomes 2 × 576 rather than 2 × 768.
+ * - "sibling" (depth 1, DEFAULT): the long axis may drop ONE layer toward
+ *   the short one. 2 × 9 becomes 2 × 9; 2 × 513 becomes 2 × 576 rather than
+ *   2 × 768 — a squat node keeps a fine height without a 1:256 node turning
+ *   into a 513-cell ruler.
  * - "finest-axis" (depth ∞): the short axis names the node's cell outright
  *   and the long one is an integer count of it. 2 × 513 stays 2 × 513.
  *
@@ -137,7 +139,7 @@ export function sizeStepsFor(
   w: number,
   h: number,
   radix = DEFAULT_RULE.radix,
-  law: SizeLaw = "per-axis",
+  law: SizeLaw = DEFAULT_RULE.sizeLaw,
   baseStep = 1,
 ): { w: number; h: number } {
   const shortStep = sizeLayerStep(Math.min(w, h), radix, baseStep);
@@ -153,13 +155,13 @@ export function sizeStepsFor(
 
 /**
  * The step a node's WIDTH snaps on, given the height it will end up with.
- * Under "per-axis" the height is irrelevant.
+ * Only under "per-axis" is the height irrelevant.
  */
 export function sizeStepFor(
   w: number,
   h: number,
   radix = DEFAULT_RULE.radix,
-  law: SizeLaw = "per-axis",
+  law: SizeLaw = DEFAULT_RULE.sizeLaw,
   baseStep = 1,
 ): number {
   return sizeStepsFor(w, h, radix, law, baseStep).w;
@@ -170,7 +172,7 @@ export function snapNodeSize(
   w: number,
   h: number,
   radix = DEFAULT_RULE.radix,
-  law: SizeLaw = "per-axis",
+  law: SizeLaw = DEFAULT_RULE.sizeLaw,
   baseStep = 1,
 ): { w: number; h: number } {
   const step = sizeStepsFor(w, h, radix, law, baseStep);
