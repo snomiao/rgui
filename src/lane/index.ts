@@ -22,7 +22,12 @@ export {
   type LaneSource,
   type LaneEnv,
 } from "./lane.js";
-export { createTreeSource, type FileNode } from "./tree.js";
+export {
+  createTreeSource,
+  type FileNode,
+  type TreeSource,
+  type TreeOptions,
+} from "./tree.js";
 export { createSeriesSource, type SeriesOptions } from "./timeseries.js";
 export {
   createTimelineSource,

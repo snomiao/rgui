@@ -29,10 +29,21 @@ export interface FileNode {
   children?: FileNode[];
   /** file text; when present, zooming into the file reveals it line by line */
   content?: string;
+  /** repo-relative path — lets a host lazily fetch content on zoom */
+  path?: string;
+}
+
+/** optional hooks for lazy content loading (e.g. from a GitHub repo) */
+export interface TreeOptions {
+  /** fetch a file's text by its `path`; null/throw → leave it unloaded */
+  fetchContent?: (path: string) => Promise<string | null>;
+  /** called after lazily-loaded content arrives (host wires it to invalidate) */
+  onUpdate?: () => void;
 }
 
 /** a content file spans this many world units at most (keeps layout balanced) */
 const MAX_FILE_UNITS = 120;
+const BYTES_PER_LINE = 45; // size → estimated line count (fixes weight up-front)
 
 interface TNode {
   name: string;
@@ -41,14 +52,18 @@ interface TNode {
   children: TNode[];
   /**
    * self-row + descendants, in world units. Folders/plain files = 1 unit;
-   * a file WITH content spans ~one unit per line, so zooming in spreads its
-   * lines out until each is readable — line-level semantic zoom.
+   * a file with content (or a known byte size) spans ~one unit per line, so
+   * zooming in spreads its lines out until each is readable. Weight is fixed
+   * from the byte size up-front so lazy content loading never reshuffles it.
    */
   weight: number;
   depth: number;
   fileCount: number; // descendant files
   totalSize: number; // descendant bytes
-  lines: string[]; // file content split into lines (empty for dirs/binaries)
+  lines: string[]; // file content split into lines (empty until loaded)
+  path: string; // repo-relative path (for lazy content fetch)
+  tried: boolean; // content load attempted?
+  loading: boolean; // fetch in flight?
 }
 
 const PAD_X = 10;
@@ -100,20 +115,28 @@ function build(node: FileNode, depth: number): TNode {
       fileCount,
       totalSize,
       lines: [],
+      path: node.path ?? "",
+      tried: true,
+      loading: false,
     };
   }
   const lines = node.content ? node.content.split("\n") : [];
+  // estimate line count from bytes when content isn't loaded yet, so the file's
+  // world-height (and thus zoomability) is fixed before any lazy fetch
+  const estLines = lines.length || Math.round((node.size ?? 0) / BYTES_PER_LINE);
   return {
     name: node.name,
     ext: extOf(node.name),
     isDir: false,
     children: [],
-    // one world unit per line (+1 for the header) so lines spread on zoom
-    weight: lines.length ? Math.min(lines.length + 1, MAX_FILE_UNITS) : 1,
+    weight: estLines ? Math.min(estLines + 1, MAX_FILE_UNITS) : 1,
     depth,
     fileCount: 1,
     totalSize: node.size ?? 0,
     lines,
+    path: node.path ?? "",
+    tried: !!node.content, // already have content → nothing to fetch
+    loading: false,
   };
 }
 
@@ -146,8 +169,59 @@ function fit(ctx: CanvasRenderingContext2D, text: string, maxW: number): string 
 const indentX = (depth: number) =>
   PAD_X + Math.min(depth, MAX_INDENT_DEPTH) * INDENT;
 
-export function createTreeSource(root: FileNode): LaneSource {
+/** tree source with an optional lazy content loader (host wires setOnUpdate) */
+export interface TreeSource extends LaneSource {
+  setOnUpdate(fn: () => void): void;
+}
+
+const TEXT_EXT = new Set([
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "json5", "md", "markdown",
+  "txt", "rst", "adoc", "tex", "css", "scss", "less", "styl", "html", "htm",
+  "xml", "svg", "vue", "svelte", "astro", "yml", "yaml", "toml", "ini", "cfg",
+  "conf", "properties", "env", "c", "h", "cc", "cpp", "hpp", "cxx", "hxx", "m",
+  "mm", "cs", "go", "rs", "java", "kt", "kts", "scala", "clj", "py", "pyi",
+  "rb", "php", "lua", "sh", "bash", "zsh", "fish", "ps1", "bat", "sql", "r",
+  "pl", "pm", "swift", "dart", "ex", "exs", "erl", "hs", "ml", "fs", "vim",
+  "asm", "s", "S", "dts", "dtsi", "cmake", "mk", "in", "ac", "am", "gradle",
+  "proto", "graphql", "gql", "diff", "patch", "csv", "tsv", "log", "gitignore",
+  "gitattributes", "editorconfig", "lock", "makefile", "dockerfile", "readme",
+  "license", "authors", "changelog", "todo", "kbuild", "kconfig", "defconfig",
+]);
+const isText = (t: TNode) =>
+  t.ext === "" || TEXT_EXT.has(t.ext) || TEXT_EXT.has(t.name.toLowerCase());
+
+export function createTreeSource(
+  root: FileNode,
+  opts: TreeOptions = {},
+): TreeSource {
   const tree = build(root, 0);
+  const fetchContent = opts.fetchContent;
+  let onUpdate: () => void = opts.onUpdate ?? (() => {});
+
+  // Fetch a file's text on demand, capped so only a few load at once — combined
+  // with viewport culling + a min-height gate, we only ever fetch the handful
+  // of files actually being viewed at a readable scale.
+  const MAX_CONCURRENT = 5;
+  let inflight = 0;
+  function loadContent(t: TNode) {
+    if (t.tried || t.loading || !fetchContent || !t.path) return;
+    if (inflight >= MAX_CONCURRENT) return; // wait for a slot (retried next frame)
+    t.loading = true;
+    inflight++;
+    Promise.resolve(fetchContent(t.path))
+      .then((text) => {
+        t.tried = true;
+        if (text != null) t.lines = text.split("\n").slice(0, MAX_FILE_UNITS * 2);
+      })
+      .catch(() => {
+        t.tried = true;
+      })
+      .finally(() => {
+        t.loading = false;
+        inflight--;
+        onUpdate();
+      });
+  }
 
   function draw(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
     const H = view.height;
@@ -277,9 +351,17 @@ export function createTreeSource(root: FileNode): LaneSource {
     // content region below the header
     const top = sy0 + headerH;
     if (sy1 - top < 8) return;
+    // lazily pull the file's real text once its row is tall enough to read it
+    // (only visible files reach here, and only readable-scale ones fetch)
+    if (!t.lines.length && !t.tried && h >= 60 && isText(t)) loadContent(t);
     if (t.lines.length) drawContent(ctx, t, top, sy1, x, right, color, env);
-    else if (h >= 90)
+    else if (t.loading) {
+      ctx.font = "10px ui-monospace, Menlo, monospace";
+      ctx.fillStyle = theme.textFaint;
+      ctx.fillText("loading…", x + 18, top + 10);
+    } else if (h >= 90) {
       drawPreview(ctx, x + 18, top + 6, right - 6, sy1 - 8, color, theme);
+    }
   }
 
   /**
@@ -499,6 +581,9 @@ export function createTreeSource(root: FileNode): LaneSource {
       const wy = screenToWorldY(view, view.height / 2);
       const path = locate(tree, wy);
       return path || null;
+    },
+    setOnUpdate(fn) {
+      onUpdate = fn;
     },
   };
 

@@ -141,6 +141,28 @@
         color: var(--bg);
         border-color: var(--accent);
       }
+      /* repo input (folder-tree view) */
+      #repo {
+        width: 200px;
+        padding: 7px 11px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--text);
+        font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        outline: none;
+      }
+      #repo:focus {
+        border-color: var(--accent);
+      }
+      #repo::placeholder {
+        color: var(--text-faint);
+      }
+      #repostat {
+        font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--text-muted);
+        pointer-events: none;
+      }
       /* search-to-focus */
       #search {
         width: 180px;
@@ -240,11 +262,20 @@
         color: var(--text);
         border-color: var(--text-faint);
       }
-      #debug {
+      #hudcol {
         position: fixed;
         bottom: 10px;
         left: 12px;
         z-index: 30;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-start;
+        pointer-events: none;
+        user-select: none;
+      }
+      #debug,
+      #net {
         padding: 6px 8px;
         background: var(--panel);
         border: 1px solid var(--border);
@@ -252,13 +283,16 @@
         color: var(--text);
         font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
         white-space: pre;
-        pointer-events: none;
-        user-select: none;
       }
-      #debug .dim {
+      #net:empty {
+        display: none;
+      }
+      #debug .dim,
+      #net .dim {
         color: var(--text-muted);
       }
-      #debug .hi {
+      #debug .hi,
+      #net .hi {
         color: var(--accent);
       }
       #hint {
@@ -292,6 +326,8 @@
         <input id="search" type="search" placeholder="Search events…" autocomplete="off" spellcheck="false" />
         <div id="suggest"></div>
       </div>
+      <input id="repo" type="text" placeholder="owner/repo or GitHub URL" autocomplete="off" spellcheck="false" value="torvalds/linux" style="display: none;" />
+      <span id="repostat"></span>
       <button class="icon-btn" id="axis" title="Toggle log / linear time axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log axis</button>
       <button class="icon-btn" id="logscale" title="Toggle symlog value axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log</button>
       <div class="grow"></div>
@@ -302,7 +338,10 @@
 
     <div id="filters" role="group" aria-label="event types"></div>
 
-    <div id="debug"></div>
+    <div id="hudcol">
+      <div id="net"></div>
+      <div id="debug"></div>
+    </div>
     <div id="hint">
       <b>scroll</b> = move · <b>⌘/ctrl-scroll</b> or <b>pinch</b> = zoom (faster the harder you flick) · <b>R/F</b> or <b>D/A</b> = zoom · <b>W/S</b> = scroll · <b>dbl-click</b> = focus<br />
       zoom grows height &amp; detail — width never changes

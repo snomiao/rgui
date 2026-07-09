@@ -9,6 +9,59 @@ import type { TimelineSource } from "./lane/timeline.js";
 import { createSeriesSource } from "./lane/timeseries.js";
 import { createTreeSource, type FileNode } from "./lane/tree.js";
 
+// ── network monitor: show every external fetch in the debug panel ─────────
+const netEl = document.querySelector<HTMLDivElement>("#net")!;
+const net = { inflight: 0, total: 0, err: 0, hosts: new Map<string, number>() };
+const SHORT: Record<string, string> = {
+  "api.github.com": "github-api",
+  "raw.githubusercontent.com": "github-raw",
+  "query.wikidata.org": "wikidata",
+  "ll.thespacedevs.com": "spacedevs",
+};
+function renderNet() {
+  if (!net.total) {
+    netEl.textContent = "";
+    return;
+  }
+  const via = [...net.hosts.entries()]
+    .map(([h, c]) => `${SHORT[h] ?? h} ${c}`)
+    .join(" · ");
+  netEl.innerHTML =
+    `<span class="dim">net</span> ${net.inflight} live · ${net.total} req` +
+    (net.err ? ` · <span class="hi">${net.err} err</span>` : "") +
+    (via ? `\n<span class="dim">via</span> ${via}` : "");
+}
+const _fetch = window.fetch.bind(window);
+const trackedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
+  let host = "?";
+  try {
+    const u = typeof input === "string" ? input : (input as Request).url ?? String(input);
+    host = new URL(u, location.href).host;
+  } catch {
+    /* ignore */
+  }
+  net.inflight++;
+  net.total++;
+  net.hosts.set(host, (net.hosts.get(host) ?? 0) + 1);
+  renderNet();
+  return _fetch(input, init)
+    .then(
+      (r) => {
+        if (!r.ok) net.err++;
+        return r;
+      },
+      (e) => {
+        net.err++;
+        throw e;
+      },
+    )
+    .finally(() => {
+      net.inflight--;
+      renderNet();
+    });
+};
+window.fetch = Object.assign(trackedFetch, { preconnect: _fetch.preconnect });
+
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
 const debug = document.querySelector<HTMLDivElement>("#debug")!;
 
@@ -255,6 +308,8 @@ for (const c of timeSource.categories) {
 }
 
 const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
+const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
+const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
 const axisBtn = document.querySelector<HTMLButtonElement>("#axis");
 function refreshChrome() {
   if (logBtn) {
@@ -269,6 +324,8 @@ function refreshChrome() {
   }
   filters.style.display = current === "time" ? "flex" : "none";
   searchWrap.style.display = current === "time" ? "" : "none";
+  repoInput.style.display = current === "tree" ? "" : "none";
+  repoStat.style.display = current === "tree" ? "" : "none";
   for (const b of seg.querySelectorAll("button")) {
     b.setAttribute("aria-pressed", String(b.dataset.src === current));
   }
@@ -371,6 +428,92 @@ logBtn?.addEventListener("click", () => {
   refreshChrome();
 });
 refreshChrome();
+
+// ── folder tree from any GitHub repo (default: torvalds/linux) ────────────
+interface GhEntry {
+  path: string;
+  type: string;
+  size?: number;
+}
+function buildFileTree(name: string, entries: GhEntry[]): FileNode {
+  const root: FileNode = { name, children: [] };
+  const dirs = new Map<string, FileNode>([["", root]]);
+  const ensureDir = (path: string): FileNode => {
+    const hit = dirs.get(path);
+    if (hit) return hit;
+    const parts = path.split("/");
+    const nm = parts.pop()!;
+    const parent = ensureDir(parts.join("/"));
+    const d: FileNode = { name: nm, children: [], path };
+    parent.children!.push(d);
+    dirs.set(path, d);
+    return d;
+  };
+  for (const e of entries) {
+    if (e.type === "tree") ensureDir(e.path);
+    else if (e.type === "blob") {
+      const parts = e.path.split("/");
+      const fn = parts.pop()!;
+      ensureDir(parts.join("/")).children!.push({
+        name: fn,
+        size: e.size ?? 0,
+        path: e.path,
+      });
+    }
+  }
+  return root;
+}
+function parseRepo(s: string): { owner: string; repo: string } | null {
+  const m =
+    s.trim().match(/github\.com[/:]([^/]+)\/([^/#?\s]+)/) ??
+    s.trim().match(/^([^/\s]+)\/([^/\s]+)$/);
+  return m ? { owner: m[1]!, repo: m[2]!.replace(/\.git$/, "") } : null;
+}
+
+let repoToken = 0; // guards against out-of-order loads
+async function loadRepo(owner: string, repo: string) {
+  const my = ++repoToken;
+  repoStat.textContent = "loading…";
+  try {
+    const info = await fetch(`https://api.github.com/repos/${owner}/${repo}`).then(
+      (r) => (r.ok ? r.json() : null),
+    );
+    const branch = info?.default_branch ?? "HEAD";
+    const tree = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`,
+    ).then((r) => (r.ok ? r.json() : null));
+    if (my !== repoToken) return; // superseded
+    if (!tree?.tree) {
+      repoStat.textContent = "repo not found";
+      return;
+    }
+    const root = buildFileTree(`${owner}/${repo}`, tree.tree as GhEntry[]);
+    const src = createTreeSource(root, {
+      fetchContent: (path) =>
+        fetch(
+          `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`,
+        )
+          .then((r) => (r.ok ? r.text() : null))
+          .catch(() => null),
+    });
+    src.setOnUpdate(() => lane.invalidate());
+    sources.tree = src;
+    if (current === "tree") lane.setSource(src);
+    repoStat.textContent =
+      `${(tree.tree as GhEntry[]).length.toLocaleString()} entries` +
+      (tree.truncated ? " (truncated)" : "");
+  } catch {
+    if (my === repoToken) repoStat.textContent = "load failed";
+  }
+}
+repoInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const parsed = parseRepo(repoInput.value);
+  if (parsed) loadRepo(parsed.owner, parsed.repo);
+  else repoStat.textContent = "bad repo";
+});
+// load the default repo (Linux) in the background; synthetic tree shows first
+void loadRepo("torvalds", "linux");
 
 // ── theme toggle (mirrors index.html) ─────────────────────────────────────
 const themeToggle = document.querySelector<HTMLButtonElement>("#theme-toggle");
