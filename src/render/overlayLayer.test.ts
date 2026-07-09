@@ -199,4 +199,24 @@ describe("clip:'node' background presses forward to the canvas", () => {
     press(btn); // bubbles through the wrap, but the control is the target
     expect(forwarded).toBe(0);
   });
+
+  test("forwarded presses carry canvas-relative offsetX/offsetY", () => {
+    const mgr = createOverlayManager(canvas);
+    const seen: { x: number; y: number }[] = [];
+    canvas.addEventListener("pointerdown", (e) => {
+      seen.push({ x: (e as MouseEvent).offsetX, y: (e as MouseEvent).offsetY });
+    });
+    mgr.sync(remap({ el, anchor: "over", clip: "node" }), null, VIEW, DEFAULT_RULE);
+
+    wrapOf(el).dispatchEvent(
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 42,
+        clientY: 77,
+      }),
+    );
+    // canvas rect origin is 0,0 in this DOM — offsets equal client coords
+    expect(seen).toEqual([{ x: 42, y: 77 }]);
+  });
 });

@@ -269,11 +269,18 @@ export function createOverlayManager(
           )
             return;
           if (ev.type === "contextmenu") ev.preventDefault();
-          canvas.dispatchEvent(
+          const fwd =
             typeof PointerEvent !== "undefined" && ev instanceof PointerEvent
               ? new PointerEvent(ev.type, ev)
-              : new MouseEvent(ev.type, ev),
-          );
+              : new MouseEvent(ev.type, ev);
+          // Chromium computes offsetX/Y for UNTRUSTED events without layout
+          // (halved under dpr 2, wrong under transforms), and the canvas
+          // pointer handlers read them — pin the correct canvas-relative
+          // values on the clone before dispatching.
+          const cr = canvas.getBoundingClientRect();
+          Object.defineProperty(fwd, "offsetX", { value: ev.clientX - cr.left });
+          Object.defineProperty(fwd, "offsetY", { value: ev.clientY - cr.top });
+          canvas.dispatchEvent(fwd);
         };
         wrap.addEventListener("pointerdown", forwardPress);
         wrap.addEventListener("contextmenu", forwardPress);
