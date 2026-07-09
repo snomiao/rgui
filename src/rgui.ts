@@ -1159,19 +1159,20 @@ export function createRgui(
       drag.node = node;
       drag.subtree = seatAll(drag.subtree);
       drag.obstacles = seatAll(drag.obstacles);
-      // dx/dy were measured against the DISPLAY rect the user grabbed —
-      // rebuild that rect for the new node and re-measure from the pointer
+      // dx/dy were measured against the DISPLAY rect the user grabbed, so
+      // re-measure against the SAME thing pointerdown read — displayGraph()
+      // rebuilt for the incoming nodes. Do not re-derive its formula here:
+      // displayGraph returns the base graph untouched when nothing rotates
+      // and nothing overlaps (no lattice snap at all), and otherwise packs
+      // the projected clones to flush contact. A hand-rolled snap() would
+      // disagree with both, and a node whose x is off the lattice — which
+      // any host-supplied position may be — would jump on the next move.
       const [wx, wy] = screenToWorld(view, pointer.sx, pointer.sy);
-      const h = nodeHeight(node);
-      const mainStep = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
-      const [qsx, qsy] = nodeSnapStep(mainStep, node);
-      const [cx, cy] = projectWorldPt(
-        node.x + node.w / 2,
-        node.y + h / 2,
-        node.z ?? 0,
-      );
-      drag.dx = wx - snap(cx - node.w / 2, qsx);
-      drag.dy = wy - snap(cy - h / 2, qsy);
+      // read from the RETURNED nodes, not the displayNodes map: the
+      // no-rotation/no-overlap path returns early without refreshing it
+      const disp = displayGraph().nodes.find((m) => m.id === node.id) ?? node;
+      drag.dx = wx - disp.x;
+      drag.dy = wy - disp.y;
     } else if (drag.type === "group") {
       drag.nodes = seatAll(drag.nodes);
       if (!drag.nodes.length) drag = null;
@@ -1214,6 +1215,10 @@ export function createRgui(
     if (spaceHeld && input === "figma") return; // space+drag = pan (d3 owns it)
     // chrome hit-tests use RAW screen coords; graph logic uses VIEW coords
     const [vx0, vy0] = toView(ev.offsetX, ev.offsetY);
+    // seed the pointer here, not only on move: a setGraph (or a shift tap)
+    // can land before the gesture's first pointermove, and both re-anchor
+    // against `pointer` — reading a stale one teleports the drag
+    pointer = { sx: vx0, sy: vy0 };
     // panels are the topmost chrome
     const ph2 = panelHitAt(lastPanelRects, ev.offsetX, ev.offsetY);
     if (ph2) {
