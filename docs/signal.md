@@ -14,11 +14,11 @@ host (otoji, sflow, your own scheduler) executes.
 | question | field | owned by | why |
 |---|---|---|---|
 | is `+` meaningful across parallel sources? | `measure: "extensive" \| "intensive"` | the port | a property of the data |
-| **may** this value be duplicated? | `share: "copy" \| "clone" \| "move"` | the **producing port** (not overridable) | only the node emitting a value knows whether it hands out a coordinate or a MediaStream handle |
+| **may** this value be duplicated / aliased? | `ownership: "copy" \| "clone" \| "share" \| "move"` | the **producing port** (not overridable) | only the node emitting a value knows whether it hands out a coordinate or a MediaStream handle |
 | is it duplicated **here**, or divided? | `fanout: "broadcast" \| "split" \| "route"` | the **fan-out group** | a topology decision — the same audio port broadcasts to a recorder in one graph and round-robins across a worker pool in another |
 | what **share** does this wire take? | `Edge.weight` | the **edge** | only the shares may differ within a group; the policy may not |
 
-`share` and `fanout` are deliberately separate. One says what the data **is** (a
+`ownership` and `fanout` are deliberately separate. One says what the data **is** (a
 capability, intrinsic); the other says what this particular topology **does** with
 it (a policy). Conflating them cannot express *"a 4K frame may be copied, but
 broadcasting it to three consumers on three machines means serializing it three
@@ -32,19 +32,30 @@ division. You cannot have one edge of a group broadcast while another splits. So
 - the **graph** overrides it per group (`Graph.fanout["nodeId.portId"]`),
 - the **edge** apportions the shares within a split (`Edge.weight`).
 
-## `share` — the capability
+## `ownership` — the capability
 
-This is Rust's `Copy` / `Clone` / move, and for the same reason.
+These are Rust's four, and for the same reasons.
 
-| `share` | duplication | examples |
-|---|---|---|
-| `copy` | **free** | coordinates, labels, config, an STT transcript |
-| `clone` | **legal, but costs** | a 4K frame, a PCM chunk — broadcasting to 3 machines serializes it 3× |
-| `move` | **impossible or forbidden** | money, a token budget, a work item (copying double-spends it); a GPU buffer, a file descriptor, a MediaStream handle (copying can't leave home) |
+| `ownership` | Rust | duplicable? | aliasable? | examples |
+|---|---|---|---|---|
+| `copy` | `Copy` | ✅ free | ✅ | coordinates, labels, config, an STT transcript |
+| `clone` | `Clone` | ✅ **at a cost** | ✅ | a 4K frame, a PCM chunk — broadcasting to 3 machines serializes it 3× |
+| `share` | `Arc<T>` / `&T` | ❌ | ✅ | a MediaStream, a GPU buffer, an OffscreenCanvas, a file descriptor |
+| `move` | ownership move | ❌ | ❌ | money, a token budget, a work item, a lease, a lock |
+
+The `share` rung is the load-bearing one, and it took a real cross-machine host to
+find it. Handing a `MediaStream` to two downstream nodes in one process is a
+**shared borrow**, not a copy — nothing is duplicated, both consumers read the same
+object. So broadcasting it is *legal*. Only `move` — single ownership — makes
+broadcast illegal, because broadcast means several consumers hold it at once.
 
 The single constraint: **a `move` value may never `broadcast`.** Everything else is
 allowed — splitting a copyable value is a load-balancing choice, not a safety one,
-which is exactly why `jsonl` is `share: "copy"` yet `fanout: "split"`.
+which is exactly why `jsonl` is `ownership: "copy"` yet `fanout: "split"`.
+
+Both verdicts are **placement-independent**: a shared borrow is safe on any machine,
+a `move` broadcast is unsafe on every machine. That is what lets rgui judge a
+fan-out statically, without ever knowing where a node runs.
 
 ### Where "single-to-single by default" bites
 
@@ -57,6 +68,7 @@ silently.
 ```
 copy  (coord, labels)   →  2nd edge: OK, silent broadcast
 clone (frame, pcm)      →  2nd edge: OK + warn "duplicating a 4K frame ×3"
+share (MediaStream)     →  2nd edge: OK — a shared borrow, nothing is copied
 move  (budget, lease)   →  2nd edge: ERROR — declare split or route
 ```
 
@@ -78,10 +90,10 @@ Physics keeps the same two words apart: mass is extensive *and* conserved; entro
 is extensive and emphatically *not* conserved; volume likewise. Additivity and
 conservation are orthogonal even in the theory the vocabulary comes from.
 
-|  | `share: "copy" \| "clone"` | `share: "move"` |
+|  | `copy` / `clone` / `share` | `move` |
 |---|---|---|
 | **extensive** (sum/concat legal) | STT transcript segments, audio chunks, log lines, shard counters | token budget, money, work items, rows of a batch |
-| **intensive** (sum forbidden) | coordinates, image frames, vision label sets, config | an exclusive lease, a GPU slot, a lock token |
+| **intensive** (sum forbidden) | coordinates, image frames, vision label sets, a MediaStream | an exclusive lease, a GPU slot, a lock token |
 
 ### The cell the single-axis story gets wrong
 
@@ -141,7 +153,7 @@ atoms, which is exactly what makes a conserving split well defined:
 ```ts
 import {
   SIGNALS, checkSignals, forkValue, resolveSignal, groupFanout, groupWeights,
-  signalConnectionGuard, port,
+  signalConnectionGuard, isDuplicable, isAliasable, port,
 } from "@snomiao/rgui";
 
 // declare on the port — `kind` alone cannot decide this, because "text" is
@@ -179,7 +191,7 @@ forkValue(job, resolveSignal(workPort), 3, { seq: 1 });  // → [undefined, job,
 
 `kind` cannot decide the algebra, so the combinations that keep recurring are named:
 
-| preset | kind | measure | share | fanout |
+| preset | kind | measure | ownership | fanout |
 |---|---|---|---|---|
 | `transcript` | text | extensive | copy | broadcast |
 | `labels` | text | intensive | copy | broadcast |
@@ -187,6 +199,7 @@ forkValue(job, resolveSignal(workPort), 3, { seq: 1 });  // → [undefined, job,
 | `frame` | image | intensive | **clone** | broadcast |
 | `pcm` | audio | extensive | **clone** | broadcast |
 | `coord` | ctl | intensive | copy | broadcast |
+| `handle` | ctl | intensive | **share** | broadcast |
 | `budget` | ctl | extensive | **move** | split (`continuous`) |
 | `work` | ctl | extensive | **move** | route |
 | `lease` | ctl | intensive | **move** | route |
@@ -194,9 +207,13 @@ forkValue(job, resolveSignal(workPort), 3, { seq: 1 });  // → [undefined, job,
 Note `jsonl`: freely copyable, yet its default policy is `split`. Capability and
 policy really are independent.
 
+Note `handle`: a MediaStream / GPU buffer / OffscreenCanvas. It broadcasts (two
+nodes may borrow it) but `isDuplicable` is false, so a host knows it can never be
+serialized across a device boundary.
+
 ### Defaults are the safe choice
 
-An unmarked port is `{ measure: "intensive", share: "copy", fanout: "broadcast" }`.
+An unmarked port is `{ measure: "intensive", ownership: "copy", fanout: "broadcast" }`.
 Copying a fact never destroys anything, refusing to sum never fabricates anything,
 and a second wire broadcasts as every node editor does — so graphs written before
 this module existed keep their exact behavior.
@@ -206,7 +223,7 @@ this module existed keep their exact behavior.
 | code | severity | when |
 |---|---|---|
 | `sum-on-state` | error | a port merges with `sum`/`concat` but is intensive |
-| `broadcast-move` | error | a `move` signal fans out to several edges under `broadcast` |
+| `broadcast-move` | error | a `move` signal fans out to several edges under `broadcast` (a `share` handle does **not** trigger this — it is a borrow) |
 | `cloned-fanout` | warn | a `clone` signal is broadcast to several consumers — each gets its own copy |
 | `kind-mismatch` | warn | a wire joins two different `kind`s |
 | `unmerged-fan-in` | warn | several edges converge with no merge rule declared |
@@ -219,9 +236,25 @@ this module existed keep their exact behavior.
 
 **Transport.** "This frame can't be copied because the consumers are on different
 machines" is a *placement* question, and placement belongs to the host. rgui says
-whether a value **may** be duplicated (`share`) and what that costs (`clone`); it
-does not say **where** anything runs. A handle that cannot cross a machine boundary
-is simply `share: "move"` — the producer already knows.
+whether a value **may** be duplicated (`isDuplicable`) and what that costs
+(`clone`); it never says **where** anything runs.
+
+That division was tested against [otoji](https://otoji.org)'s WebRTC mesh (browser
+↔ native, cross-device edges become data channels) and it held — but only after
+adding the `share` rung. Modelling a `MediaStream` as `move` made rgui reject an
+in-process fan-out that was perfectly safe, and the fix was *not* to teach rgui
+about transport. It was to notice that a handle is **aliasable but not duplicable**.
+Once that is said, every verdict rgui reaches is placement-independent again:
+
+```ts
+// the host's transport check — rgui supplies the predicate, the host the placement
+if (!isDuplicable(resolveSignal(port).ownership) && edgeCrossesDevice(edge))
+  reject(edge, "this signal cannot leave its device");
+```
+
+An `Edge.transport` enum was considered and rejected: transport taxonomies differ
+per host (local / WebRTC mesh / relay / …) and would rot the moment they entered
+core.
 
 ## Mapping to sflow
 

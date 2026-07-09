@@ -7,6 +7,8 @@ import {
   allowedMerges,
   groupFanout,
   groupWeights,
+  isAliasable,
+  isDuplicable,
   isFanoutLegal,
   signalConnectionGuard,
   checkSignals,
@@ -50,7 +52,7 @@ const wire = (
 describe("defaults are the safe, backward-compatible choice", () => {
   test("an unmarked port broadcasts a copyable value and refuses to sum", () => {
     const s = resolveSignal({ id: "a", label: "a", kind: "text" });
-    expect(s.share).toBe("copy");
+    expect(s.ownership).toBe("copy");
     expect(s.fanout).toBe("broadcast");
     expect(s.measure).toBe("intensive");
     expect(isConserved(s)).toBe(false);
@@ -289,7 +291,7 @@ describe("forkValue — the three fan-out modes", () => {
       label: "x",
       kind: "image",
       measure: "extensive",
-      share: "move",
+      ownership: "move",
       fanout: "split",
       grain: "continuous",
     });
@@ -305,7 +307,7 @@ describe("forkValue — the three fan-out modes", () => {
     label: "r",
     kind: "text",
     measure: "extensive",
-    share: "copy",
+    ownership: "copy",
     fanout: "split",
     grain: "atom",
     atom: "row",
@@ -439,7 +441,7 @@ describe("checkSignals", () => {
       label: "o",
       kind: "ctl",
       measure: "extensive",
-      share: "move",
+      ownership: "move",
       fanout: "split",
     };
     const g: Graph = {
@@ -467,7 +469,7 @@ describe("checkSignals", () => {
 
 describe("the 2×2 the presets span", () => {
   test("measure and fanout vary independently", () => {
-    const cell = (p: { measure: string; share: string }) => `${p.measure}/${p.share}`;
+    const cell = (p: { measure: string; ownership: string }) => `${p.measure}/${p.ownership}`;
     expect(cell(SIGNALS.transcript)).toBe("extensive/copy");
     expect(cell(SIGNALS.coord)).toBe("intensive/copy");
     expect(cell(SIGNALS.budget)).toBe("extensive/move");
@@ -481,7 +483,7 @@ describe("the 2×2 the presets span", () => {
       label: "requests",
       kind: "ctl",
       measure: "extensive",
-      share: "copy",
+      ownership: "copy",
       fanout: "broadcast",
     };
     const s = resolveSignal(counter);
@@ -496,14 +498,46 @@ describe("capability vs policy — who owns what", () => {
     expect(isFanoutLegal("move", "split")).toBe(true);
     expect(isFanoutLegal("move", "route")).toBe(true);
     // dividing a copyable value is a load-balancing choice, not a safety one
-    for (const s of ["copy", "clone"] as const)
+    for (const s of ["copy", "clone", "share"] as const)
       for (const f of ["broadcast", "split", "route"] as const)
         expect(isFanoutLegal(s, f)).toBe(true);
   });
 
+  test("duplicable and aliasable are different questions", () => {
+    // a shared handle cannot be duplicated, yet two consumers may hold it
+    expect(isDuplicable("share")).toBe(false);
+    expect(isAliasable("share")).toBe(true);
+    // a move can be neither
+    expect(isDuplicable("move")).toBe(false);
+    expect(isAliasable("move")).toBe(false);
+    // copies are both
+    for (const o of ["copy", "clone"] as const) {
+      expect(isDuplicable(o)).toBe(true);
+      expect(isAliasable(o)).toBe(true);
+    }
+  });
+
+  test("broadcasting a shared handle is a borrow, not a copy — every consumer gets the SAME object", () => {
+    // the otoji case: a MediaStream fanned out to two nodes in one process
+    const stream = { id: "MediaStream" };
+    const spec = resolveSignal(port("h", "stream", SIGNALS.handle));
+    const [a, b] = forkValue(stream, spec, 2);
+    expect(a).toBe(stream);
+    expect(b).toBe(stream); // identity, not a structural copy
+  });
+
+  test("every rgui verdict is placement-independent", () => {
+    // nothing in the algebra consults where a node runs; `isDuplicable` is the
+    // predicate a host composes with its own placement to decide transport
+    for (const o of ["copy", "clone", "share", "move"] as const)
+      expect(typeof isFanoutLegal(o, "broadcast")).toBe("boolean");
+    expect(isDuplicable("share")).toBe(false); // ⇒ host: cannot cross a device
+    expect(isDuplicable("clone")).toBe(true);  // ⇒ host: can, at a cost
+  });
+
   test("forkValue refuses to broadcast a move — it would double-spend it", () => {
     const spec = resolveSignal({
-      id: "c", label: "coins", kind: "ctl", share: "move", fanout: "broadcast",
+      id: "c", label: "coins", kind: "ctl", ownership: "move", fanout: "broadcast",
     });
     expect(() => forkValue(100, spec, 2)).toThrow(TypeError);
   });
@@ -550,7 +584,7 @@ describe("checkSignals — fan-out capability", () => {
 
   test("broadcasting a move signal is an ERROR", () => {
     const g = two(
-      { id: "o", label: "coins", kind: "ctl", share: "move", fanout: "broadcast" },
+      { id: "o", label: "coins", kind: "ctl", ownership: "move", fanout: "broadcast" },
       { id: "o", label: "coins", kind: "ctl" },
     );
     const d = checkSignals(g).filter((x) => x.code === "broadcast-move");
@@ -607,7 +641,7 @@ describe("signalConnectionGuard — where single-to-single actually bites", () =
   test("a second edge off a broadcasting move port is refused", () => {
     const g: Graph = {
       nodes: [
-        node("src", [], [{ id: "o", label: "coins", kind: "ctl", share: "move", fanout: "broadcast" }]),
+        node("src", [], [{ id: "o", label: "coins", kind: "ctl", ownership: "move", fanout: "broadcast" }]),
         node("a", [{ id: "i", label: "i", kind: "ctl" }], []),
         node("b", [{ id: "i", label: "i", kind: "ctl" }], []),
       ],
@@ -656,5 +690,54 @@ describe("signalConnectionGuard — where single-to-single actually bites", () =
       edges: [wire("src", "o", "a", "i")],
     };
     expect(guard(g)({ node: "src", port: "o" }, { node: "b", port: "i" })).toBe(true);
+  });
+});
+
+describe("the `share` rung — a handle is aliasable but not duplicable", () => {
+  const two = (out: Port, sink: Port): Graph => ({
+    nodes: [node("src", [], [out]), node("a", [sink], []), node("b", [sink], [])],
+    edges: [wire("src", out.id, "a", sink.id), wire("src", out.id, "b", sink.id)],
+  });
+
+  test("broadcasting a handle to two consumers is legal and silent", () => {
+    // otoji's image/ctl ports: in-process MediaStream / OffscreenCanvas handles.
+    // Before the `share` rung existed these were modelled as "move" and this
+    // wiring raised a bogus `broadcast-move` error.
+    const g = two(port("o", "stream", SIGNALS.handle), port("o", "stream", SIGNALS.handle));
+    expect(checkSignals(g)).toEqual([]);
+  });
+
+  test("the same wiring on a move port is still an error", () => {
+    const g = two(
+      { id: "o", label: "lease", kind: "ctl", ownership: "move", fanout: "broadcast" },
+      { id: "o", label: "lease", kind: "ctl" },
+    );
+    expect(checkSignals(g).map((d) => d.code)).toContain("broadcast-move");
+  });
+
+  test("a handle never triggers the clone cost warning — nothing is copied", () => {
+    const g = two(port("o", "stream", SIGNALS.handle), port("o", "stream", SIGNALS.handle));
+    expect(checkSignals(g).map((d) => d.code)).not.toContain("cloned-fanout");
+  });
+
+  test("the connection guard admits a second edge off a handle port", () => {
+    const g: Graph = {
+      nodes: [
+        node("src", [], [port("o", "stream", SIGNALS.handle)]),
+        node("a", [{ id: "i", label: "i", kind: "ctl" }], []),
+        node("b", [{ id: "i", label: "i", kind: "ctl" }], []),
+      ],
+      edges: [wire("src", "o", "a", "i")],
+    };
+    expect(
+      signalConnectionGuard(() => g)({ node: "src", port: "o" }, { node: "b", port: "i" }),
+    ).toBe(true);
+  });
+
+  test("forkValue refuses to broadcast a move but happily aliases a share", () => {
+    const mv = resolveSignal({ id: "m", label: "m", kind: "ctl", ownership: "move", fanout: "broadcast" });
+    const sh = resolveSignal(port("s", "s", SIGNALS.handle));
+    expect(() => forkValue({}, mv, 2)).toThrow(TypeError);
+    expect(() => forkValue({}, sh, 2)).not.toThrow();
   });
 });

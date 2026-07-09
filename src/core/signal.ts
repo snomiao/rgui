@@ -9,17 +9,22 @@
  *
  * ## Three questions, three owners
  *
- *   MEASURE  — is `+` meaningful across parallel sources?   owned by: the port
- *   SHARE    — MAY this value be duplicated?                owned by: the producing port
- *   FANOUT   — is it duplicated HERE, or divided?           owned by: the fan-out group
+ *   MEASURE    — is `+` meaningful across parallel sources?  owned by: the port
+ *   OWNERSHIP  — MAY this value be duplicated / aliased?     owned by: the producing port
+ *   FANOUT     — is it duplicated HERE, or divided?          owned by: the fan-out group
  *
- * `share` and `fanout` are deliberately separate. One says what the data IS
+ * `ownership` and `fanout` are deliberately separate. One says what the data IS
  * (a capability, intrinsic, not overridable downstream); the other says what
  * this particular topology DOES with it (a policy, chosen per fan-out site).
  * Conflating them cannot express "a 4K frame may be copied, but broadcasting it
  * to three consumers on three machines means serializing it three times".
  *
- * ## Why measure and share are two axes, not one
+ * Note what is NOT here: transport. Whether a value can cross a machine or
+ * process boundary depends on where the nodes LAND, and only the host knows that.
+ * rgui says whether a value may be duplicated (`isDuplicable`); the host composes
+ * that with its own placement. Every verdict rgui reaches is placement-independent.
+ *
+ * ## Why measure and ownership are two axes, not one
  *
  * The tempting model is a single axis — "change vs state", where a change is
  * additive and splittable and a state is neither. It is the right intuition and
@@ -36,14 +41,14 @@
  * extensive and not conserved either. Additivity and conservation are orthogonal
  * even in the theory the vocabulary is borrowed from.
  *
- *                │ share "copy" / "clone"       │ share "move"
+ *                │ copy / clone / share         │ move
  *   ─────────────┼──────────────────────────────┼───────────────────────────────
  *   extensive    │ STT transcript segments,     │ token budget, money, work
  *   (sum/concat) │ audio chunks, log lines,     │ items, rows of a batch
  *                │ shard counters               │
  *   ─────────────┼──────────────────────────────┼───────────────────────────────
  *   intensive    │ coordinates, image frames,   │ an exclusive lease, a GPU slot,
- *   (no sum)     │ vision label sets, config    │ a lock token
+ *   (no sum)     │ vision labels, MediaStream   │ a lock token
  *
  * The top-left cell is the one the single-axis story gets wrong. An STT node's
  * transcript is a CHANGE (concatenating successive segments is exactly right) but
@@ -93,23 +98,35 @@ import type { Graph, Port, SignalKind } from "./graph.js";
 export type Measure = "extensive" | "intensive";
 
 /**
- * CAPABILITY — may this value be duplicated? Owned by the PRODUCING port and
- * not overridable downstream: only the node emitting the value knows whether it
- * hands out a coordinate or a MediaStream handle. Substructural, in the
- * type-theory sense: "copy" permits contraction, "move" forbids it.
+ * OWNERSHIP — may this value be duplicated, and may several consumers hold it at
+ * once? Owned by the PRODUCING port and not overridable downstream: only the node
+ * emitting a value knows whether it hands out a coordinate or a MediaStream
+ * handle. Substructural, in the type-theory sense — "copy" permits contraction,
+ * "move" forbids it, and "share" sits between them.
  *
- * - "copy":  duplication is free. Small facts — coordinates, labels, config.
- * - "clone": duplication is legal but COSTS. Big buffers — a 4K frame, a PCM
- *   chunk. Broadcasting one to three consumers on three machines serializes and
- *   ships it three times; legal, and worth saying out loud.
- * - "move":  duplication is impossible or forbidden. Either the value is a
- *   RESOURCE whose copy would double-spend it (money, a token budget, a work
- *   item), or it is a REFERENCE that cannot leave its home (a GPU buffer, a file
- *   descriptor, a MediaStream handle). A "move" port may never broadcast.
+ * These are Rust's four, and for the same reasons:
  *
- * This is Rust's Copy / Clone / move, and for the same reason.
+ * - "copy":  `Copy`. Duplication is free. Coordinates, labels, config, a transcript.
+ * - "clone": `Clone`. Duplication is legal but COSTS. A 4K frame, a PCM chunk —
+ *   broadcasting one to three consumers on three machines serializes and ships it
+ *   three times. Legal, and worth saying out loud.
+ * - "share": `Arc<T>` / `&T`. The value CANNOT be duplicated, but several
+ *   consumers may hold the same one. A MediaStream, a GPU buffer, an
+ *   OffscreenCanvas. Handing it to two downstream nodes in one process is a
+ *   shared borrow, not a copy — so broadcasting it is LEGAL.
+ * - "move":  single ownership. The value may be held by exactly one consumer.
+ *   Either duplicating it double-spends it (money, a token budget, a work item)
+ *   or aliasing it breaks exclusivity (a lease, a lock). A "move" port may never
+ *   broadcast.
+ *
+ * The "share" rung is what lets rgui judge a fan-out WITHOUT knowing placement.
+ * A shared reference is unsafe to duplicate but safe to alias, so its broadcast
+ * is legal everywhere; a "move" is illegal everywhere. Neither verdict depends on
+ * which machine a node lands on. Whether a non-duplicable value can CROSS a
+ * device boundary is a transport question, and transport belongs to the host —
+ * see `isDuplicable`, which is the predicate a host needs for exactly that check.
  */
-export type Share = "copy" | "clone" | "move";
+export type Ownership = "copy" | "clone" | "share" | "move";
 
 /**
  * POLICY — what one output port does when it feeds several edges. Owned by the
@@ -143,7 +160,7 @@ export type Grain =
 /** The algebra a port declares. Every field is optional on a Port; see DEFAULTS. */
 export interface SignalSpec {
   measure: Measure;
-  share: Share;
+  ownership: Ownership;
   fanout: Fanout;
   /** split only */
   grain?: Grain;
@@ -162,7 +179,7 @@ export interface SignalSpec {
  */
 export const DEFAULT_SIGNAL: SignalSpec = {
   measure: "intensive",
-  share: "copy",
+  ownership: "copy",
   fanout: "broadcast",
 };
 
@@ -203,25 +220,49 @@ export function isMergeLegal(rule: MergeRule, measure: Measure): boolean {
 }
 
 /**
- * Is this fan-out policy permitted by the value's capability? The single
- * constraint: a "move" value may not be broadcast. Everything else is allowed —
- * splitting a copyable value is a load-balancing decision, not a safety one.
+ * Can independent copies of this value be made? The predicate a HOST needs for
+ * its transport check: a value that is not duplicable cannot be serialized across
+ * a device or process boundary — it can only be used where it lives. rgui does
+ * not know placement, so it never performs that check; it exports the predicate
+ * and lets the host apply it to its own edges.
  */
-export function isFanoutLegal(share: Share, fanout: Fanout): boolean {
-  return !(share === "move" && fanout === "broadcast");
+export const isDuplicable = (o: Ownership): boolean =>
+  o === "copy" || o === "clone";
+
+/**
+ * May several consumers hold this value at once? True for everything but "move".
+ * A shared reference is unsafe to duplicate yet safe to ALIAS, which is exactly
+ * why its broadcast is legal without knowing where anything runs.
+ */
+export const isAliasable = (o: Ownership): boolean => o !== "move";
+
+/**
+ * Is this fan-out policy permitted by the value's ownership? The single
+ * constraint: a "move" value may not be broadcast, because broadcasting means
+ * several consumers hold it at once and "move" is single-ownership. Everything
+ * else is allowed — splitting a copyable value is a load-balancing decision, not
+ * a safety one, and broadcasting a handle is a borrow, not a copy.
+ *
+ * Both verdicts are placement-independent. That is the whole point of the
+ * "share" rung: rgui can decide them without knowing which machine a node
+ * lands on.
+ */
+export function isFanoutLegal(ownership: Ownership, fanout: Fanout): boolean {
+  return isAliasable(ownership) || fanout !== "broadcast";
 }
 
-/** does duplicating this value violate a conservation law? */
-export const isConserved = (s: SignalSpec): boolean => s.share === "move";
+/** single ownership — duplicating OR aliasing it violates a conservation law */
+export const isConserved = (s: SignalSpec): boolean => s.ownership === "move";
 
 /** is duplicating it legal but expensive? (a warning, never an error) */
-export const isCostlyToCopy = (s: SignalSpec): boolean => s.share === "clone";
+export const isCostlyToCopy = (s: SignalSpec): boolean =>
+  s.ownership === "clone";
 
 /** resolve a port's declared algebra against the defaults */
 export function resolveSignal(port: Port): SignalSpec {
   return {
     measure: port.measure ?? DEFAULT_SIGNAL.measure,
-    share: port.share ?? DEFAULT_SIGNAL.share,
+    ownership: port.ownership ?? DEFAULT_SIGNAL.ownership,
     fanout: port.fanout ?? DEFAULT_SIGNAL.fanout,
     grain: port.grain,
     atom: port.atom,
@@ -413,9 +454,9 @@ export function forkValue<T, A = unknown>(
   opts: { weights?: number[]; seq?: number; atomizer?: Atomizer<T, A> } = {},
 ): (T | undefined)[] {
   if (n <= 0) return [];
-  if (!isFanoutLegal(spec.share, spec.fanout))
+  if (!isFanoutLegal(spec.ownership, spec.fanout))
     throw new TypeError(
-      `rgui: a "move" signal cannot broadcast — duplicating it would double-spend it. Declare fanout "split" or "route".`,
+      `rgui: a "move" signal cannot broadcast — it has a single owner. Declare fanout "split" or "route", or ownership "share" if consumers may alias it.`,
     );
   if (spec.fanout === "broadcast") return Array.from({ length: n }, () => value);
   if (spec.fanout === "route") {
@@ -568,11 +609,11 @@ export function checkSignals(graph: Graph): SignalDiagnostic[] {
     if (count < 2) continue;
 
     // the load-bearing fan-out check: duplicating what must not be duplicated
-    if (!isFanoutLegal(s.share, policy))
+    if (!isFanoutLegal(s.ownership, policy))
       out.push({
         severity: "error",
         code: "broadcast-move",
-        message: `"${nodeId}.${portId}" broadcasts to ${count} edges but its signal is "move" — duplicating it would double-spend it. Declare fanout "split" (with a grain) or "route".`,
+        message: `"${nodeId}.${portId}" broadcasts to ${count} edges but its signal is "move" — it has a single owner. Declare fanout "split" (with a grain) or "route", or ownership "share" if consumers may safely alias it.`,
         node: nodeId,
         port: portId,
       });
@@ -647,8 +688,8 @@ export function signalConnectionGuard(
     const s = resolveSignal(p);
     const policy = groupFanout(g, from.node, from.port);
     const existing = fanoutGroup(g, from.node, from.port).length;
-    // a second edge on a broadcasting "move" port is the forbidden duplication
-    return !(existing >= 1 && !isFanoutLegal(s.share, policy));
+    // a second edge on a broadcasting "move" port is the forbidden aliasing
+    return !(existing >= 1 && !isFanoutLegal(s.ownership, policy));
   };
 }
 
@@ -666,21 +707,21 @@ export const SIGNALS = {
   transcript: {
     kind: "text",
     measure: "extensive",
-    share: "copy",
+    ownership: "copy",
     fanout: "broadcast",
   },
   /** vision labels ("person, chair"): a snapshot; concatenating frames is nonsense */
   labels: {
     kind: "text",
     measure: "intensive",
-    share: "copy",
+    ownership: "copy",
     fanout: "broadcast",
   },
   /** line-delimited records shared out across workers, never cut mid-line */
   jsonl: {
     kind: "text",
     measure: "extensive",
-    share: "copy",
+    ownership: "copy",
     fanout: "split",
     grain: "atom",
     atom: "line",
@@ -689,35 +730,48 @@ export const SIGNALS = {
   frame: {
     kind: "image",
     measure: "intensive",
-    share: "clone",
+    ownership: "clone",
     fanout: "broadcast",
   },
   /** PCM chunks: concat-able in time, copied to recorder + STT, but not free */
   pcm: {
     kind: "audio",
     measure: "extensive",
-    share: "clone",
+    ownership: "clone",
     fanout: "broadcast",
   },
   /** a position/setting: no addition, freely copied */
   coord: {
     kind: "ctl",
     measure: "intensive",
-    share: "copy",
+    ownership: "copy",
+    fanout: "broadcast",
+  },
+  /**
+   * a live handle — MediaStream, GPU buffer, OffscreenCanvas, file descriptor.
+   * It cannot be duplicated, but two downstream nodes in the same process may
+   * hold it at once (a shared borrow), so broadcasting it is legal. It cannot
+   * cross a device boundary — `isDuplicable` is false — but that verdict belongs
+   * to the host, which is the only side that knows where the nodes run.
+   */
+  handle: {
+    kind: "ctl",
+    measure: "intensive",
+    ownership: "share",
     fanout: "broadcast",
   },
   /** a divisible allowance (tokens/sec, bytes): conserved, splits continuously */
   budget: {
     kind: "ctl",
     measure: "extensive",
-    share: "move",
+    ownership: "move",
     fanout: "split",
     grain: "continuous",
   },
   /** work items: additive in count, indivisible individually — round-robin them */
-  work: { kind: "ctl", measure: "extensive", share: "move", fanout: "route" },
+  work: { kind: "ctl", measure: "extensive", ownership: "move", fanout: "route" },
   /** an exclusive lease/lock/slot: neither addable nor copyable */
-  lease: { kind: "ctl", measure: "intensive", share: "move", fanout: "route" },
+  lease: { kind: "ctl", measure: "intensive", ownership: "move", fanout: "route" },
 } as const satisfies Record<string, Preset>;
 
 /** build a Port from a preset: `port("audio", "mic", SIGNALS.pcm)` */
