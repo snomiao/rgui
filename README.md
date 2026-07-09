@@ -152,6 +152,16 @@ Everything above zoom is governed by a small set of composable laws:
 - **Boundary dissolution (辺界消融)** — flush-contact edges fuse: the shared border, the
   internal ports, and the wire between touching nodes dissolve; the connection condenses
   into a flow chevron on the seam. Snapped nodes stay independent — drag one away to split.
+- **Snap-connect (吸附成线)** — contact IS the connection. Each node declares the direction
+  data runs through it (`flow`: `"ltr"` default, `"rtl"`, `"ttb"`, `"btt"`), which decides
+  the edge its inputs sit on and the edge its outputs sit on. Push two nodes flush so that an
+  output edge faces a compatible input edge — matching `SignalKind`, port rows aligned within
+  half a pitch — and a wire appears, marked `temp: true`. Drag them apart and it is gone: no
+  state is kept, the wires are a pure function of geometry (`snapConnections()`), so *cutting*
+  a connection costs one drag rather than a click on a 2-px curve. Direction always comes from
+  the ports, never from the geometry: an `rtl` pipeline snapped left-to-right still flows
+  right-to-left. Authored edges win — a temp wire never steals an input the host already fed.
+  Opt out with `snapConnect: false`; mirror the derived set via `onSnapConnectChange`.
 - **Snap beats location; stacks RG together** — a fused stack collapses earlier than loose
   neighbors, and as one unit: when any member crosses the threshold, the whole stack becomes
   one block, sized as its members' enclosure (and itself an integer-grid citizen).
@@ -194,23 +204,25 @@ math, model, and rendering pieces for standalone use without building the full U
 is framework-agnostic pure functions and plain data.
 
 - **High level**: `createRgui` — interaction callbacks (`onNodeMove(End)`, `onConnect` +
-  `isValidConnection`, `onNodeClick`/`onNodeContextMenu`, `onEdgeClick`/`onEdgeContextMenu`,
+  `isValidConnection`, `onSnapConnectChange`, `onNodeClick`/`onNodeContextMenu`,
+  `onEdgeClick`/`onEdgeContextMenu`,
   `onConnectEnd`, `onSelectionChange`, `onPinChange`, `onNodeResize(End)`,
   `onCanvasContextMenu`), viewer methods (`setGraph`, `snapGraph`, `autoLayout`, `fitView`,
   `setView`, `setRotation3`, `setSelection`, `setPanels`, `setNodeOverlay`, `resizeNode`,
   `setTheme`, e2e accessors `portScreenPos`/`edgeMidScreen`), options (`rule`, `summarize`,
-  `panels`, `input: "figma" | "classic"`, `keyboard`, `keyboardSpeed`,
+  `panels`, `snapConnect`, `input: "figma" | "classic"`, `keyboard`, `keyboardSpeed`,
   `renderer: "auto" | "canvas2d" | "webgpu"`, `maxDpr`, `background`, `theme`)
 - **Grid math** (`core/grid`): `readableStep`, `gridLevels`, `finerStep`, `gridRange`,
   `snap`, `snapSizeRadix`, `sizeLayerStep`, `worldToScreen`, `screenToWorld`
 - **Rules** (`core/rule`): `DEFAULT_RULE`, `resolveRule`, type `RgRule`
 - **Graph model** (`core/graph`): `demoGraph`, `orgChartGraph`, `nodeHeight`, `bodyRect`,
-  port positions, containment helpers (`childrenOf`, `descendantsOf`, `containerIds`,
-  `containmentOf`), types `Graph`, `GraphNode` (incl. `z`, `pinned`, `parent`, `fieldRules`,
-  `body`, `draw`, `overlay`)
+  flow helpers (`inSide`, `outSide`, `flowAxis`, `portPos`, `sidePortPos`), containment
+  helpers (`childrenOf`, `descendantsOf`, `containerIds`,
+  `containmentOf`), types `Graph`, `GraphNode` (incl. `z`, `pinned`, `parent`, `flow`,
+  `fieldRules`, `body`, `draw`, `overlay`), `Edge` (incl. `temp`), `Flow`, `Side`
 - **Semantic-zoom LOD** (`core/lod`): `buildRenderGraph`, `pseudoRect`, `pseudoPortPos`
 - **Packing** (`core/pack`): `resolveOverlap`, `flushSegments`, `flushComponents`,
-  `computePortLayout`, `clampSize`
+  `computePortLayout`, `clampSize`, `snapConnections`
 - **Data merge** (`core/aggregate`): `aggregate`, `fieldSummarize`, `defaultSummarize`,
   `ordered`, `topK`, `quantile`, type `MergeRule`
 - **Layout** (`core/layout`): `layoutGraph`

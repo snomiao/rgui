@@ -19,6 +19,7 @@ import {
   PORT_R,
   type Graph,
   type GraphNode,
+  type Side,
   type SignalKind,
 } from "../core/graph.js";
 import {
@@ -169,25 +170,21 @@ export function drawGraph(
     ctx.lineWidth = Math.min(width, width / t.k); // cap at `width` screen px
     const dash = style?.dash ?? (e.dashed ? [6, 5] : []);
     ctx.setLineDash(dash.map((d) => d / t.k));
-    const dx = Math.max(40, Math.abs(to.x - from.x) * 0.5);
+    // control points bow OUT of each port along its edge normal
+    const bow = Math.max(40, Math.hypot(to.x - from.x, to.y - from.y) * 0.4);
+    const c0x = from.x + from.nx * bow;
+    const c0y = from.y + from.ny * bow;
+    const c1x = to.x + to.nx * bow;
+    const c1y = to.y + to.ny * bow;
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
-    ctx.bezierCurveTo(
-      from.x + from.dir * dx,
-      from.y,
-      to.x + to.dir * dx,
-      to.y,
-      to.x,
-      to.y,
-    );
+    ctx.bezierCurveTo(c0x, c0y, c1x, c1y, to.x, to.y);
     ctx.stroke();
     ctx.setLineDash([]);
     if (e.source.label) {
       // label at the bezier midpoint (t=0.5), kept readable on screen
-      const mx =
-        0.125 * (from.x + to.x) +
-        0.375 * (from.x + from.dir * dx + (to.x + to.dir * dx));
-      const my = 0.125 * (from.y + to.y) + 0.375 * (from.y + to.y);
+      const mx = 0.125 * (from.x + to.x) + 0.375 * (c0x + c1x);
+      const my = 0.125 * (from.y + to.y) + 0.375 * (c0y + c1y);
       ctx.save();
       ctx.translate(mx, my);
       ctx.scale(1 / t.k, 1 / t.k);
@@ -286,22 +283,29 @@ export function pinPos(n: GraphNode): [number, number] {
   return [n.x + n.w - 14 * s, n.y + (NODE_HEADER_H * s) / 2];
 }
 
-/** wire endpoint position + outgoing direction, honoring port layout */
+/**
+ * Wire endpoint position + the outward normal of the edge it leaves from.
+ * The normal (not a bare ±1) is what lets a wire bow correctly out of a
+ * top/bottom port on a vertical-flow node.
+ */
 function endpointPlaced(
   ref: Parameters<typeof endpointPos>[0],
   layout: Map<string, PortPlacement>,
   k: number,
   rule: RgRule,
-): { x: number; y: number; dir: 1 | -1 } {
+): { x: number; y: number; nx: number; ny: number } {
   if (ref.at === "node") {
     const dir = ref.side === "in" ? "in" : "out";
     const list = dir === "in" ? ref.node.inputs : ref.node.outputs;
     const port = list[ref.index];
     const pl = port && layout.get(`${ref.node.id}/${dir}/${port.id}`);
-    if (pl) return { x: pl.x, y: pl.y, dir: pl.edge === "right" ? 1 : -1 };
+    if (pl) {
+      const [nx, ny] = edgeNormal(pl.edge);
+      return { x: pl.x, y: pl.y, nx, ny };
+    }
   }
   const [x, y] = endpointPos(ref, k, rule);
-  return { x, y, dir: ref.side === "out" ? 1 : -1 };
+  return { x, y, nx: ref.side === "out" ? 1 : -1, ny: 0 };
 }
 
 /**
@@ -641,16 +645,27 @@ function drawNodePorts(
         kindColor(p.kind),
         m.portR,
         portDir(rule, dir, pl.edge),
+        portAxis(pl.edge),
         m.s,
       );
       if (dir === "out" && labels) {
         ctx.fillStyle = kindColor(p.kind);
+        // labels sit outside the node, clear of the port: beside a side edge,
+        // above/below a cap edge
         if (pl.edge === "right") {
           ctx.textAlign = "left";
           ctx.fillText(p.label, pl.x + m.portR + 4 * m.s, pl.y);
-        } else {
+        } else if (pl.edge === "left") {
           ctx.textAlign = "right";
           ctx.fillText(p.label, pl.x - m.portR - 4 * m.s, pl.y);
+        } else {
+          ctx.textAlign = "center";
+          ctx.fillText(
+            p.label,
+            pl.x,
+            pl.y +
+              (pl.edge === "bottom" ? m.portR + 8 * m.s : -m.portR - 8 * m.s),
+          );
         }
       }
     }
@@ -826,7 +841,9 @@ function drawSummaryContent(
 }
 
 /**
- * dir: +1 = flow points right, -1 = left, 0 = directionless dot.
+ * dir: +1 = flow points along the axis's positive direction, -1 = negative,
+ * 0 = directionless dot. `axis` picks which axis: "h" draws ">"/"<", "v"
+ * draws the same chevron rotated a quarter turn to point down/up.
  * Chevrons read the data flow: inputs point INTO the node, outputs point
  * OUT of it — LTR graphs show ">" on both edges.
  */
@@ -837,9 +854,19 @@ function drawPort(
   color: string,
   r: number,
   dir: -1 | 0 | 1 = 0,
+  /** the port edge's axis — a "v" edge rotates the chevron 90° */
+  axis: "h" | "v" = "h",
   /** node content scale — the chevron's notch and outline ride it */
   s = 1,
 ) {
+  ctx.save();
+  if (dir !== 0 && axis === "v") {
+    // draw the horizontal chevron inside a frame turned 90°
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 2);
+    x = 0;
+    y = 0;
+  }
   ctx.beginPath();
   if (dir === 0) {
     ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -857,24 +884,34 @@ function drawPort(
   ctx.lineWidth = 1.5 * s;
   ctx.strokeStyle = T.ink;
   ctx.stroke();
+  ctx.restore();
 }
 
 /** chevron direction for a port: inputs point into the node, outputs out */
-function portDir(
-  rule: RgRule,
-  io: "in" | "out",
-  edge: "left" | "right",
-): -1 | 0 | 1 {
+function portDir(rule: RgRule, io: "in" | "out", edge: Side): -1 | 0 | 1 {
   if (rule.portShape === "dot") return 0;
-  // out on right edge → right; out on left → left; in on left → right (into
-  // the node); in on right → left (into the node)
-  return io === "out"
-    ? edge === "right"
-      ? 1
-      : -1
-    : edge === "left"
-      ? 1
-      : -1;
+  // out on a FAR edge (right/bottom) points forward along the axis, out on a
+  // near edge points backward; inputs mirror that, so they point into the node
+  const far = edge === "right" || edge === "bottom";
+  return io === "out" ? (far ? 1 : -1) : far ? -1 : 1;
+}
+
+/** which axis a port's chevron runs along */
+const portAxis = (edge: Side): "h" | "v" =>
+  edge === "top" || edge === "bottom" ? "v" : "h";
+
+/** outward unit normal of an edge — the direction a wire leaves the port */
+export function edgeNormal(edge: Side): [number, number] {
+  switch (edge) {
+    case "left":
+      return [-1, 0];
+    case "right":
+      return [1, 0];
+    case "top":
+      return [0, -1];
+    default:
+      return [0, 1];
+  }
 }
 
 /** an off-screen marker: edge anchor + the world center it points at */

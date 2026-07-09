@@ -11,12 +11,24 @@
  * distinct from rg-merge (LOD pseudo-node), which moves as a single unit.
  */
 import {
+  NODE_COL_W,
+  NODE_ROW_H,
+  inSide,
   inputPortPos,
+  isHorizontalSide,
   nodeHeight,
   nodeMinHeight,
+  oppositeSide,
+  outSide,
+  sidePortPos,
+  type Edge,
   type Graph,
   type GraphNode,
+  type Port,
+  type Side,
 } from "./graph.js";
+
+export type { Side };
 
 const EPS = 0.01;
 
@@ -206,8 +218,6 @@ export interface Interval {
   to: number;
 }
 
-export type Side = "top" | "right" | "bottom" | "left";
-
 export type SideCoverage = Record<Side, Interval[]>;
 
 /** subtract covered intervals from a span, returning the uncovered pieces */
@@ -281,8 +291,12 @@ export function flushComponents(
 export interface PortPlacement {
   x: number;
   y: number;
-  /** which edge the port sits on (chosen by wire direction) */
-  edge: "left" | "right";
+  /**
+   * which edge the port sits on. It starts at the node's flow side and may
+   * flip to the opposite edge — when the wire actually leaves that way, or
+   * when the flow side has dissolved into a flush seam.
+   */
+  edge: Side;
   /** true when every wire of this port stays inside one flush component */
   hidden: boolean;
 }
@@ -302,10 +316,10 @@ export function computePortLayout(
     (cover.get(id)?.[side] ?? []).some((c) => v >= c.from - EPS && v <= c.to + EPS);
 
   for (const n of nodes) {
+    const home = { in: inSide(n), out: outSide(n) } as const;
     const place = (dir: "in" | "out", ports: GraphNode["inputs"]) => {
       for (let i = 0; i < ports.length; i++) {
         const p = ports[i]!;
-        const y = portRowY(n, i);
         const wires = graph.edges.filter((e) =>
           dir === "out"
             ? e.from.node === n.id && e.from.port === p.id
@@ -321,31 +335,152 @@ export function computePortLayout(
         );
         const hidden = wires.length > 0 && external.length === 0;
 
-        // edge choice: follow where the wires actually go; default in→left,
-        // out→right; never sit on a dissolved (covered) boundary
-        let edge: "left" | "right";
+        // edge choice: start at the node's flow side, then follow where the
+        // wires actually go (along the flow axis), and never sit on a
+        // dissolved (covered) boundary
+        let edge: Side = home[dir];
         if (external.length) {
-          const mean =
-            external.reduce((s, o) => s + o.x + o.w / 2, 0) / external.length;
-          edge = mean >= n.x + n.w / 2 ? "right" : "left";
-        } else {
-          edge = dir === "in" ? "left" : "right";
+          if (isHorizontalSide(edge)) {
+            const mean =
+              external.reduce((s, o) => s + o.y + nodeHeight(o) / 2, 0) /
+              external.length;
+            edge = mean >= n.y + nodeHeight(n) / 2 ? "bottom" : "top";
+          } else {
+            const mean =
+              external.reduce((s, o) => s + o.x + o.w / 2, 0) / external.length;
+            edge = mean >= n.x + n.w / 2 ? "right" : "left";
+          }
         }
-        if (coveredAt(n.id, edge, y))
-          edge = edge === "left" ? "right" : "left";
+        // coverage intervals run ALONG the edge: x for top/bottom, y for
+        // left/right — probe with the port's own along-edge coordinate
+        const along = (s: Side) => {
+          const [x, y] = sidePortPos(n, s, i);
+          return isHorizontalSide(s) ? x : y;
+        };
+        if (coveredAt(n.id, edge, along(edge))) edge = oppositeSide(edge);
 
-        layout.set(`${n.id}/${dir}/${p.id}`, {
-          x: edge === "left" ? n.x : n.x + n.w,
-          y,
-          edge,
-          hidden,
-        });
+        const [x, y] = sidePortPos(n, edge, i);
+        layout.set(`${n.id}/${dir}/${p.id}`, { x, y, edge, hidden });
       }
     };
     place("in", n.inputs);
     place("out", n.outputs);
   }
   return layout;
+}
+
+// --- snap-connect -------------------------------------------------------
+
+/**
+ * Kind gate for a candidate wire. Defaults to exact signal-kind equality —
+ * text→text, image→image. Hosts widen it (e.g. a "any" kind) via rgui's
+ * isValidConnection.
+ */
+export type ConnectGate = (
+  from: { node: GraphNode; port: Port },
+  to: { node: GraphNode; port: Port },
+) => boolean;
+
+const sameKind: ConnectGate = (a, b) => a.port.kind === b.port.kind;
+
+export interface SnapConnectOptions {
+  gate?: ConnectGate;
+  /**
+   * how far apart two facing ports may sit along the seam and still capture
+   * each other (world units, default half the seam's port pitch)
+   */
+  tolerance?: number;
+  /** edges the host authored — an input already wired there is not stolen */
+  existing?: Edge[];
+}
+
+/**
+ * SNAP-CONNECT: derive the wires implied by geometry alone.
+ *
+ * When a drag pushes two nodes flush (resolveOverlap guarantees contact,
+ * never overlap), the seam between them may line an output edge up against a
+ * facing input edge. Every pair of ports that meet across that seam within
+ * `tolerance`, and whose kinds pass the gate, becomes an edge marked
+ * `temp: true`. Nothing is stored: the result is a pure function of node
+ * positions, so pulling the nodes apart drops the edges on the next call —
+ * "cutting" a wire costs one drag, not a click on a 2-px curve.
+ *
+ * Ports match nearest-first, one wire per port on each side, and an input
+ * already fed by an authored edge is left alone.
+ */
+export function snapConnections(
+  nodes: GraphNode[],
+  opts: SnapConnectOptions = {},
+): Edge[] {
+  const gate = opts.gate ?? sameKind;
+  const takenIn = new Set<string>();
+  const takenOut = new Set<string>();
+  for (const e of opts.existing ?? [])
+    if (!e.temp) takenIn.add(`${e.to.node}/${e.to.port}`);
+
+  const out: Edge[] = [];
+  for (const seg of flushSegments(nodes)) {
+    // ports pitch by rows down a vertical seam, by columns across a horizontal one
+    const tol =
+      opts.tolerance ?? (seg.axis === "v" ? NODE_ROW_H : NODE_COL_W) / 2;
+    // the seam runs along one axis; each node meets it with one of its sides
+    const sideFacing = (n: GraphNode): Side =>
+      seg.axis === "v"
+        ? Math.abs(n.x + n.w - seg.at) < EPS
+          ? "right"
+          : "left"
+        : Math.abs(n.y + nodeHeight(n) - seg.at) < EPS
+          ? "bottom"
+          : "top";
+    const fa = sideFacing(seg.a);
+    const fb = sideFacing(seg.b);
+
+    // direction falls out of the two nodes' declared flow: whoever meets the
+    // seam with its OUTPUT edge feeds whoever meets it with its INPUT edge
+    for (const [src, dst, ssrc, sdst] of [
+      [seg.a, seg.b, fa, fb],
+      [seg.b, seg.a, fb, fa],
+    ] as const) {
+      if (outSide(src) !== ssrc || inSide(dst) !== sdst) continue;
+
+      // candidate port pairs, nearest along the seam first
+      const cands: { oi: number; ii: number; d: number }[] = [];
+      for (let oi = 0; oi < src.outputs.length; oi++) {
+        const [ox, oy] = sidePortPos(src, ssrc, oi);
+        const oa = seg.axis === "v" ? oy : ox;
+        if (oa < seg.from - EPS || oa > seg.to + EPS) continue; // off the seam
+        for (let ii = 0; ii < dst.inputs.length; ii++) {
+          const [ix, iy] = sidePortPos(dst, sdst, ii);
+          const ia = seg.axis === "v" ? iy : ix;
+          if (ia < seg.from - EPS || ia > seg.to + EPS) continue;
+          const d = Math.abs(oa - ia);
+          if (d > tol) continue;
+          if (
+            !gate(
+              { node: src, port: src.outputs[oi]! },
+              { node: dst, port: dst.inputs[ii]! },
+            )
+          )
+            continue;
+          cands.push({ oi, ii, d });
+        }
+      }
+      cands.sort((p, q) => p.d - q.d);
+      for (const c of cands) {
+        const okey = `${src.id}/${src.outputs[c.oi]!.id}`;
+        const ikey = `${dst.id}/${dst.inputs[c.ii]!.id}`;
+        if (takenOut.has(okey) || takenIn.has(ikey)) continue;
+        takenOut.add(okey);
+        takenIn.add(ikey);
+        out.push({
+          from: { node: src.id, port: src.outputs[c.oi]!.id },
+          to: { node: dst.id, port: dst.inputs[c.ii]!.id },
+          temp: true,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 /** world y of a node's i-th port row (matches inputPortPos/outputPortPos) */

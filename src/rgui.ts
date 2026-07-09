@@ -13,6 +13,7 @@ import {
 import {
   drawGraph,
   drawOffscreenIndicators,
+  edgeNormal,
   pinPos,
   kindColor,
   type OffscreenIndicator,
@@ -56,6 +57,7 @@ import {
   type Graph,
   type GraphNode,
   type Port,
+  type Side,
 } from "./core/graph.js";
 import { pseudoRect, type PseudoNode, type RenderGraph } from "./core/lod.js";
 import { AccModel2D } from "./core/accModel.js";
@@ -66,6 +68,7 @@ import {
   flushPairKeys,
   flushSegments,
   resolveOverlap,
+  snapConnections,
 } from "./core/pack.js";
 import { layoutGraph, type LayoutOptions } from "./core/layout.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
@@ -116,6 +119,19 @@ export interface RguiOptions {
   isValidConnection?: (from: PortRef, to: PortRef) => boolean;
   /** fires when a valid port-to-port drag completes; host owns graph mutation */
   onConnect?: (from: PortRef, to: PortRef) => void;
+  /**
+   * SNAP-CONNECT (default on): snapping two nodes flush so that an output
+   * edge faces a compatible input edge wires them together; pulling them
+   * apart cuts the wire. The derived edges carry `temp: true` and are
+   * recomputed from geometry on every move — a cheap, reversible way to
+   * build a pipeline by pushing blocks together. Set false to disable.
+   */
+  snapConnect?: boolean;
+  /**
+   * fires when the snap-connected (temp) edge set changes — the argument is
+   * the full current set, so a host can mirror it into its own state
+   */
+  onSnapConnectChange?: (edges: Edge[]) => void;
   /** plain click on a node (no drag movement) */
   onNodeClick?: (nodeId: string, screen: { x: number; y: number }) => void;
   /** right-click / context-menu on a node */
@@ -265,7 +281,7 @@ export interface Rgui {
     nodeId: string,
     portId: string,
     side: "in" | "out",
-  ): { x: number; y: number; edge: "left" | "right"; hidden: boolean } | null;
+  ): { x: number; y: number; edge: Side; hidden: boolean } | null;
   /** replace the panel set (host mutates panels + calls this or invalidate) */
   setPanels(panels: Panel[]): void;
   /**
@@ -629,6 +645,10 @@ export function createRgui(
     // world layers rotate with the viewport; chrome stays upright
     ...(options.layers ?? []),
     (ctx, t) => {
+      // geometry decides the temp wires, and geometry may have changed by any
+      // route (drag, setGraph, autoLayout, host mutation) — so reconcile them
+      // once, here, right before anything reads the edge list
+      refreshSnapEdges();
       dGraph = displayGraph();
       // RG monotonicity: zooming OUT carries the previous memberships so a
       // merged block never releases its children mid-outzoom; zooming in
@@ -873,6 +893,8 @@ export function createRgui(
     port: Port;
     wx: number;
     wy: number;
+    /** which node edge the port sits on — the ghost wire leaves along its normal */
+    edge: Side;
   }
 
   function portAt(sx: number, sy: number): PortHit | null {
@@ -892,6 +914,7 @@ export function createRgui(
               port: p,
               wx: pl.x,
               wy: pl.y,
+              edge: pl.edge,
             };
         }
         return null;
@@ -920,16 +943,19 @@ export function createRgui(
       if (!pf || !pt || pf.hidden || pt.hidden) continue;
       const [x0, y0] = worldToScreenXY(pf.x, pf.y);
       const [x1, y1] = worldToScreenXY(pt.x, pt.y);
-      const dx = Math.max(40 * view.k, Math.abs(x1 - x0) * 0.5);
-      const d0 = pf.edge === "right" ? 1 : -1;
-      const d1 = pt.edge === "right" ? 1 : -1;
-      const cx0 = x0 + d0 * dx;
-      const cx1 = x1 + d1 * dx;
+      // mirrors the renderer: control points bow along each port's edge normal
+      const bow = Math.max(40 * view.k, Math.hypot(x1 - x0, y1 - y0) * 0.4);
+      const [n0x, n0y] = edgeNormal(pf.edge);
+      const [n1x, n1y] = edgeNormal(pt.edge);
+      const cx0 = x0 + n0x * bow;
+      const cy0 = y0 + n0y * bow;
+      const cx1 = x1 + n1x * bow;
+      const cy1 = y1 + n1y * bow;
       for (let i = 0; i <= 24; i++) {
         const u = i / 24;
         const v = 1 - u;
         const bx = v * v * v * x0 + 3 * v * v * u * cx0 + 3 * v * u * u * cx1 + u * u * u * x1;
-        const by = v * v * v * y0 + 3 * v * v * u * y0 + 3 * v * u * u * y1 + u * u * u * y1;
+        const by = v * v * v * y0 + 3 * v * v * u * cy0 + 3 * v * u * u * cy1 + u * u * u * y1;
         if (Math.hypot(bx - sx, by - sy) <= 6) return e;
       }
     }
@@ -1053,20 +1079,65 @@ export function createRgui(
     ctx.globalAlpha = 0.9;
     ctx.lineWidth = 2;
     ctx.setLineDash([7, 5]);
-    const dx = Math.max(40 * t.k, Math.abs(drag.toSx - x0) * 0.5);
-    const dir = drag.from.ref.side === "out" ? 1 : -1;
+    const bow = Math.max(
+      40 * t.k,
+      Math.hypot(drag.toSx - x0, drag.toSy - y0) * 0.4,
+    );
+    // leave the source port along its edge normal; enter the cursor from the
+    // mirrored direction, so the ghost reads the same as the finished wire
+    const [nx, ny] = edgeNormal(drag.from.edge);
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.bezierCurveTo(
-      x0 + dir * dx,
-      y0,
-      drag.toSx - dir * dx,
-      drag.toSy,
+      x0 + nx * bow,
+      y0 + ny * bow,
+      drag.toSx - nx * bow,
+      drag.toSy - ny * bow,
       drag.toSx,
       drag.toSy,
     );
     ctx.stroke();
     ctx.restore();
+  }
+
+  /** stable identity of a wire, for diffing the derived set */
+  const edgeKey = (e: Edge) =>
+    `${e.from.node}/${e.from.port}>${e.to.node}/${e.to.port}`;
+
+  /**
+   * Reconcile the SNAP-CONNECTED edges with the current geometry: nodes
+   * pushed flush with facing, compatible ports gain a `temp: true` wire;
+   * nodes pulled apart lose theirs. Authored edges are never touched, and an
+   * input they already feed is never stolen. Returns true when the set moved.
+   *
+   * The temp edges live in `graph.edges` so wires, hit-testing, LOD and the
+   * dissolved-seam solder joints all see them with no special-casing — the
+   * `temp` flag is what tells a host not to persist them.
+   */
+  function refreshSnapEdges(): boolean {
+    if (options.snapConnect === false) return false;
+    const authored = graph.edges.filter((e) => !e.temp);
+    const next = snapConnections(graph.nodes, {
+      existing: authored,
+      gate: options.isValidConnection
+        ? (a, b) =>
+            options.isValidConnection!(
+              { node: a.node.id, port: a.port.id, side: "out" },
+              { node: b.node.id, port: b.port.id, side: "in" },
+            )
+        : undefined,
+    });
+    const prev = graph.edges.filter((e) => e.temp);
+    if (
+      prev.length === next.length &&
+      prev.every((e, i) => edgeKey(e) === edgeKey(next[i]!))
+    )
+      return false;
+    // mutate in place: hosts may hold a reference to the edges array
+    graph.edges.length = 0;
+    graph.edges.push(...authored, ...next);
+    options.onSnapConnectChange?.(next);
+    return true;
   }
 
   /** structural check + host gate (default gate: matching signal kinds) */
