@@ -42,7 +42,11 @@
       port(同一プロセス内 broadcast = 共有借用)に `broadcast-move` が誤検知していた。
       `share` を足したことで **全判定が placement 非依存**に戻り、`Edge.transport` は不要と確定
       (otoji 側も「core に入れない」で合意)。host 用の述語として `isDuplicable`/`isAliasable` を export。
-- [ ] otoji へ: `share` → `ownership` に改名した旨を伝える(mirror は `ownership?` で足す)
+- [x] otoji へ: `share` → `ownership` 改名を通知済み。otoji は `ownership?` で mirror 追従、
+      `runtime.ts` の image/ctl silent skip を `isAliasable` による編集時検証に置換する方針を backlog 化。
+- [ ] **PR #1 が main に merge されたら otoji-agent に一言** (`ay send <otoji pid>`)。
+      otoji はそのタイミングで submodule bump + adapter mirror 更新
+      (`measure?` / `ownership?` / `fanout?` / `Edge.weight?` / `Graph.fanout?`) を一括対応する。
 - [ ] sflow adapter (`@snomiao/rgui/sflow`): `SignalSpec` → `tees`/`distributeBys`/`merges`
       の TransformStream を組む optional entry point。peerDep + 別 build entry が要る。
 - [ ] WebGPU renderer (同一 interface の背後に)
