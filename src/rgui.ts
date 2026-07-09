@@ -1114,6 +1114,82 @@ export function createRgui(
     rebaseGrip(drag, mode, wx, wy);
   }
 
+  /**
+   * Re-seat a live drag onto a NEW node set.
+   *
+   * setGraph hands us fresh objects for the same ids (hosts that keep the
+   * authoritative graph re-map on every change), but a drag captured the OLD
+   * objects at pointer-down. Left alone, the gesture keeps writing to detached
+   * nodes: the canvas freezes mid-drag, and the callbacks report geometry
+   * computed against a stale x/y. Re-resolving by id keeps the gesture live
+   * across a concurrent re-map. A node that vanished cancels the drag.
+   *
+   * Re-seating the OBJECTS is not enough on its own: a drag also captured the
+   * geometry it grabbed. `resize` holds base/grab, `node` holds the pointer's
+   * offset from the node's display rect, and both drive an ABSOLUTE target —
+   * so if the re-map also MOVED the node, the next pointermove would yank it
+   * back to where the old geometry says. Both re-anchor against the pointer
+   * where it now is. Re-anchoring is a no-op when the re-map preserved the
+   * geometry (the common case): the target resolves to the node's current
+   * position, and a grip rebase resolves to factor exactly 1.
+   *
+   * `group` and `pseudo` need no re-anchor — group accumulates a delta from a
+   * rolling anchor, and pseudo replays a total offset from its own start
+   * snapshot, which is keyed by id and deliberately immune to rebuilds.
+   */
+  function reseatDrag(g: Graph): void {
+    if (!drag) return;
+    const byId = new Map(g.nodes.map((n) => [n.id, n]));
+    const seatAll = (ns: GraphNode[]): GraphNode[] =>
+      ns.flatMap((n) => {
+        const m = byId.get(n.id);
+        return m ? [m] : [];
+      });
+    // a drag whose subject left the graph has nothing left to move: drop it
+    // rather than mutate an orphan and fire End callbacks for a dead id
+    const seat = (n: GraphNode): GraphNode | null => {
+      const m = byId.get(n.id);
+      if (!m) drag = null;
+      return m ?? null;
+    };
+
+    if (drag.type === "node") {
+      const node = seat(drag.node);
+      if (!node) return;
+      drag.node = node;
+      drag.subtree = seatAll(drag.subtree);
+      drag.obstacles = seatAll(drag.obstacles);
+      // dx/dy were measured against the DISPLAY rect the user grabbed —
+      // rebuild that rect for the new node and re-measure from the pointer
+      const [wx, wy] = screenToWorld(view, pointer.sx, pointer.sy);
+      const h = nodeHeight(node);
+      const mainStep = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
+      const [qsx, qsy] = nodeSnapStep(mainStep, node);
+      const [cx, cy] = projectWorldPt(
+        node.x + node.w / 2,
+        node.y + h / 2,
+        node.z ?? 0,
+      );
+      drag.dx = wx - snap(cx - node.w / 2, qsx);
+      drag.dy = wy - snap(cy - h / 2, qsy);
+    } else if (drag.type === "group") {
+      drag.nodes = seatAll(drag.nodes);
+      if (!drag.nodes.length) drag = null;
+    } else if (drag.type === "resize") {
+      const node = seat(drag.node);
+      if (!node) return;
+      drag.node = node;
+      // base/grab still describe the old box — retake them from the new one
+      const [wx, wy] = screenToWorld(view, pointer.sx, pointer.sy);
+      rebaseGrip(drag, drag.mode, wx, wy);
+    } else if (drag.type === "pseudo") {
+      // the move math re-resolves through baseOf(); only the pinned check
+      // reads the captured members directly
+      drag.pseudo.members = seatAll(drag.pseudo.members);
+      if (!drag.pseudo.members.length) drag = null;
+    }
+  }
+
   /** pin-glyph hit-test (screen ~9px around the glyph) */
   function pinHitAt(sx: number, sy: number): GraphNode | null {
     for (const n of lastRg?.nodes ?? dGraph.nodes) {
@@ -2093,6 +2169,9 @@ export function createRgui(
     },
     setGraph(g: Graph) {
       graph = g;
+      // a live gesture holds node OBJECTS from the outgoing graph — hand it
+      // the new ones for the same ids, or it mutates orphans (see reseatDrag)
+      reseatDrag(g);
       // re-bind overlays registered via setNodeOverlay onto the new node
       // objects (unless the node already carries its own declarative overlay)
       if (overlayById.size) {

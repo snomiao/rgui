@@ -152,6 +152,37 @@ describe("一格一物 pack", () => {
     const { w } = clampSize(a, 400, nodeHeight(a), [a, right]);
     expect(w).toBe(300);
   });
+
+  // A host that re-maps its graph mid-drag hands rgui a FRESH object for the
+  // same id. Self-exclusion compares ids, not identity, or the dragged node
+  // treats its own twin as an obstacle.
+  describe("a same-id twin is never its own obstacle", () => {
+    test("clampSize does not shrink against a displaced twin", () => {
+      const a = mkNode("a", 0, 0);
+      const twin = mkNode("a", 40, 0); // same id, re-mapped a little to the right
+      // reference-based self-exclusion would cap w at the twin's edge (40)
+      const { w } = clampSize(a, 400, nodeHeight(a), [twin]);
+      expect(w).toBe(400);
+    });
+
+    test("clampSize caps height against a real neighbor, not the twin", () => {
+      const a = mkNode("a", 0, 0);
+      const twin = mkNode("a", 0, 30);
+      const below = mkNode("b", 0, 500);
+      const { h } = clampSize(a, a.w, 900, [twin, below]);
+      expect(h).toBe(500);
+    });
+
+    test("resolveOverlap does not push a node off its own twin", () => {
+      const a = mkNode("a", 100, 100);
+      const twin = mkNode("a", 100, 100);
+      const r = resolveOverlap(a, 100, 100, [twin], {
+        alignSnap: 40,
+        direction: "ltr",
+      });
+      expect(r).toEqual({ x: 100, y: 100 });
+    });
+  });
 });
 
 describe("semantic-zoom LOD", () => {
