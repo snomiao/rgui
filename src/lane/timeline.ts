@@ -507,9 +507,45 @@ export function createTimelineSource(
     );
   }
 
+  // real historical events (battles & wars) from Wikidata at the history scale
+  function fetchWikidata(view: LaneView) {
+    if (!enabled.has("human")) return;
+    const { top, bot } = winYBP(view);
+    const b = Math.max(0, bot);
+    // CE recorded history, bounded window (keeps the SPARQL query fast)
+    if (top < 5 || top > 2020 || top - b > 1500) return;
+    const y1 = Math.max(1, Math.round(PRESENT_YEAR - top));
+    const y2 = Math.round(PRESENT_YEAR - b) + 1;
+    if (y2 <= y1) return;
+    const q =
+      `SELECT ?l ?d WHERE { VALUES ?t { wd:Q178561 wd:Q198 } ` +
+      `?e wdt:P31 ?t ; wdt:P585 ?d ; rdfs:label ?l . FILTER(LANG(?l)="en") ` +
+      `FILTER(?d >= "${y1}-01-01T00:00:00Z"^^xsd:dateTime && ?d < "${y2}-01-01T00:00:00Z"^^xsd:dateTime) } LIMIT 40`;
+    lazyFetch(
+      `wd:${y1}-${y2}`,
+      `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(q)}`,
+      (data) => {
+        const d = data as {
+          results?: { bindings?: Array<{ l: { value: string }; d: { value: string } }> };
+        };
+        return (d.results?.bindings ?? [])
+          .map((r) => ({
+            y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
+            label: r.l.value.slice(0, 56),
+            detail: "Wikidata",
+            imp: 0.42,
+            cat: "human" as Cat,
+            span: 0.5,
+          }))
+          .filter((e) => isFinite(e.y));
+      },
+    );
+  }
+
   function maybeFetch(view: LaneView) {
     fetchLinux(view);
     fetchLaunches(view);
+    fetchWikidata(view);
   }
 
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
