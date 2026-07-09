@@ -10,6 +10,11 @@ const EXPANSIONS = [
   "Recursive Grouping UI",
   "Resolution-Graded UI",
   "Relevant-Coupling GUI",
+  "Respective Grouping UI",
+  "Related Graph UI",
+  "Rounded Gradation UI",
+  "Rounded Gauge UI",
+  "Rounded Granularity UI",
   "Roentgenium UI (Rg·111)",
 ];
 
