@@ -7,17 +7,23 @@
  * level down, for the DATA on the ports — and adds the question renormalization
  * never had to ask: what happens on the way OUT.
  *
- * ## Two axes, not one
+ * ## Three questions, three owners
+ *
+ *   MEASURE  — is `+` meaningful across parallel sources?   owned by: the port
+ *   SHARE    — MAY this value be duplicated?                owned by: the producing port
+ *   FANOUT   — is it duplicated HERE, or divided?           owned by: the fan-out group
+ *
+ * `share` and `fanout` are deliberately separate. One says what the data IS
+ * (a capability, intrinsic, not overridable downstream); the other says what
+ * this particular topology DOES with it (a policy, chosen per fan-out site).
+ * Conflating them cannot express "a 4K frame may be copied, but broadcasting it
+ * to three consumers on three machines means serializing it three times".
+ *
+ * ## Why measure and share are two axes, not one
  *
  * The tempting model is a single axis — "change vs state", where a change is
  * additive and splittable and a state is neither. It is the right intuition and
- * the wrong factorization. Two independent properties hide inside it:
- *
- *   MEASURE (fan-in)  — is `+` meaningful across parallel sources?
- *   FANOUT  (fan-out) — is duplicating this value free, or does it violate a
- *                       conservation law?
- *
- * They come apart in both directions:
+ * the wrong factorization. It breaks in both directions:
  *
  *   - A cumulative counter (`requests = 1523`) is additive across shards, yet on
  *     fan-out it must be COPIED. Two downstream dashboards each see 1523; you do
@@ -30,9 +36,7 @@
  * extensive and not conserved either. Additivity and conservation are orthogonal
  * even in the theory the vocabulary is borrowed from.
  *
- * So rgui declares them separately:
- *
- *                │ fanout "copy"                │ fanout "split" / "route"
+ *                │ share "copy" / "clone"       │ share "move"
  *   ─────────────┼──────────────────────────────┼───────────────────────────────
  *   extensive    │ STT transcript segments,     │ token budget, money, work
  *   (sum/concat) │ audio chunks, log lines,     │ items, rows of a batch
@@ -65,14 +69,14 @@
  *
  * ## Mapping to sflow (snomiao/sflow — WebStreams; vendored at lib/sflow)
  *
- *   fanout "copy"   → `tees()` / `.fork()`      (ReadableStream.tee — duplicates)
- *   fanout "route"  → `distributeBys(fn)`       (each chunk to exactly ONE branch)
- *                     `confluences({order:"breadth"})` for the fair/round-robin case
- *   fanout "split"  → no sflow equivalent; conservation is what rgui adds here.
- *                     For grain "atom", compose `lines()` (atom boundaries) with a
- *                     distribute step.
- *   merge extensive → `merges()` / `parallels()` (interleave — concat semantics)
- *   merge intensive → `toLatests()`              (i.e. MergeRule "last")
+ *   fanout "broadcast" → `tees()` / `.fork()`  (ReadableStream.tee — duplicates)
+ *   fanout "route"     → `distributeBys(fn)`   (each chunk to exactly ONE branch)
+ *                        `confluences({order:"breadth"})` for the fair/round-robin case
+ *   fanout "split"     → no sflow equivalent; conservation is what rgui adds here.
+ *                        For grain "atom", compose `lines()` (atom boundaries) with a
+ *                        distribute step.
+ *   merge extensive    → `merges()` / `parallels()` (interleave — concat semantics)
+ *   merge intensive    → `toLatests()`              (i.e. MergeRule "last")
  */
 import type { MergeRule } from "./aggregate.js";
 import type { Graph, Port, SignalKind } from "./graph.js";
@@ -89,25 +93,40 @@ import type { Graph, Port, SignalKind } from "./graph.js";
 export type Measure = "extensive" | "intensive";
 
 /**
- * Whether the signal on this port may be DUPLICATED, and if not, how one value
- * is shared out. Substructural, in the type-theory sense: "copy" permits
- * contraction, the other two forbid it.
+ * CAPABILITY — may this value be duplicated? Owned by the PRODUCING port and
+ * not overridable downstream: only the node emitting the value knows whether it
+ * hands out a coordinate or a MediaStream handle. Substructural, in the
+ * type-theory sense: "copy" permits contraction, "move" forbids it.
  *
- * - "copy": broadcast. The value is a FACT — duplicating it is free and every
- *   downstream sees the identical value. Idempotent.
- * - "split": conserve. The value is a divisible RESOURCE — the parts handed to
- *   the downstreams sum back to the whole. Needs a `grain` (where cuts are legal).
- * - "route": conserve, indivisibly. The value is an atomic RESOURCE or work item
- *   — it goes to exactly ONE downstream, whole. Copying would double-spend it;
- *   cutting would destroy it.
+ * - "copy":  duplication is free. Small facts — coordinates, labels, config.
+ * - "clone": duplication is legal but COSTS. Big buffers — a 4K frame, a PCM
+ *   chunk. Broadcasting one to three consumers on three machines serializes and
+ *   ships it three times; legal, and worth saying out loud.
+ * - "move":  duplication is impossible or forbidden. Either the value is a
+ *   RESOURCE whose copy would double-spend it (money, a token budget, a work
+ *   item), or it is a REFERENCE that cannot leave its home (a GPU buffer, a file
+ *   descriptor, a MediaStream handle). A "move" port may never broadcast.
  *
- * The name is for the case that makes it visible: on an OUTPUT port feeding
- * several edges, this decides the distribution. On an INPUT port there is
- * nothing to distribute, and it instead declares what the consumer expects —
- * anything but "copy" means the consumer takes ownership of what arrives, so
- * feeding it from a broadcasting output is a double-spend (see `copied-resource`).
+ * This is Rust's Copy / Clone / move, and for the same reason.
  */
-export type Fanout = "copy" | "split" | "route";
+export type Share = "copy" | "clone" | "move";
+
+/**
+ * POLICY — what one output port does when it feeds several edges. Owned by the
+ * FAN-OUT GROUP (the set of edges leaving that port), not by any single edge:
+ * you cannot have one edge of a group broadcast while another splits, because
+ * conservation is a property of the whole division. The port carries the group's
+ * default; `Graph.fanout` overrides it per group; `Edge.weight` tunes the shares
+ * within a split.
+ *
+ * - "broadcast": every downstream receives the whole value. Illegal on "move".
+ * - "split": the value is divided; the parts sum back to the whole. Needs a
+ *   `grain` (where cuts are legal). Legal on any share — dividing a copyable
+ *   value is a load-balancing choice, not a safety one.
+ * - "route": the whole value goes to exactly ONE downstream. For indivisible
+ *   resources and work items.
+ */
+export type Fanout = "broadcast" | "split" | "route";
 
 /**
  * Where a "split" may legally cut. The POLICY is a property of the type; the
@@ -124,6 +143,7 @@ export type Grain =
 /** The algebra a port declares. Every field is optional on a Port; see DEFAULTS. */
 export interface SignalSpec {
   measure: Measure;
+  share: Share;
   fanout: Fanout;
   /** split only */
   grain?: Grain;
@@ -135,13 +155,15 @@ export interface SignalSpec {
 
 /**
  * Unmarked ports behave exactly as they did before this module existed: a wire
- * carries a value, nothing is summed, nothing is divided. Both defaults are the
- * SAFE choice — copying a fact never destroys anything, and refusing to sum
- * never fabricates anything.
+ * carries a value, nothing is summed, nothing is divided, and a second edge off
+ * the same port simply broadcasts (as every node editor does). All three
+ * defaults are the SAFE choice — copying a fact never destroys anything, and
+ * refusing to sum never fabricates anything.
  */
 export const DEFAULT_SIGNAL: SignalSpec = {
   measure: "intensive",
-  fanout: "copy",
+  share: "copy",
+  fanout: "broadcast",
 };
 
 /** The only rules that require additivity — the entire content of the gate. */
@@ -180,18 +202,78 @@ export function isMergeLegal(rule: MergeRule, measure: Measure): boolean {
   return measure === "extensive";
 }
 
-/** does this signal conserve its value across a fan-out? (i.e. is it linear?) */
-export const isConserved = (s: SignalSpec): boolean => s.fanout !== "copy";
+/**
+ * Is this fan-out policy permitted by the value's capability? The single
+ * constraint: a "move" value may not be broadcast. Everything else is allowed —
+ * splitting a copyable value is a load-balancing decision, not a safety one.
+ */
+export function isFanoutLegal(share: Share, fanout: Fanout): boolean {
+  return !(share === "move" && fanout === "broadcast");
+}
+
+/** does duplicating this value violate a conservation law? */
+export const isConserved = (s: SignalSpec): boolean => s.share === "move";
+
+/** is duplicating it legal but expensive? (a warning, never an error) */
+export const isCostlyToCopy = (s: SignalSpec): boolean => s.share === "clone";
 
 /** resolve a port's declared algebra against the defaults */
 export function resolveSignal(port: Port): SignalSpec {
   return {
     measure: port.measure ?? DEFAULT_SIGNAL.measure,
+    share: port.share ?? DEFAULT_SIGNAL.share,
     fanout: port.fanout ?? DEFAULT_SIGNAL.fanout,
     grain: port.grain,
     atom: port.atom,
     merge: port.merge,
   };
+}
+
+/** the key a fan-out group is addressed by: "nodeId.portId" */
+export const fanoutKey = (nodeId: string, portId: string): string =>
+  `${nodeId}.${portId}`;
+
+/**
+ * The policy governing one fan-out group. The port declares the default; the
+ * GRAPH may override it per group, because the same audio-segment port feeds a
+ * recorder (broadcast) in one graph and a worker pool (route) in another. That
+ * is a topology decision, and topology belongs to the graph.
+ */
+export function groupFanout(
+  graph: Graph,
+  nodeId: string,
+  portId: string,
+): Fanout {
+  const override = graph.fanout?.[fanoutKey(nodeId, portId)];
+  if (override) return override;
+  const p = graph.nodes
+    .find((n) => n.id === nodeId)
+    ?.outputs.find((o) => o.id === portId);
+  return p ? resolveSignal(p).fanout : DEFAULT_SIGNAL.fanout;
+}
+
+/** the edges leaving one output port, in graph order */
+export function fanoutGroup(graph: Graph, nodeId: string, portId: string) {
+  return graph.edges.filter(
+    (e) => e.from.node === nodeId && e.from.port === portId,
+  );
+}
+
+/**
+ * The fan-out weights of a group, normalized to sum 1. Per-EDGE, because only
+ * the shares may differ within a group — the policy may not. An edge with no
+ * `weight` counts as 1.
+ */
+export function groupWeights(
+  graph: Graph,
+  nodeId: string,
+  portId: string,
+): number[] {
+  const edges = fanoutGroup(graph, nodeId, portId);
+  return normalizeWeights(
+    edges.length,
+    edges.map((e) => e.weight ?? 1),
+  );
 }
 
 /**
@@ -331,7 +413,11 @@ export function forkValue<T, A = unknown>(
   opts: { weights?: number[]; seq?: number; atomizer?: Atomizer<T, A> } = {},
 ): (T | undefined)[] {
   if (n <= 0) return [];
-  if (spec.fanout === "copy") return Array.from({ length: n }, () => value);
+  if (!isFanoutLegal(spec.share, spec.fanout))
+    throw new TypeError(
+      `rgui: a "move" signal cannot broadcast — duplicating it would double-spend it. Declare fanout "split" or "route".`,
+    );
+  if (spec.fanout === "broadcast") return Array.from({ length: n }, () => value);
   if (spec.fanout === "route") {
     const out: (T | undefined)[] = Array.from({ length: n }, () => undefined);
     out[routeIndex(opts.seq ?? 0, n)] = value;
@@ -370,9 +456,12 @@ export interface SignalDiagnostic {
   /** stable machine-readable code */
   code:
     | "sum-on-state"
+    | "broadcast-move"
+    | "cloned-fanout"
     | "kind-mismatch"
     | "grain-without-split"
     | "atom-without-grain"
+    | "weight-without-split"
     | "unmerged-fan-in"
     | "copied-resource";
   message: string;
@@ -390,8 +479,9 @@ const portOf = (g: Graph, nodeId: string, portId: string, dir: "in" | "out") =>
  * diagnostics rather than throwing, because a graph mid-edit is allowed to be
  * momentarily wrong and the canvas would rather draw the problem than crash.
  *
- * The load-bearing check is `sum-on-state`: a fan-in that would add up values
- * whose type has no addition.
+ * The two load-bearing checks are `sum-on-state` (a fan-in that would add up
+ * values whose type has no addition) and `broadcast-move` (a fan-out that would
+ * duplicate a value whose duplication is forbidden).
  */
 export function checkSignals(graph: Graph): SignalDiagnostic[] {
   const out: SignalDiagnostic[] = [];
@@ -428,12 +518,14 @@ export function checkSignals(graph: Graph): SignalDiagnostic[] {
   // fan-in: several edges converging on one input port
   const fanIn = new Map<string, number>();
   for (const e of graph.edges) {
-    const key = `${e.to.node} ${e.to.port}`;
+    const key = fanoutKey(e.to.node, e.to.port);
     fanIn.set(key, (fanIn.get(key) ?? 0) + 1);
   }
   for (const [key, count] of fanIn) {
     if (count < 2) continue;
-    const [nodeId = "", portId = ""] = key.split(" ");
+    const at = key.lastIndexOf(".");
+    const nodeId = key.slice(0, at);
+    const portId = key.slice(at + 1);
     const p = portOf(graph, nodeId, portId, "in");
     if (!p) continue;
     const s = resolveSignal(p);
@@ -447,19 +539,54 @@ export function checkSignals(graph: Graph): SignalDiagnostic[] {
       });
   }
 
-  // fan-out: one output port feeding several edges
+  // fan-out: one output port feeding several edges. The policy is the GROUP's,
+  // so it is read through groupFanout (port default, graph override).
   const fanOut = new Map<string, number>();
   for (const e of graph.edges) {
-    const key = `${e.from.node} ${e.from.port}`;
+    const key = fanoutKey(e.from.node, e.from.port);
     fanOut.set(key, (fanOut.get(key) ?? 0) + 1);
   }
   for (const [key, count] of fanOut) {
-    if (count < 2) continue;
-    const [nodeId = "", portId = ""] = key.split(" ");
+    const at = key.lastIndexOf(".");
+    const nodeId = key.slice(0, at);
+    const portId = key.slice(at + 1);
     const p = portOf(graph, nodeId, portId, "out");
     if (!p) continue;
     const s = resolveSignal(p);
-    if (s.fanout === "split" && !s.grain)
+    const policy = groupFanout(graph, nodeId, portId);
+
+    if (fanoutGroup(graph, nodeId, portId).some((e) => e.weight !== undefined) &&
+      policy !== "split")
+      out.push({
+        severity: "warn",
+        code: "weight-without-split",
+        message: `"${nodeId}.${portId}" carries per-edge weights but its fan-out is "${policy}" — weights only apportion a split`,
+        node: nodeId,
+        port: portId,
+      });
+
+    if (count < 2) continue;
+
+    // the load-bearing fan-out check: duplicating what must not be duplicated
+    if (!isFanoutLegal(s.share, policy))
+      out.push({
+        severity: "error",
+        code: "broadcast-move",
+        message: `"${nodeId}.${portId}" broadcasts to ${count} edges but its signal is "move" — duplicating it would double-spend it. Declare fanout "split" (with a grain) or "route".`,
+        node: nodeId,
+        port: portId,
+      });
+    // legal, but say the cost out loud
+    else if (isCostlyToCopy(s) && policy === "broadcast")
+      out.push({
+        severity: "warn",
+        code: "cloned-fanout",
+        message: `"${nodeId}.${portId}" broadcasts a "clone" signal (${p.kind}) to ${count} consumers — each gets its own copy`,
+        node: nodeId,
+        port: portId,
+      });
+
+    if (policy === "split" && !s.grain)
       out.push({
         severity: "warn",
         code: "grain-without-split",
@@ -482,13 +609,17 @@ export function checkSignals(graph: Graph): SignalDiagnostic[] {
         node: e.to.node,
         port: e.to.port,
       });
-    // a conserved resource broadcast into a consumer that also conserves it is
-    // a double-spend: the same 100 coins arriving at two sinks
-    if (resolveSignal(a).fanout === "copy" && isConserved(resolveSignal(b)))
+    // a conserved resource broadcast into a consumer that takes ownership is a
+    // double-spend: the same 100 coins arriving whole at two sinks
+    if (
+      groupFanout(graph, e.from.node, e.from.port) === "broadcast" &&
+      isConserved(resolveSignal(b)) &&
+      fanoutGroup(graph, e.from.node, e.from.port).length > 1
+    )
       out.push({
         severity: "warn",
         code: "copied-resource",
-        message: `"${e.to.node}.${e.to.port}" treats its input as a conserved resource, but "${e.from.node}.${e.from.port}" broadcasts copies of it`,
+        message: `"${e.to.node}.${e.to.port}" takes ownership of its input, but "${e.from.node}.${e.from.port}" broadcasts copies of it`,
         node: e.to.node,
         port: e.to.port,
       });
@@ -497,45 +628,96 @@ export function checkSignals(graph: Graph): SignalDiagnostic[] {
   return out;
 }
 
+/**
+ * A connection guard for `createRgui({ isValidConnection })`: refuses the edge
+ * that would make a "move" port broadcast. Everything else is allowed — a
+ * "clone" fan-out is legal (checkSignals warns about its cost), and a "copy"
+ * fan-out is the everyday broadcast every node editor performs.
+ *
+ * This is where "single-to-single by default" actually bites, and it bites only
+ * where duplication is unsafe rather than merely expensive.
+ */
+export function signalConnectionGuard(
+  graph: () => Graph,
+): (from: { node: string; port: string }, to: { node: string; port: string }) => boolean {
+  return (from) => {
+    const g = graph();
+    const p = portOf(g, from.node, from.port, "out");
+    if (!p) return true;
+    const s = resolveSignal(p);
+    const policy = groupFanout(g, from.node, from.port);
+    const existing = fanoutGroup(g, from.node, from.port).length;
+    // a second edge on a broadcasting "move" port is the forbidden duplication
+    return !(existing >= 1 && !isFanoutLegal(s.share, policy));
+  };
+}
+
 // --- presets: the primitive signal types rgui hands its hosts -------------
 //
 // `kind` alone cannot decide the algebra — "text" is extensive when it is an STT
 // transcript and intensive when it is a vision model's label set. That ambiguity
-// is exactly why measure/fanout live on the PORT and not in a table keyed by
-// kind. These presets name the combinations that keep recurring.
+// is exactly why measure/share/fanout live on the PORT and not in a table keyed
+// by kind. These presets name the combinations that keep recurring.
 
-type Preset = SignalSpec & { kind: SignalKind };
+type Preset = Omit<SignalSpec, "merge"> & { kind: SignalKind; merge?: MergeRule };
 
 export const SIGNALS = {
-  /** STT segments: concat-able across time, and a FACT — broadcast to all */
-  transcript: { kind: "text", measure: "extensive", fanout: "copy" },
+  /** STT segments: concat-able across time, and a cheap FACT — broadcast to all */
+  transcript: {
+    kind: "text",
+    measure: "extensive",
+    share: "copy",
+    fanout: "broadcast",
+  },
   /** vision labels ("person, chair"): a snapshot; concatenating frames is nonsense */
-  labels: { kind: "text", measure: "intensive", fanout: "copy" },
-  /** line-delimited records to be shared out across workers, never cut mid-line */
+  labels: {
+    kind: "text",
+    measure: "intensive",
+    share: "copy",
+    fanout: "broadcast",
+  },
+  /** line-delimited records shared out across workers, never cut mid-line */
   jsonl: {
     kind: "text",
     measure: "extensive",
+    share: "copy",
     fanout: "split",
     grain: "atom",
     atom: "line",
   },
-  /** a single image: a state, copied whole */
-  frame: { kind: "image", measure: "intensive", fanout: "copy" },
-  /** PCM chunks: concat-able in time, and freely copied to recorder + STT */
-  pcm: { kind: "audio", measure: "extensive", fanout: "copy" },
+  /** a single image: a state, and a BIG one — copying it costs */
+  frame: {
+    kind: "image",
+    measure: "intensive",
+    share: "clone",
+    fanout: "broadcast",
+  },
+  /** PCM chunks: concat-able in time, copied to recorder + STT, but not free */
+  pcm: {
+    kind: "audio",
+    measure: "extensive",
+    share: "clone",
+    fanout: "broadcast",
+  },
   /** a position/setting: no addition, freely copied */
-  coord: { kind: "ctl", measure: "intensive", fanout: "copy" },
-  /** a divisible allowance (tokens/sec, bytes): splits continuously, conserved */
+  coord: {
+    kind: "ctl",
+    measure: "intensive",
+    share: "copy",
+    fanout: "broadcast",
+  },
+  /** a divisible allowance (tokens/sec, bytes): conserved, splits continuously */
   budget: {
     kind: "ctl",
     measure: "extensive",
+    share: "move",
     fanout: "split",
     grain: "continuous",
   },
   /** work items: additive in count, indivisible individually — round-robin them */
-  work: { kind: "ctl", measure: "extensive", fanout: "route" },
+  work: { kind: "ctl", measure: "extensive", share: "move", fanout: "route" },
   /** an exclusive lease/lock/slot: neither addable nor copyable */
-  lease: { kind: "ctl", measure: "intensive", fanout: "route" },
+  lease: { kind: "ctl", measure: "intensive", share: "move", fanout: "route" },
 } as const satisfies Record<string, Preset>;
 
 /** build a Port from a preset: `port("audio", "mic", SIGNALS.pcm)` */

@@ -31,7 +31,7 @@ import {
   type RenderEdge,
   type RenderGraph,
 } from "../core/lod.js";
-import { DEFAULT_SIGNAL, resolveSignal, type SignalSpec } from "../core/signal.js";
+import { DEFAULT_SIGNAL, groupFanout, type Fanout } from "../core/signal.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
 import { defaultSummarize } from "../core/aggregate.js";
 import type { SummarizeFn, SummaryContent } from "../core/summary.js";
@@ -155,10 +155,16 @@ export function drawGraph(
   // each downstream the whole value, a "split" divides it, a "route" gives the
   // whole chunk to exactly one downstream at a time. Those are three different
   // physical claims about the wire, so they get three different wires.
-  const fanOut = new Map<string, number>();
+  //
+  // The policy belongs to the GROUP (port default, overridable per group on the
+  // graph); only the shares within a split vary per edge.
+  const fanOut = new Map<string, RenderEdge[]>();
   for (const e of rg.edges) {
     const k = fanKey(e.from);
-    if (k) fanOut.set(k, (fanOut.get(k) ?? 0) + 1);
+    if (!k) continue;
+    const list = fanOut.get(k);
+    if (list) list.push(e);
+    else fanOut.set(k, [e]);
   }
 
   // wires draw ON TOP of nodes: connections carry the meaning of the graph
@@ -179,23 +185,26 @@ export function drawGraph(
     const to = endpointPlaced(e.to, layout, t.k, rule);
     const style = e.source.style;
     const color = style?.color ?? kindColor(e.kind);
-    const degree = fanOut.get(fanKey(e.from) ?? "") ?? 1;
-    const spec = sourceSignal(e);
+    const group = fanOut.get(fanKey(e.from) ?? "") ?? [e];
+    const degree = group.length;
     // a lone wire carries the whole signal whatever the port's fanout says
-    const forked = degree > 1 ? spec.fanout : "copy";
-    // "split" wires each carry 1/degree of the value: thin them toward that
-    // share (sqrt, so a 1/8 split stays visible rather than vanishing)
+    const policy = degree > 1 ? sourceFanout(graph, e) : "broadcast";
+    // this wire's share of a split — per-edge weights, normalized over the group
+    const share =
+      policy === "split" ? edgeShare(group, e) : 1;
+    // "split" wires each carry only their share: thin them toward it (sqrt, so a
+    // 1/8 split stays visible rather than vanishing)
     const width =
       style?.width ??
-      (forked === "split" ? Math.max(0.9, 2 * Math.sqrt(1 / degree)) : 2);
+      (policy === "split" ? Math.max(0.9, 2 * Math.sqrt(share)) : 2);
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.min(width, width / t.k); // cap at `width` screen px
     // "route" wires carry a whole chunk only some of the time — draw them as
     // discrete dots, distinct from the long dashes of an event stream
     const dash =
       style?.dash ??
-      (forked === "route" ? [0.5, 6] : e.dashed ? [6, 5] : []);
-    ctx.lineCap = forked === "route" ? "round" : "butt";
+      (policy === "route" ? [0.5, 6] : e.dashed ? [6, 5] : []);
+    ctx.lineCap = policy === "route" ? "round" : "butt";
     ctx.setLineDash(dash.map((d) => d / t.k));
     // control points bow OUT of each port along its edge normal
     const bow = Math.max(40, Math.hypot(to.x - from.x, to.y - from.y) * 0.4);
@@ -210,10 +219,13 @@ export function drawGraph(
     ctx.setLineDash([]);
     ctx.lineCap = "butt";
     // a split conserves the whole: say what share of it this wire takes. Drawn
-    // near the source, where the division actually happens.
-    if (forked === "split") {
+    // near the source, where the division actually happens. An even split reads
+    // better as "1/n" than as a percentage.
+    if (policy === "split") {
+      const even = group.every((g) => (g.source.weight ?? 1) === (e.source.weight ?? 1));
       const p = bezierAt(0.18, from, to, c0x, c0y, c1x, c1y);
-      drawWireBadge(ctx, p.x, p.y, `1/${degree}`, t.k, color);
+      const text = even ? `1/${degree}` : `${Math.round(share * 100)}%`;
+      drawWireBadge(ctx, p.x, p.y, text, t.k, color);
     }
     if (e.source.label) {
       // label at the bezier midpoint (t=0.5), kept readable on screen
@@ -249,11 +261,21 @@ function fanKey(ref: EndpointRef): string | null {
     : null;
 }
 
-/** the signal algebra declared by the port this wire leaves from */
-function sourceSignal(e: RenderEdge): SignalSpec {
-  if (e.from.at !== "node") return DEFAULT_SIGNAL;
+/**
+ * The fan-out policy governing this wire's group. Read through `groupFanout` so
+ * a graph-level override beats the port's default — the group owns the policy.
+ */
+function sourceFanout(graph: Graph, e: RenderEdge): Fanout {
+  if (e.from.at !== "node") return DEFAULT_SIGNAL.fanout;
   const p = e.from.node.outputs[e.from.index];
-  return p ? resolveSignal(p) : DEFAULT_SIGNAL;
+  if (!p) return DEFAULT_SIGNAL.fanout;
+  return groupFanout(graph, e.from.node.id, p.id);
+}
+
+/** this wire's normalized share of its split group (per-edge weights) */
+function edgeShare(group: RenderEdge[], e: RenderEdge): number {
+  const total = group.reduce((a, g) => a + (g.source.weight ?? 1), 0);
+  return total > 0 ? (e.source.weight ?? 1) / total : 1 / group.length;
 }
 
 /** point on the wire's cubic bezier at parameter t */

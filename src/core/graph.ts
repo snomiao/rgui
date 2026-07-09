@@ -26,10 +26,11 @@ export type Side = "top" | "right" | "bottom" | "left";
 
 /**
  * A port carries a signal, and may DECLARE that signal's algebra: whether its
- * values add (`measure`) and what a fan-out does to them (`fanout`/`grain`).
- * Both default to the conservative choice — an unmarked port copies its value
- * downstream and refuses to be summed — so graphs written before the signal
- * algebra existed keep their exact behavior. See core/signal.ts.
+ * values add (`measure`), whether they may be duplicated (`share`), and what
+ * this port's fan-out does with them by default (`fanout`/`grain`). All default
+ * to the conservative choice — an unmarked port broadcasts a freely-copyable
+ * value and refuses to be summed — so graphs written before the signal algebra
+ * existed keep their exact behavior. See core/signal.ts.
  */
 export interface Port {
   id: string;
@@ -38,9 +39,19 @@ export interface Port {
   /** is `+` meaningful across parallel sources? (default "intensive": no) */
   measure?: Measure;
   /**
-   * may this signal be duplicated, and if not how is it shared out (default
-   * "copy"). On an output feeding several edges it decides the distribution;
-   * on an input it declares that the consumer takes ownership.
+   * CAPABILITY (default "copy"): may this value be duplicated at all? Belongs to
+   * the PRODUCING port and is not overridable downstream — only the node emitting
+   * a value knows whether it hands out a coordinate ("copy"), a 4K frame whose
+   * duplication costs ("clone"), or a handle/resource that must not be duplicated
+   * at all ("move"). On an input port it declares that the consumer takes
+   * ownership of what arrives.
+   */
+  share?: Share;
+  /**
+   * POLICY (default "broadcast"): this port's default fan-out. The real owner is
+   * the fan-out GROUP — override per group via `Graph.fanout`, apportion within a
+   * split via `Edge.weight`. Constrained by `share`: a "move" signal may never
+   * broadcast.
    */
   fanout?: Fanout;
   /** split only: where cuts are legal */
@@ -53,7 +64,7 @@ export interface Port {
 
 import type { MergeRule } from "./aggregate.js";
 import { sizeLayerStep } from "./grid.js";
-import { SIGNALS, type Fanout, type Grain, type Measure } from "./signal.js";
+import { SIGNALS, type Fanout, type Grain, type Measure, type Share } from "./signal.js";
 
 export interface GraphNode {
   id: string;
@@ -210,6 +221,13 @@ export interface Edge {
   /** short label drawn at the wire midpoint */
   label?: string;
   /**
+   * this edge's share of a SPLIT fan-out (default 1 = an even share). Weights
+   * are the one part of a fan-out that lives on the individual edge — the policy
+   * itself cannot, because conservation is a property of the whole division.
+   * Ignored unless the group's fanout is "split".
+   */
+  weight?: number;
+  /**
    * SNAP-CONNECTED: derived from geometry, not authored. Two nodes pushed
    * flush together with facing, kind-compatible ports wire themselves up;
    * drag them apart and the edge disappears. Temp edges are recomputed from
@@ -222,6 +240,16 @@ export interface Edge {
 export interface Graph {
   nodes: GraphNode[];
   edges: Edge[];
+  /**
+   * Per-fan-out-group POLICY override, keyed `"nodeId.portId"`. A fan-out group
+   * is the set of edges leaving one output port, and the policy belongs to the
+   * group rather than to the port or to any single edge: the same audio-segment
+   * port broadcasts to a recorder in one graph and round-robins across a worker
+   * pool in another. That is a topology decision, so the graph owns it. The port
+   * only supplies the default. A "move" signal may never be overridden to
+   * "broadcast" — see checkSignals.
+   */
+  fanout?: Record<string, Fanout>;
 }
 
 // --- layout metrics (world units) -------------------------------------
@@ -700,7 +728,7 @@ export function signalGraph(ox = 0, oy = 0): Graph {
       h: 128,
       inputs: [],
       outputs: [{ id: "transcript", label: "transcript", ...SIGNALS.transcript }],
-      fields: [["fan-out", "copy"]],
+      fields: [["fan-out", "broadcast"]],
     },
     sink("sig-tr", "Translate", 512, -96, {
       id: "text",
@@ -746,9 +774,16 @@ export function signalGraph(ox = 0, oy = 0): Graph {
     sink("sig-w2", "Worker 2", 512, 1184, { id: "job", label: "job", ...SIGNALS.work }),
   ];
 
-  const wire = (fn: string, fp: string, tn: string, tp: string): Edge => ({
+  const wire = (
+    fn: string,
+    fp: string,
+    tn: string,
+    tp: string,
+    weight?: number,
+  ): Edge => ({
     from: { node: fn, port: fp },
     to: { node: tn, port: tp },
+    weight,
   });
 
   return {
@@ -756,8 +791,10 @@ export function signalGraph(ox = 0, oy = 0): Graph {
     edges: [
       wire("sig-stt", "transcript", "sig-tr", "text"),
       wire("sig-stt", "transcript", "sig-sub", "text"),
-      wire("sig-log", "rows", "sig-idx-a", "rows"),
-      wire("sig-log", "rows", "sig-idx-b", "rows"),
+      // per-edge weights apportion the split 3:1 — Indexer A takes 75% of the
+      // lines. The policy is the group's; only the shares are the edges'.
+      wire("sig-log", "rows", "sig-idx-a", "rows", 3),
+      wire("sig-log", "rows", "sig-idx-b", "rows", 1),
       wire("sig-disp", "job", "sig-w1", "job"),
       wire("sig-disp", "job", "sig-w2", "job"),
     ],
