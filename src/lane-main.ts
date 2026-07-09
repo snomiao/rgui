@@ -407,4 +407,4 @@ async function initI18n() {
 void initI18n();
 
 // expose for host debugging / e2e
-(window as unknown as { lane: typeof lane }).lane = lane;
+Object.assign(window as object, { lane, timeSource });

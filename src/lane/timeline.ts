@@ -291,8 +291,11 @@ const CYCLES: Cycle[] = [
   { label: "Milankovitch", period: 1e5, color: "#2dd4bf", from: 3e6 },
   { label: "Axial precession", period: 25772, color: "#93c5fd", from: 5e5 },
   { label: "Halley's Comet", period: 75.3, color: "#a3e635" },
+  { label: "Metonic cycle", period: 19, color: "#c4b5fd" },
   { label: "Saros (eclipses)", period: 18.03, color: "#7dd3fc" },
   { label: "Solar cycle", period: 11, color: "#fbbf24" },
+  { label: "Olympiad / elections", period: 4, color: "#fca5a5" },
+  { label: "Islamic (Hijri) year", period: 0.970224, color: "#86efac" },
   { label: "Lunar month", period: 29.53 * DAY, color: "#e5e7eb" },
 ];
 
@@ -426,49 +429,87 @@ export function createTimelineSource(
   }
   reindex();
 
-  // ── lazy web fetch: real Linux-kernel commits at the commit scale ─────────
+  // ── lazy web fetch: open datasets pulled in at their matching zoom scale ──
   let onUpdate: () => void = () => {};
   const fetchedKeys = new Set<string>();
-  let inflight = false;
+  const inflightKeys = new Set<string>();
   function ingest(evs: Ev[]) {
     if (!evs.length) return;
     points = points.concat(evs).sort((a, b) => b.y - a.y);
     reindex();
     onUpdate();
   }
-  function maybeFetch(view: LaneView) {
-    if (!enabled.has("repo")) return;
-    const topYBP = yBPof(screenToWorldY(view, -20)); // older edge (years BP)
-    const botYBP = Math.max(0, yBPof(screenToWorldY(view, view.height + 20)));
-    // active when the recent (git-era) window is in view and narrow enough
-    if (topYBP < 0 || topYBP > 40 || topYBP - botYBP > 6) return;
-    const key = "linux:" + Math.round(((topYBP + botYBP) / 2) * 3);
-    if (fetchedKeys.has(key) || inflight) return;
+  // fetch once per key (dedup + attempted-marker so failures don't re-spam)
+  function lazyFetch(key: string, url: string, mapFn: (data: unknown) => Ev[]) {
+    if (fetchedKeys.has(key) || inflightKeys.has(key)) return;
     fetchedKeys.add(key);
-    inflight = true;
-    const sinceISO = new Date((PRESENT_EPOCH - topYBP * SPY) * 1000).toISOString();
-    const untilISO = new Date((PRESENT_EPOCH - botYBP * SPY) * 1000).toISOString();
-    fetch(
-      `https://api.github.com/repos/torvalds/linux/commits?since=${sinceISO}&until=${untilISO}&per_page=40`,
-    )
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data: Array<{ commit: { message: string; author: { date: string } } }>) => {
-        if (!Array.isArray(data)) return;
-        ingest(
-          data.map((c) => ({
+    inflightKeys.add(key);
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) ingest(mapFn(data));
+      })
+      .catch(() => {})
+      .finally(() => inflightKeys.delete(key));
+  }
+  const iso = (yBP: number) =>
+    new Date((PRESENT_EPOCH - yBP * SPY) * 1000).toISOString();
+  const winYBP = (view: LaneView) => ({
+    top: yBPof(screenToWorldY(view, -20)), // older edge
+    bot: yBPof(screenToWorldY(view, view.height + 20)), // younger/future edge
+  });
+
+  // real Linux-kernel commits (GitHub) at the commit scale
+  function fetchLinux(view: LaneView) {
+    if (!enabled.has("repo")) return;
+    const { top, bot } = winYBP(view);
+    const b = Math.max(0, bot);
+    if (top < 0 || top > 40 || top - b > 6) return; // git-era, narrow
+    lazyFetch(
+      "linux:" + Math.round(((top + b) / 2) * 3),
+      `https://api.github.com/repos/torvalds/linux/commits?since=${iso(top)}&until=${iso(b)}&per_page=40`,
+      (data) =>
+        (Array.isArray(data) ? data : []).map(
+          (c: { commit: { message: string; author: { date: string } } }) => ({
             y: (PRESENT_EPOCH - Date.parse(c.commit.author.date) / 1000) / SPY,
             label: (String(c.commit.message).split("\n")[0] ?? "").slice(0, 72),
             detail: "torvalds/linux",
             imp: 0.3,
             cat: "repo" as Cat,
             span: 0.5 * DAY,
-          })),
-        );
-      })
-      .catch(() => {})
-      .finally(() => {
-        inflight = false;
-      });
+          }),
+        ),
+    );
+  }
+
+  // real rocket launches — past AND scheduled future (Launch Library 2)
+  function fetchLaunches(view: LaneView) {
+    if (!enabled.has("cosmic")) return;
+    const { top, bot } = winYBP(view);
+    // near now: recent past (≤6 yr) through the scheduled future (≥−3 yr)
+    if (top < 0 || top > 6 || bot < -3 || top - bot > 9) return;
+    lazyFetch(
+      "launch:" + Math.round(((top + bot) / 2) * 2),
+      `https://ll.thespacedevs.com/2.2.0/launch/?net__gte=${iso(top)}&net__lte=${iso(bot)}&limit=30&mode=list&ordering=-net`,
+      (data) => {
+        const d = data as { results?: Array<{ name?: string; net?: string }> };
+        return (d.results ?? [])
+          .filter((l) => l.net)
+          .map((l) => ({
+            y: (PRESENT_EPOCH - Date.parse(l.net!) / 1000) / SPY,
+            label: (l.name ?? "launch").slice(0, 60),
+            detail: "🚀 launch",
+            imp: 0.32,
+            cat: "cosmic" as Cat,
+            span: 0.5 * DAY,
+          }));
+      },
+    );
+  }
+
+  function maybeFetch(view: LaneView) {
+    fetchLinux(view);
+    fetchLaunches(view);
   }
 
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
