@@ -15,6 +15,7 @@ export type MergeRule =
   | "max"
   | "min"
   | "sum" // Σ — quantities merge additively
+  | "concat" // ⧺ — extensive text/audio joins end to end (see signal.ts)
   | "mean" // average of numeric values
   | "range" // "min–max" spread display
   | "mode" // 众数 — most frequent (numbers and texts)
@@ -61,6 +62,10 @@ export function aggregate(values: string[], rule: MergeRule): string {
       const ns = nums();
       return ns.length ? String(ns.reduce((a, b) => a + b, 0)) : "";
     }
+    case "concat":
+      // ⧺ the extensive-text merge: successive STT segments ARE their join.
+      // Only legal on an extensive port — see isMergeLegal in signal.ts.
+      return values.join("");
     case "mean": {
       const ns = nums();
       if (!ns.length) return "";
