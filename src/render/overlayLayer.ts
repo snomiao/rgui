@@ -252,6 +252,32 @@ export function createOverlayManager(
           "position:absolute;left:0;top:0;pointer-events:none;will-change:transform;";
         wrap.appendChild(ov.el);
         layer!.appendChild(wrap);
+        // clip:"node" turns the wrap into the scroller (pointer-events:auto),
+        // which would swallow presses on the overlay's click-through
+        // background — the node beneath could then only be dragged where the
+        // overlay isn't. Presses whose target is the WRAP itself are
+        // background presses (controls stop at themselves; the element and
+        // its non-control children are pointer-events:none), so re-dispatch
+        // them to the canvas: drag / select / context-menu / dblclick work
+        // through the overlay. Scrollbar presses (outside the client box)
+        // stay with the scroller.
+        const forwardPress = (ev: MouseEvent) => {
+          if (ev.target !== wrap) return;
+          if (
+            (wrap.clientWidth > 0 && ev.offsetX >= wrap.clientWidth) ||
+            (wrap.clientHeight > 0 && ev.offsetY >= wrap.clientHeight)
+          )
+            return;
+          if (ev.type === "contextmenu") ev.preventDefault();
+          canvas.dispatchEvent(
+            typeof PointerEvent !== "undefined" && ev instanceof PointerEvent
+              ? new PointerEvent(ev.type, ev)
+              : new MouseEvent(ev.type, ev),
+          );
+        };
+        wrap.addEventListener("pointerdown", forwardPress);
+        wrap.addEventListener("contextmenu", forwardPress);
+        wrap.addEventListener("dblclick", forwardPress);
         m = { ov, wrap };
         applyInteractive(m);
         mounted.set(id, m);
