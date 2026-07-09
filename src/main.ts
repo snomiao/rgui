@@ -110,9 +110,10 @@ const viewer = rgui(canvas, {
       title: "INPUT NODES",
       anchor: "left",
       items: [
-        { id: "mic", label: "Mic + VAD", color: "#fb923c" },
-        { id: "cam", label: "Camera", color: "#2dd4bf" },
-        { id: "file", label: "Audio file", color: "#fb923c" },
+        // `value` demonstrates the right-aligned value column (label | value)
+        { id: "mic", label: "Mic + VAD", color: "#fb923c", value: "48 kHz" },
+        { id: "cam", label: "Camera", color: "#2dd4bf", value: "30 fps" },
+        { id: "file", label: "Audio file", color: "#fb923c", value: "wav" },
         { id: "text", label: "Text (in)", color: "#60a5fa" },
       ],
       onItemClick: (item, at) => console.log("[rgui] palette click", item.id, at),

@@ -22,6 +22,12 @@ export interface PanelItem {
   label: string;
   /** row dot color (e.g. a signal-kind color); default gray */
   color?: string;
+  /**
+   * right-aligned value shown at the end of the row (e.g. a count for a status
+   * HUD: label on the left, value on the right). The label is clipped so it
+   * never runs under the value.
+   */
+  value?: string;
 }
 
 export interface Panel {
@@ -276,9 +282,24 @@ export function drawPanels(
       ctx.arc(r.x + PANEL.pad + 4, y, 3, 0, Math.PI * 2);
       ctx.fillStyle = it.color ?? T.textMuted;
       ctx.fill();
+      // right-aligned value (status count etc.), then the label clipped short
+      const valW = it.value ? ctx.measureText(it.value).width : 0;
+      const labelX = r.x + PANEL.pad + 12;
+      const labelW = r.w - PANEL.pad * 2 - 12 - (valW ? valW + 8 : 0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(labelX, y - PANEL.rowH / 2, Math.max(0, labelW), PANEL.rowH);
+      ctx.clip();
       ctx.fillStyle = T.text;
       ctx.textAlign = "left";
-      ctx.fillText(it.label, r.x + PANEL.pad + 12, y);
+      ctx.fillText(it.label, labelX, y);
+      ctx.restore();
+      if (it.value) {
+        ctx.textAlign = "right";
+        ctx.fillStyle = T.textDim;
+        ctx.fillText(it.value, r.x + r.w - PANEL.pad, y);
+        ctx.textAlign = "left";
+      }
     }
   }
   ctx.restore();

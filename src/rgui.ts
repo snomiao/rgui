@@ -728,6 +728,9 @@ export function createRgui(
     // unless an inner scrollable control consumes it
     forwardWheelTo: canvas,
   });
+  // remember imperative overlays by node id so they survive setGraph (which
+  // brings new node objects) without the host having to re-attach them
+  const overlayById = new Map<string, NodeHtmlOverlay>();
 
   let raf = 0;
   let destroyed = false;
@@ -1979,6 +1982,14 @@ export function createRgui(
     },
     setGraph(g: Graph) {
       graph = g;
+      // re-bind overlays registered via setNodeOverlay onto the new node
+      // objects (unless the node already carries its own declarative overlay)
+      if (overlayById.size) {
+        for (const n of g.nodes) {
+          const ov = overlayById.get(n.id);
+          if (ov && !n.overlay) n.overlay = ov;
+        }
+      }
       invalidate();
     },
     get selection() {
@@ -2000,11 +2011,15 @@ export function createRgui(
         console.warn(`[rgui] setNodeOverlay: unknown node "${nodeId}"`);
         return;
       }
-      n.overlay = overlay
+      const resolved = overlay
         ? overlay instanceof HTMLElement
           ? { el: overlay }
           : overlay
         : undefined;
+      n.overlay = resolved;
+      // remember it by id so setGraph re-binds it to future node objects
+      if (resolved) overlayById.set(nodeId, resolved);
+      else overlayById.delete(nodeId);
       invalidate();
     },
     snapGraph(opts?: { silent?: boolean }) {

@@ -152,6 +152,11 @@ export function createOverlayManager(
     // containment stops scroll chaining out of overlay controls.
     layer.style.cssText =
       "position:absolute;inset:0;overflow:hidden;pointer-events:none;overscroll-behavior:contain;";
+    // rgui owns overlay stacking: always sit one above the canvas so HTML
+    // overlays are never buried — including after the WebGPU→canvas2d fallback,
+    // which leaves the canvas at z-index:1. (No consumer z-index workaround.)
+    const cz = parseInt(getComputedStyle(canvas).zIndex, 10);
+    layer.style.zIndex = String((Number.isFinite(cz) ? cz : 0) + 1);
     layer.addEventListener("wheel", onLayerWheel, { passive: false });
     parent.appendChild(layer);
     return layer;
