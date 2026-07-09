@@ -51,7 +51,13 @@ export {
 } from "./core/aggregate.js";
 export {
   nodeHeight,
+  nodeMinHeight,
+  nodeMinWidth,
+  nodeMetrics,
+  nodeRowY,
+  nodeRows,
   nodeScale,
+  contentScale,
   bodyRect,
   inputPortPos,
   outputPortPos,
@@ -64,6 +70,7 @@ export {
   NODE_HEADER_H,
   NODE_ROW_H,
   NODE_PAD,
+  NODE_MIN_W,
   PORT_R,
   type Graph,
   type GraphNode,

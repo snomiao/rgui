@@ -8,11 +8,16 @@ import {
   snapSizeRadix,
 } from "./grid";
 import {
+  bodyRect,
   childrenOf,
   containmentOf,
+  contentScale,
   demoGraph,
   descendantsOf,
+  inputPortPos,
   nodeHeight,
+  nodeMinHeight,
+  nodeMinWidth,
   nodeScale,
   orgChartGraph,
   type GraphNode,
@@ -547,5 +552,55 @@ describe("panels: drag snap + boundary dissolution", () => {
     expect(cov.get("b")!.top).toEqual([{ from: 100, to: 280 }]);
     // separated panels share nothing
     expect(panelCoverage([a, rect("c", 100, 320)]).size).toBe(0);
+  });
+});
+
+describe("content scale", () => {
+  const node = (scale?: number): GraphNode => ({
+    id: "n",
+    title: "N",
+    category: "model",
+    x: 0,
+    y: 0,
+    w: 256,
+    scale,
+    inputs: [{ id: "a", label: "a", kind: "text" }],
+    outputs: [],
+    fields: [["k", "v"]],
+    bodyRows: 2,
+  });
+
+  test("defaults to 1 and rejects degenerate values", () => {
+    expect(contentScale(node())).toBe(1);
+    expect(contentScale(node(0))).toBe(1);
+    expect(contentScale(node(-2))).toBe(1);
+    expect(contentScale(node(2))).toBe(2);
+  });
+
+  test("every interior metric rides the scale", () => {
+    const one = node();
+    const two = node(2);
+    expect(nodeMinHeight(two)).toBe(2 * nodeMinHeight(one));
+    expect(nodeMinWidth(two)).toBe(2 * nodeMinWidth(one));
+    // port rows and the live-body region scale about the node's origin
+    expect(inputPortPos(two, 0)[1]).toBe(2 * inputPortPos(one, 0)[1]);
+    const b1 = bodyRect(one)!;
+    const b2 = bodyRect(two)!;
+    expect(b2.x).toBe(2 * b1.x);
+    expect(b2.h).toBe(2 * b1.h);
+  });
+
+  test("rescaling by f preserves the aspect ratio and the min-height law", () => {
+    const base = node();
+    base.h = 192;
+    const ratio = base.w / nodeHeight(base);
+    for (const f of [0.5, 1.5, 2, 4]) {
+      const scaled = node(f);
+      scaled.w = base.w * f;
+      scaled.h = nodeHeight(base) * f;
+      expect(scaled.w / nodeHeight(scaled)).toBeCloseTo(ratio, 10);
+      expect(nodeHeight(scaled)).toBeGreaterThanOrEqual(nodeMinHeight(scaled));
+      expect(nodeHeight(scaled)).toBeCloseTo(nodeHeight(base) * f, 10);
+    }
   });
 });

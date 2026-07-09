@@ -67,6 +67,16 @@ export interface GraphNode {
    * region; ignored when below the derived minimum (rows + bodyRows)
    */
   h?: number;
+  /**
+   * CONTENT SCALE (default 1): how large this node renders ITSELF —
+   * every internal metric (header, rows, padding, ports, fonts, and the
+   * body/draw hooks' pixels) multiplies by it. Distinct from w/h, which
+   * only say how much world the node occupies: growing w gives the same
+   * 11px rows more room, raising scale magnifies the node like a lens.
+   * Shift+drag on the corner grip rescales (aspect-preserving); a plain
+   * drag resizes.
+   */
+  scale?: number;
   /** custom block background fill (default #2b3036) */
   bg?: string;
   /**
@@ -142,18 +152,51 @@ export const NODE_ROW_H = 22;
 export const NODE_PAD = 10;
 export const PORT_R = 5;
 
+/** content scale (default 1, always positive) */
+export function contentScale(n: GraphNode): number {
+  const s = n.scale ?? 1;
+  return s > 0 ? s : 1;
+}
+
+/**
+ * A node's interior metrics in WORLD units. The base constants describe a
+ * scale-1 node; every interior length rides the node's content scale, which
+ * is what makes a rescaled node a magnified copy of itself rather than a
+ * bigger box holding the same small type.
+ */
+export function nodeMetrics(n: GraphNode): {
+  s: number;
+  headerH: number;
+  rowH: number;
+  pad: number;
+  portR: number;
+} {
+  const s = contentScale(n);
+  return {
+    s,
+    headerH: NODE_HEADER_H * s,
+    rowH: NODE_ROW_H * s,
+    pad: NODE_PAD * s,
+    portR: PORT_R * s,
+  };
+}
+
+/** number of stacked rows (fields vs. the taller port column) */
+export function nodeRows(n: GraphNode): number {
+  return Math.max(n.fields.length, Math.max(n.inputs.length, n.outputs.length));
+}
+
 /** derived minimum height (rows + reserved body rows) */
 export function nodeMinHeight(n: GraphNode): number {
-  const rows = Math.max(
-    n.fields.length,
-    Math.max(n.inputs.length, n.outputs.length),
-  );
-  return (
-    NODE_HEADER_H +
-    NODE_PAD +
-    (rows + (n.bodyRows ?? 0)) * NODE_ROW_H +
-    NODE_PAD
-  );
+  const { headerH, rowH, pad } = nodeMetrics(n);
+  return headerH + pad + (nodeRows(n) + (n.bodyRows ?? 0)) * rowH + pad;
+}
+
+/** derived minimum width — a scale-1 node never narrows below 96 wu */
+export const NODE_MIN_W = 96;
+
+export function nodeMinWidth(n: GraphNode): number {
+  return NODE_MIN_W * contentScale(n);
 }
 
 export function nodeHeight(n: GraphNode): number {
@@ -230,28 +273,31 @@ export function bodyRect(
   n: GraphNode,
 ): { x: number; y: number; w: number; h: number } | null {
   if (!n.bodyRows) return null;
-  const rows = Math.max(
-    n.fields.length,
-    Math.max(n.inputs.length, n.outputs.length),
-  );
-  const top = n.y + NODE_HEADER_H + NODE_PAD + rows * NODE_ROW_H;
+  const { headerH, rowH, pad } = nodeMetrics(n);
+  const top = n.y + headerH + pad + nodeRows(n) * rowH;
   // any resized extra height flows into the live-body region
   return {
-    x: n.x + NODE_PAD,
+    x: n.x + pad,
     y: top,
-    w: n.w - 2 * NODE_PAD,
-    h: n.y + nodeHeight(n) - NODE_PAD - top,
+    w: n.w - 2 * pad,
+    h: n.y + nodeHeight(n) - pad - top,
   };
+}
+
+/** world y of a node's i-th port/field row center */
+export function nodeRowY(n: GraphNode, i: number): number {
+  const { headerH, rowH, pad } = nodeMetrics(n);
+  return n.y + headerH + pad + (i + 0.5) * rowH;
 }
 
 /** world position of an input port center */
 export function inputPortPos(n: GraphNode, i: number): [number, number] {
-  return [n.x, n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H];
+  return [n.x, nodeRowY(n, i)];
 }
 
 /** world position of an output port center */
 export function outputPortPos(n: GraphNode, i: number): [number, number] {
-  return [n.x + n.w, n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H];
+  return [n.x + n.w, nodeRowY(n, i)];
 }
 
 // --- demo graph: our take on the otoji jolly-finch-ibni pipeline ------

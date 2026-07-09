@@ -9,12 +9,13 @@
  */
 import {
   bodyRect,
+  contentScale,
   inputPortPos,
   nodeHeight,
+  nodeMetrics,
+  nodeRowY,
   outputPortPos,
   NODE_HEADER_H,
-  NODE_PAD,
-  NODE_ROW_H,
   PORT_R,
   type Graph,
   type GraphNode,
@@ -281,7 +282,8 @@ interface RenderEdgeLike {
 
 /** world position of a node's header pin glyph (toggle target) */
 export function pinPos(n: GraphNode): [number, number] {
-  return [n.x + n.w - 14, n.y + NODE_HEADER_H / 2];
+  const s = contentScale(n);
+  return [n.x + n.w - 14 * s, n.y + (NODE_HEADER_H * s) / 2];
 }
 
 /** wire endpoint position + outgoing direction, honoring port layout */
@@ -302,6 +304,32 @@ function endpointPlaced(
   return { x, y, dir: ref.side === "out" ? 1 : -1 };
 }
 
+/**
+ * Enter a host hook's drawing space at world (x, y). The hook is promised
+ * PIXELS, so we undo the world zoom — but keep the node's content scale, so
+ * one hook pixel becomes `s` screen pixels and a 2x node's hand-drawn body
+ * magnifies exactly like its type does. At s=1 this is the old `scale(1/k)`.
+ */
+function hookSpace(
+  ctx: CanvasRenderingContext2D,
+  n: GraphNode,
+  x: number,
+  y: number,
+  k: number,
+) {
+  ctx.translate(x, y);
+  const s = contentScale(n);
+  ctx.scale(s / k, s / k);
+  // neutral text state for the host hook (leaked textAlign footgun)
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+/** the world rect (w, h) measured in a hook's own pixels */
+function hookRect(w: number, h: number, k: number, s: number) {
+  return { width: (w * k) / s, height: (h * k) / s };
+}
+
 function drawNode(
   ctx: CanvasRenderingContext2D,
   n: GraphNode,
@@ -312,7 +340,8 @@ function drawNode(
   summarize?: SummarizeFn,
 ) {
   const h = nodeHeight(n);
-  const r = 8;
+  const m = nodeMetrics(n);
+  const r = 8 * m.s;
   const cov: SideCoverage = cover ?? {
     top: [],
     right: [],
@@ -342,13 +371,9 @@ function drawNode(
     ctx.beginPath();
     ctx.roundRect(n.x, n.y, n.w, h, [tl, tr, br, bl]);
     ctx.clip();
-    ctx.translate(n.x, n.y);
-    ctx.scale(1 / k, 1 / k);
-    // neutral text state for the host hook (leaked textAlign footgun)
-    ctx.textAlign = "left";
-    ctx.textBaseline = "alphabetic";
+    hookSpace(ctx, n, n.x, n.y, k);
     try {
-      n.draw(ctx, { width: n.w * k, height: h * k }, { k });
+      n.draw(ctx, hookRect(n.w, h, k, m.s), { k: k * m.s });
     } catch (err) {
       console.error("[rgui] node draw hook failed:", err);
     }
@@ -364,16 +389,20 @@ function drawNode(
   // single block: no header band — the category speaks through the title
   // color, so a node (and a fused stack) reads as one uninterrupted shape
   ctx.fillStyle = categoryColor(n.category);
-  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.font = `bold ${13 * m.s}px system-ui, sans-serif`;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
-  ctx.fillText(n.title, n.x + NODE_PAD, n.y + NODE_HEADER_H / 2 + 0.5);
+  ctx.fillText(n.title, n.x + m.pad, n.y + m.headerH / 2 + 0.5 * m.s);
 
   drawNodePin(ctx, n);
 
+  // readability rides the SCALED row height: a magnified node keeps its
+  // detail further out, and a shrunken one drops it sooner
+  const rowPx = m.rowH * k;
+
   // small-level summary: fields are below readability — ask the host for a
   // compact screen-constant summary instead of showing nothing
-  if (NODE_ROW_H * k < rule.fieldMinPx && summarize) {
+  if (rowPx < rule.fieldMinPx && summarize) {
     const sw = n.w * k;
     const sh = h * k;
     const content = summarize([n], {
@@ -384,46 +413,42 @@ function drawNode(
     if (content) {
       ctx.save();
       ctx.beginPath();
-      ctx.roundRect(n.x, n.y, n.w, h, 8);
+      ctx.roundRect(n.x, n.y, n.w, h, r);
       ctx.clip();
       ctx.translate(n.x, n.y);
       ctx.scale(1 / k, 1 / k); // screen px
-      const top = Math.min(NODE_HEADER_H * k, 16) + 2;
+      const top = Math.min(m.headerH * k, 16) + 2;
       drawSummaryContent(ctx, content, 6, top, sw - 12, sh - top - 4);
       ctx.restore();
     }
   }
 
   // field rows — skip when they would render unreadably small
-  if (NODE_ROW_H * k >= rule.fieldMinPx) {
-    ctx.font = "11px system-ui, sans-serif";
+  if (rowPx >= rule.fieldMinPx) {
+    ctx.font = `${11 * m.s}px system-ui, sans-serif`;
     for (let i = 0; i < n.fields.length; i++) {
       const [key, v] = n.fields[i]!;
-      const y = n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H;
+      const y = nodeRowY(n, i);
       ctx.fillStyle = T.textMuted;
       ctx.textAlign = "left";
-      ctx.fillText(key, n.x + NODE_PAD + 10, y);
+      ctx.fillText(key, n.x + m.pad + 10 * m.s, y);
       ctx.fillStyle = T.text;
       ctx.textAlign = "right";
-      ctx.fillText(v, n.x + n.w - NODE_PAD - 10, y);
+      ctx.fillText(v, n.x + n.w - m.pad - 10 * m.s, y);
     }
   }
 
   // live body — host-drawn region (waveform / partial text / thumbnails).
-  // Screen-space ctx clipped to the region; skipped when unreadably small.
+  // Hook-pixel ctx clipped to the region; skipped when unreadably small.
   const bodyR = bodyRect(n);
   if (n.body && bodyR && bodyR.h * k >= 12) {
     ctx.save();
     ctx.beginPath();
     ctx.rect(bodyR.x, bodyR.y, bodyR.w, bodyR.h);
     ctx.clip();
-    ctx.translate(bodyR.x, bodyR.y);
-    ctx.scale(1 / k, 1 / k); // hand the host SCREEN pixels
-    // neutral text state (rgui leaves textAlign='right' after field values)
-    ctx.textAlign = "left";
-    ctx.textBaseline = "alphabetic";
+    hookSpace(ctx, n, bodyR.x, bodyR.y, k);
     try {
-      n.body(ctx, { width: bodyR.w * k, height: bodyR.h * k }, { k });
+      n.body(ctx, hookRect(bodyR.w, bodyR.h, k, m.s), { k: k * m.s });
     } catch (err) {
       console.error("[rgui] node body hook failed:", err);
     }
@@ -448,34 +473,35 @@ function drawContainerFrame(
   layout: Map<string, PortPlacement>,
 ) {
   const h = nodeHeight(n);
+  const m = nodeMetrics(n);
   const accent = categoryColor(n.category);
   ctx.beginPath();
-  ctx.roundRect(n.x, n.y, n.w, h, 10);
+  ctx.roundRect(n.x, n.y, n.w, h, 10 * m.s);
   ctx.fillStyle = withAlpha(accent, 0.05);
   ctx.fill();
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.5 * m.s;
   ctx.strokeStyle = withAlpha(accent, 0.6);
   ctx.stroke();
 
   ctx.fillStyle = accent;
-  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.font = `bold ${13 * m.s}px system-ui, sans-serif`;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
-  ctx.fillText(n.title, n.x + NODE_PAD, n.y + NODE_HEADER_H / 2 + 0.5);
+  ctx.fillText(n.title, n.x + m.pad, n.y + m.headerH / 2 + 0.5 * m.s);
 
   // containers may declare a few fields — same rows as a card, and the
   // author leaves that strip clear when placing children
-  if (NODE_ROW_H * k >= rule.fieldMinPx) {
-    ctx.font = "11px system-ui, sans-serif";
+  if (m.rowH * k >= rule.fieldMinPx) {
+    ctx.font = `${11 * m.s}px system-ui, sans-serif`;
     for (let i = 0; i < n.fields.length; i++) {
       const [key, v] = n.fields[i]!;
-      const y = n.y + NODE_HEADER_H + NODE_PAD + (i + 0.5) * NODE_ROW_H;
+      const y = nodeRowY(n, i);
       ctx.fillStyle = T.textMuted;
       ctx.textAlign = "left";
-      ctx.fillText(key, n.x + NODE_PAD + 10, y);
+      ctx.fillText(key, n.x + m.pad + 10 * m.s, y);
       ctx.fillStyle = T.text;
       ctx.textAlign = "right";
-      ctx.fillText(v, n.x + n.w - NODE_PAD - 10, y);
+      ctx.fillText(v, n.x + n.w - m.pad - 10 * m.s, y);
     }
   }
 
@@ -486,17 +512,18 @@ function drawContainerFrame(
 
 /** diagonal grip lines at the bottom-right corner (resize affordance) */
 function drawResizeGrip(ctx: CanvasRenderingContext2D, n: GraphNode, h: number) {
+  const s = contentScale(n);
   const x = n.x + n.w;
   const y = n.y + h;
   ctx.save();
   ctx.strokeStyle = T.textMuted;
   ctx.globalAlpha = 0.35;
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = 1.2 * s;
   ctx.beginPath();
-  ctx.moveTo(x - 9, y - 3);
-  ctx.lineTo(x - 3, y - 9);
-  ctx.moveTo(x - 5.5, y - 3);
-  ctx.lineTo(x - 3, y - 5.5);
+  ctx.moveTo(x - 9 * s, y - 3 * s);
+  ctx.lineTo(x - 3 * s, y - 9 * s);
+  ctx.moveTo(x - 5.5 * s, y - 3 * s);
+  ctx.lineTo(x - 3 * s, y - 5.5 * s);
   ctx.stroke();
   ctx.restore();
 }
@@ -508,7 +535,7 @@ function drawNodeBorder(
   cov: SideCoverage,
 ) {
   const [tl, tr, br, bl] = radii;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.5 * contentScale(n);
   ctx.strokeStyle = T.ink;
   ctx.beginPath();
   for (const seg of subtractIntervals(
@@ -550,6 +577,7 @@ function drawNodePin(ctx: CanvasRenderingContext2D, n: GraphNode) {
   const [px, py] = pinPos(n);
   ctx.save();
   ctx.translate(px, py);
+  ctx.scale(contentScale(n), contentScale(n));
   ctx.rotate(Math.PI / 4);
   ctx.globalAlpha = n.pinned ? 1 : 0.25;
   ctx.fillStyle = n.pinned ? T.accent : T.textMuted;
@@ -574,8 +602,9 @@ function drawNodePorts(
 ) {
   // ports — layout-driven: internal ports vanish (辺界消融), external ports
   // sit on the edge their wire leaves from
-  const labels = NODE_ROW_H * k >= rule.portLabelMinPx;
-  ctx.font = "10px system-ui, sans-serif";
+  const m = nodeMetrics(n);
+  const labels = m.rowH * k >= rule.portLabelMinPx;
+  ctx.font = `${10 * m.s}px system-ui, sans-serif`;
   ctx.textBaseline = "middle";
   const drawPorts = (dir: "in" | "out", ports: typeof n.inputs) => {
     for (const p of ports) {
@@ -586,17 +615,18 @@ function drawNodePorts(
         pl.x,
         pl.y,
         kindColor(p.kind),
-        PORT_R,
+        m.portR,
         portDir(rule, dir, pl.edge),
+        m.s,
       );
       if (dir === "out" && labels) {
         ctx.fillStyle = kindColor(p.kind);
         if (pl.edge === "right") {
           ctx.textAlign = "left";
-          ctx.fillText(p.label, pl.x + PORT_R + 4, pl.y);
+          ctx.fillText(p.label, pl.x + m.portR + 4 * m.s, pl.y);
         } else {
           ctx.textAlign = "right";
-          ctx.fillText(p.label, pl.x - PORT_R - 4, pl.y);
+          ctx.fillText(p.label, pl.x - m.portR - 4 * m.s, pl.y);
         }
       }
     }
@@ -783,6 +813,8 @@ function drawPort(
   color: string,
   r: number,
   dir: -1 | 0 | 1 = 0,
+  /** node content scale — the chevron's notch and outline ride it */
+  s = 1,
 ) {
   ctx.beginPath();
   if (dir === 0) {
@@ -790,15 +822,15 @@ function drawPort(
   } else {
     // ">" chevron arrowhead with a back notch
     const d = dir;
-    ctx.moveTo(x - 2.5 * d, y - r);
-    ctx.lineTo(x + (r - 0.5) * d, y);
-    ctx.lineTo(x - 2.5 * d, y + r);
-    ctx.lineTo(x - 0.5 * d, y);
+    ctx.moveTo(x - 2.5 * s * d, y - r);
+    ctx.lineTo(x + (r - 0.5 * s) * d, y);
+    ctx.lineTo(x - 2.5 * s * d, y + r);
+    ctx.lineTo(x - 0.5 * s * d, y);
     ctx.closePath();
   }
   ctx.fillStyle = color;
   ctx.fill();
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.5 * s;
   ctx.strokeStyle = T.ink;
   ctx.stroke();
 }
