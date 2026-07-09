@@ -225,8 +225,12 @@ if (restored.scrollY != null || restored.zoomY != null) {
     zoomY: restored.zoomY ?? undefined,
   });
 }
-// redraw when the timeline lazily fetches web data (Linux commits)
-timeSource.setOnUpdate(() => lane.invalidate());
+// redraw when the timeline lazily fetches web data; also translate any new
+// (fetched) labels so i18n keeps up with live data
+timeSource.setOnUpdate(() => {
+  lane.invalidate();
+  void translateNew();
+});
 
 // ── dataset switcher ──────────────────────────────────────────────────────
 const seg = document.querySelector<HTMLDivElement>("#dataset")!;
@@ -380,8 +384,27 @@ themeToggle?.addEventListener("click", () => {
 
 // ── i18n: translate labels into the browser's language (progressive) ──────
 // Uses the built-in browser Translator API when available; renders English
-// first and swaps in translations as they arrive. No-op when unavailable or
-// the browser is already English.
+// first and swaps in translations as they arrive — including labels from live
+// fetches (translateNew runs again on each source update). No-op when
+// unavailable or the browser is already English.
+let translator: { translate(s: string): Promise<string> } | null = null;
+const trCache = new Map<string, string>();
+let translating = false;
+async function translateNew() {
+  if (!translator || translating) return;
+  const todo = timeSource.strings().filter((s) => !trCache.has(s));
+  if (!todo.length) return;
+  translating = true;
+  for (const s of todo) {
+    try {
+      trCache.set(s, await translator.translate(s));
+    } catch {
+      trCache.set(s, s); // keep English on failure
+    }
+  }
+  translating = false;
+  timeSource.setTranslate((s) => trCache.get(s) ?? s); // redraw with new text
+}
 async function initI18n() {
   const lang = (navigator.language || "en").split("-")[0];
   if (lang === "en") return;
@@ -390,16 +413,8 @@ async function initI18n() {
   try {
     const avail = await T.availability?.({ sourceLanguage: "en", targetLanguage: lang });
     if (avail === "unavailable") return;
-    const translator = await T.create({ sourceLanguage: "en", targetLanguage: lang });
-    const cache = new Map<string, string>();
-    for (const s of timeSource.strings()) {
-      try {
-        cache.set(s, await translator.translate(s));
-      } catch {
-        /* keep the English original for this string */
-      }
-    }
-    timeSource.setTranslate((s) => cache.get(s) ?? s);
+    translator = await T.create({ sourceLanguage: "en", targetLanguage: lang });
+    await translateNew();
   } catch {
     /* Translator API unavailable — stay English */
   }
