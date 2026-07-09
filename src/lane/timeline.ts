@@ -269,6 +269,29 @@ const BORN: Ev[] = [
   { y: PRESENT_YEAR - 1867, label: "Marie Curie born", imp: 0.56, cat: "human" },
   { y: PRESENT_YEAR - 1879, label: "Einstein born", imp: 0.62, cat: "human", span: 0.5 },
   { y: PRESENT_YEAR - 1912, label: "Alan Turing born", imp: 0.58, cat: "human", span: 0.5 },
+  // curated notable births across eras (instant — Wikidata's live "people born
+  // in a year range" scan is too slow to fetch; hover-cards pull the details)
+  { y: PRESENT_YEAR + 750, label: "Homer born", imp: 0.5, cat: "human", detail: "epic poet (legendary)" },
+  { y: PRESENT_YEAR + 570, label: "Pythagoras born", imp: 0.5, cat: "human" },
+  { y: PRESENT_YEAR + 259, label: "Qin Shi Huang born", imp: 0.52, cat: "human", detail: "first emperor of China" },
+  { y: PRESENT_YEAR + 63, label: "Augustus born", imp: 0.52, cat: "human", detail: "first Roman emperor" },
+  { y: PRESENT_YEAR - 748, label: "Charlemagne born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1162, label: "Genghis Khan born", imp: 0.56, cat: "human" },
+  { y: PRESENT_YEAR - 1254, label: "Marco Polo born", imp: 0.5, cat: "human" },
+  { y: PRESENT_YEAR - 1398, label: "Gutenberg born", imp: 0.54, cat: "human", detail: "printing press" },
+  { y: PRESENT_YEAR - 1451, label: "Christopher Columbus born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1473, label: "Copernicus born", imp: 0.54, cat: "human" },
+  { y: PRESENT_YEAR - 1483, label: "Martin Luther born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1571, label: "Johannes Kepler born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1596, label: "René Descartes born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1685, label: "J. S. Bach born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1706, label: "Benjamin Franklin born", imp: 0.52, cat: "human" },
+  { y: PRESENT_YEAR - 1769, label: "Napoleon born", imp: 0.54, cat: "human" },
+  { y: PRESENT_YEAR - 1770, label: "Beethoven born", imp: 0.54, cat: "human" },
+  { y: PRESENT_YEAR - 1847, label: "Thomas Edison born", imp: 0.52, cat: "human", span: 0.5 },
+  { y: PRESENT_YEAR - 1856, label: "Nikola Tesla born", imp: 0.56, cat: "human", span: 0.5 },
+  { y: PRESENT_YEAR - 1869, label: "Mahatma Gandhi born", imp: 0.56, cat: "human", span: 0.5 },
+  { y: PRESENT_YEAR - 1918, label: "Nelson Mandela born", imp: 0.54, cat: "human", span: 0.5 },
 ];
 
 // predicted future events (negative years BP = ahead of now)
