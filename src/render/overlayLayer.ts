@@ -99,10 +99,12 @@ export function createOverlayManager(
   },
 ): OverlayManager {
   let layer: HTMLDivElement | null = null;
-  const mounted = new Map<
-    string,
-    { ov: NodeHtmlOverlay; wrap: HTMLDivElement; mo?: MutationObserver }
-  >();
+  interface Mounted {
+    ov: NodeHtmlOverlay;
+    wrap: HTMLDivElement;
+    mo?: MutationObserver;
+  }
+  const mounted = new Map<string, Mounted>();
 
   const CONTROLS =
     'input,select,textarea,button,a,label,[contenteditable="true"],[data-rgui-interactive]';
@@ -187,6 +189,25 @@ export function createOverlayManager(
     return layer;
   }
 
+  /**
+   * Wire the element's pointer-events mode. Re-runnable: `interactive` can
+   * flip on a rebuilt overlay object, so the observer is torn down first.
+   */
+  function applyInteractive(m: Mounted) {
+    m.mo?.disconnect();
+    m.mo = undefined;
+    const { el, interactive } = m.ov;
+    if (interactive === false) {
+      el.style.pointerEvents = "none";
+      return;
+    }
+    applyControlPassthrough(el);
+    // hosts re-render controls dynamically (e.g. React) — keep the
+    // control passthrough fresh
+    m.mo = new MutationObserver(() => applyControlPassthrough(el));
+    m.mo.observe(el, { childList: true, subtree: true });
+  }
+
   function unmount(id: string) {
     const m = mounted.get(id);
     if (!m) return;
@@ -222,9 +243,9 @@ export function createOverlayManager(
     const H = canvas.clientHeight;
     let z = 0;
     for (const [id, n] of want) {
+      const ov = n.overlay!;
       let m = mounted.get(id);
       if (!m) {
-        const ov = n.overlay!;
         const wrap = document.createElement("div");
         wrap.dataset["nodeId"] = id;
         wrap.style.cssText =
@@ -232,16 +253,17 @@ export function createOverlayManager(
         wrap.appendChild(ov.el);
         layer!.appendChild(wrap);
         m = { ov, wrap };
-        if (ov.interactive === false) {
-          ov.el.style.pointerEvents = "none";
-        } else {
-          applyControlPassthrough(ov.el);
-          // hosts re-render controls dynamically (e.g. React) — keep the
-          // control passthrough fresh
-          m.mo = new MutationObserver(() => applyControlPassthrough(ov.el));
-          m.mo.observe(ov.el, { childList: true, subtree: true });
-        }
+        applyInteractive(m);
         mounted.set(id, m);
+      } else if (m.ov !== ov) {
+        // The host rebuilt the overlay OBJECT around the same element — a
+        // graph re-map does this on every change. Only `el` decides remount,
+        // so adopt the new options here; otherwise a later anchor/offset/
+        // scale/minScale/clip change would never take effect, and unmount
+        // would call a destroy() the host has already replaced.
+        const prev = m.ov;
+        m.ov = ov;
+        if (prev.interactive !== ov.interactive) applyInteractive(m);
       }
       const k = view.k;
       const h = nodeHeight(n);
@@ -307,6 +329,13 @@ export function createOverlayManager(
         m.wrap.style.height = `${Math.max(0, (y1 - y0) / s)}px`;
         m.wrap.style.overflow = m.ov.overflow ?? "auto";
         m.wrap.style.pointerEvents = "auto";
+      } else {
+        // clip may have been "node" on a previous overlay object — the wrap
+        // keeps its styles, so hand it back its pass-through defaults
+        m.wrap.style.width = "";
+        m.wrap.style.height = "";
+        m.wrap.style.overflow = "";
+        m.wrap.style.pointerEvents = "none";
       }
       m.wrap.style.transformOrigin = "0 0";
       m.wrap.style.transform = scaled

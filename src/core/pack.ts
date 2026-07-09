@@ -35,6 +35,16 @@ const rectOf = (n: GraphNode): Rect => ({
 });
 
 /**
+ * Is `o` the node itself? Compared by ID, not identity: a host that re-maps
+ * its graph mid-drag hands rgui a FRESH object for the same id, and the
+ * dragged node would otherwise treat its own twin as an obstacle — pushing
+ * itself away from where it already is, or clamping its size against a rect
+ * it exactly occupies.
+ */
+const isSelf = (o: GraphNode, node: GraphNode) =>
+  o === node || o.id === node.id;
+
+/**
  * Resolve overlaps for a node being dragged to (x, y): push it out along the
  * axis of least penetration until it sits flush against whatever it hit.
  * Contact beats grid snap — one-cell-one-thing is the invariant.
@@ -59,7 +69,7 @@ export function resolveOverlap(
   for (let iter = 0; iter < 8; iter++) {
     let hit: Rect | null = null;
     for (const o of others) {
-      if (o === node) continue;
+      if (isSelf(o, node)) continue;
       const r = rectOf(o);
       const penX = Math.min(x + w, r.x + r.w) - Math.max(x, r.x);
       const penY = Math.min(y + h, r.y + r.h) - Math.max(y, r.y);
@@ -109,7 +119,7 @@ export function clampSize(
 ): { w: number; h: number } {
   const hCur = nodeHeight(node);
   for (const o of others) {
-    if (o === node) continue;
+    if (isSelf(o, node)) continue;
     const r = rectOf(o);
     // width cap: neighbor to the right overlapping our current y-span
     if (
@@ -120,7 +130,7 @@ export function clampSize(
       w = Math.min(w, r.x - node.x);
   }
   for (const o of others) {
-    if (o === node) continue;
+    if (isSelf(o, node)) continue;
     const r = rectOf(o);
     // height cap: neighbor below overlapping our NEW x-span
     if (
