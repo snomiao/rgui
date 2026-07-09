@@ -30,13 +30,19 @@
 - [x] core unit tests (bun test, 12 pass)
 - [x] signal algebra (`core/signal`): 3 つの問いを 3 人の所有者に分離。
       `measure`(extensive/intensive, port 所有) = `+` が意味を持つか。
-      `share`(copy/clone/move, **producer port** 所有・上書き不可) = 複製してよいか。
+      `ownership`(copy/clone/share/move, **producer port** 所有・上書き不可) = 複製/別名を許すか。
       `fanout`(broadcast/split/route, **fan-out group** 所有 = `Graph.fanout` で上書き) = ここで何をするか。
       `Edge.weight`(**edge** 所有) = split 内の取り分。
       fan-in の `sum`/`concat` は extensive でのみ合法。`move` の broadcast は error。
       3 種の wire を描き分け、`checkSignals()` / `signalConnectionGuard()` で検証。
       `docs/signal.md` に根拠。sflow は `lib/sflow` に submodule として参照のみ
       (core は依存ゼロを維持)。transport/配置は host の責務として意図的に扱わない。
+- [x] otoji cross-machine レビュー反映: `ownership` を 4 値化(Rust の Copy/Clone/Arc/move)。
+      `share` = 複製不可だが別名可(MediaStream/GPU buffer)。これが無いと otoji の image/ctl
+      port(同一プロセス内 broadcast = 共有借用)に `broadcast-move` が誤検知していた。
+      `share` を足したことで **全判定が placement 非依存**に戻り、`Edge.transport` は不要と確定
+      (otoji 側も「core に入れない」で合意)。host 用の述語として `isDuplicable`/`isAliasable` を export。
+- [ ] otoji へ: `share` → `ownership` に改名した旨を伝える(mirror は `ownership?` で足す)
 - [ ] sflow adapter (`@snomiao/rgui/sflow`): `SignalSpec` → `tees`/`distributeBys`/`merges`
       の TransformStream を組む optional entry point。peerDep + 別 build entry が要る。
 - [ ] WebGPU renderer (同一 interface の背後に)

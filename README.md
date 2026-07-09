@@ -197,10 +197,10 @@ Everything above zoom is governed by a small set of composable laws:
   card; the view stays strictly 2-D and all the laws above keep holding. The background
   field arrows lean with the rotation (180° shows the field pointing away: gold crosses).
 - **A wire says what it carries** — a port declares whether its signal *adds*
-  (`measure`), whether it may be *duplicated* (`share`), and what a fan-out *does*
-  with it (`fanout`). rgui refuses `sum` on a state and `broadcast` on a resource, and
-  draws the three fan-outs as three different wires — full, thinned-and-badged `1/n`,
-  dotted. See [docs/signal.md](docs/signal.md) and `signalGraph()`.
+  (`measure`), whether it may be *duplicated or aliased* (`ownership`), and what a
+  fan-out *does* with it (`fanout`). rgui refuses `sum` on a state and `broadcast` on a
+  singly-owned resource, and draws the three fan-outs as three different wires — full,
+  thinned-and-badged `1/n`, dotted. See [docs/signal.md](docs/signal.md) and `signalGraph()`.
 
 ## The signal algebra
 
@@ -209,19 +209,25 @@ Three questions, three owners:
 | question | field | owned by |
 |---|---|---|
 | is `+` meaningful across parallel sources? | `measure: "extensive" \| "intensive"` | the port |
-| **may** this value be duplicated? | `share: "copy" \| "clone" \| "move"` | the **producing port** |
+| **may** this value be duplicated / aliased? | `ownership: "copy" \| "clone" \| "share" \| "move"` | the **producing port** |
 | is it duplicated **here**, or divided? | `fanout: "broadcast" \| "split" \| "route"` | the **fan-out group** |
 | what **share** does this wire take? | `Edge.weight` | the **edge** |
 
-`share` is Rust's `Copy` / `Clone` / move: a coordinate is free to copy, a 4K frame
-copies *at a cost*, a token budget or a MediaStream handle must **not** be copied at
-all. The one rule: **a `move` value may never `broadcast`.** Splitting a copyable
-value stays legal — that's load balancing, not a safety violation.
+`ownership` is Rust's four: a coordinate is free to `copy`, a 4K frame `clone`s *at a
+cost*, a `MediaStream` can be `share`d (two nodes borrow the same one, nothing is
+duplicated), and a token budget or a lease is a `move` — single owner. The one rule:
+**a `move` value may never `broadcast`.** Broadcasting a shared handle is a borrow,
+not a copy, so it stays legal; splitting a copyable value is load balancing, not a
+safety violation.
 
-|  | `share: "copy" \| "clone"` | `share: "move"` |
+Every verdict is **placement-independent** — rgui never needs to know which machine a
+node lands on. `isDuplicable()` is the predicate a host composes with its own
+placement to decide what can cross a device boundary.
+
+|  | `copy` / `clone` / `share` | `move` |
 |---|---|---|
 | **extensive** (`sum`/`concat` legal) | STT transcript segments, audio chunks, shard counters | token budget, money, work items |
-| **intensive** (`sum` forbidden) | coordinates, image frames, vision label sets | an exclusive lease, a GPU slot |
+| **intensive** (`sum` forbidden) | coordinates, image frames, vision labels, a MediaStream | an exclusive lease, a GPU slot |
 
 The tempting model is one axis — *change vs state* — but a cumulative counter is
 additive across shards yet must be **copied** on fan-out, and a coin transfer is
@@ -268,9 +274,9 @@ is framework-agnostic pure functions and plain data.
   `ordered`, `topK`, `quantile`, type `MergeRule`
 - **Signal algebra** (`core/signal`): `SIGNALS` presets, `checkSignals`,
   `signalConnectionGuard`, `forkValue`, `resolveSignal`, `groupFanout`, `groupWeights`,
-  `portMerge`, `splitQuantity`, `splitAtoms`, `routeIndex`, types `Measure`, `Share`,
-  `Fanout`, `Grain`, `SignalSpec`, `Atomizer` — what a wire carries and what happens
-  when it forks or converges. See [docs/signal.md](docs/signal.md)
+  `isDuplicable`, `isAliasable`, `portMerge`, `splitQuantity`, `splitAtoms`, `routeIndex`,
+  types `Measure`, `Ownership`, `Fanout`, `Grain`, `SignalSpec`, `Atomizer` — what a wire
+  carries and what happens when it forks or converges. See [docs/signal.md](docs/signal.md)
 - **Layout** (`core/layout`): `layoutGraph`
 - **Renderers** (`render`): Canvas 2D layers, `createWebGPUGridRenderer` (grid underlay),
   panels (`panelLayout`/`drawPanels`), HTML overlays (`createOverlayManager`),

@@ -26,8 +26,8 @@ export type Side = "top" | "right" | "bottom" | "left";
 
 /**
  * A port carries a signal, and may DECLARE that signal's algebra: whether its
- * values add (`measure`), whether they may be duplicated (`share`), and what
- * this port's fan-out does with them by default (`fanout`/`grain`). All default
+ * values add (`measure`), whether they may be duplicated or aliased (`ownership`),
+ * and what this port's fan-out does with them by default (`fanout`/`grain`). All default
  * to the conservative choice — an unmarked port broadcasts a freely-copyable
  * value and refuses to be summed — so graphs written before the signal algebra
  * existed keep their exact behavior. See core/signal.ts.
@@ -39,18 +39,19 @@ export interface Port {
   /** is `+` meaningful across parallel sources? (default "intensive": no) */
   measure?: Measure;
   /**
-   * CAPABILITY (default "copy"): may this value be duplicated at all? Belongs to
-   * the PRODUCING port and is not overridable downstream — only the node emitting
-   * a value knows whether it hands out a coordinate ("copy"), a 4K frame whose
-   * duplication costs ("clone"), or a handle/resource that must not be duplicated
-   * at all ("move"). On an input port it declares that the consumer takes
-   * ownership of what arrives.
+   * CAPABILITY (default "copy"): may this value be duplicated, and may several
+   * consumers hold it at once? Belongs to the PRODUCING port and is not
+   * overridable downstream — only the node emitting a value knows whether it
+   * hands out a coordinate ("copy"), a 4K frame whose duplication costs
+   * ("clone"), a live handle that may be aliased but never duplicated ("share"),
+   * or a resource with a single owner ("move"). On an input port it declares what
+   * the consumer expects of what arrives.
    */
-  share?: Share;
+  ownership?: Ownership;
   /**
    * POLICY (default "broadcast"): this port's default fan-out. The real owner is
    * the fan-out GROUP — override per group via `Graph.fanout`, apportion within a
-   * split via `Edge.weight`. Constrained by `share`: a "move" signal may never
+   * split via `Edge.weight`. Constrained by `ownership`: a "move" signal may never
    * broadcast.
    */
   fanout?: Fanout;
@@ -64,7 +65,7 @@ export interface Port {
 
 import type { MergeRule } from "./aggregate.js";
 import { sizeLayerStep } from "./grid.js";
-import { SIGNALS, type Fanout, type Grain, type Measure, type Share } from "./signal.js";
+import { SIGNALS, type Fanout, type Grain, type Measure, type Ownership } from "./signal.js";
 
 export interface GraphNode {
   id: string;
