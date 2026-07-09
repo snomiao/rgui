@@ -5,14 +5,20 @@ import {
   readableStep,
   snap,
   sizeLayerStep,
+  snapNodeSize,
   snapSizeRadix,
 } from "./grid";
 import {
+  bodyRect,
   childrenOf,
   containmentOf,
+  contentScale,
   demoGraph,
   descendantsOf,
+  inputPortPos,
   nodeHeight,
+  nodeMinHeight,
+  nodeMinWidth,
   nodeScale,
   orgChartGraph,
   type GraphNode,
@@ -28,6 +34,13 @@ import {
 import { buildRenderGraph, pseudoRect } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
+import {
+  gripBase,
+  gripRescale,
+  gripResize,
+  MAX_SCALE,
+  MIN_SCALE,
+} from "./grip";
 import { DEFAULT_RULE } from "./rule";
 import {
   aggregate,
@@ -547,5 +560,230 @@ describe("panels: drag snap + boundary dissolution", () => {
     expect(cov.get("b")!.top).toEqual([{ from: 100, to: 280 }]);
     // separated panels share nothing
     expect(panelCoverage([a, rect("c", 100, 320)]).size).toBe(0);
+  });
+});
+
+describe("content scale", () => {
+  const node = (scale?: number): GraphNode => ({
+    id: "n",
+    title: "N",
+    category: "model",
+    x: 0,
+    y: 0,
+    w: 256,
+    scale,
+    inputs: [{ id: "a", label: "a", kind: "text" }],
+    outputs: [],
+    fields: [["k", "v"]],
+    bodyRows: 2,
+  });
+
+  test("defaults to 1 and rejects degenerate values", () => {
+    expect(contentScale(node())).toBe(1);
+    expect(contentScale(node(0))).toBe(1);
+    expect(contentScale(node(-2))).toBe(1);
+    expect(contentScale(node(2))).toBe(2);
+  });
+
+  test("every interior metric rides the scale", () => {
+    const one = node();
+    const two = node(2);
+    expect(nodeMinHeight(two)).toBe(2 * nodeMinHeight(one));
+    expect(nodeMinWidth(two)).toBe(2 * nodeMinWidth(one));
+    // port rows and the live-body region scale about the node's origin
+    expect(inputPortPos(two, 0)[1]).toBe(2 * inputPortPos(one, 0)[1]);
+    const b1 = bodyRect(one)!;
+    const b2 = bodyRect(two)!;
+    expect(b2.x).toBe(2 * b1.x);
+    expect(b2.h).toBe(2 * b1.h);
+  });
+
+  test("rescaling by f preserves the aspect ratio and the min-height law", () => {
+    const base = node();
+    base.h = 192;
+    const ratio = base.w / nodeHeight(base);
+    for (const f of [0.5, 1.5, 2, 4]) {
+      const scaled = node(f);
+      scaled.w = base.w * f;
+      scaled.h = nodeHeight(base) * f;
+      expect(scaled.w / nodeHeight(scaled)).toBeCloseTo(ratio, 10);
+      expect(nodeHeight(scaled)).toBeGreaterThanOrEqual(nodeMinHeight(scaled));
+      expect(nodeHeight(scaled)).toBeCloseTo(nodeHeight(base) * f, 10);
+    }
+  });
+});
+
+describe("corner-grip gestures (resize ⇄ rescale)", () => {
+  const RADIX = DEFAULT_RULE.radix;
+  const node = (): GraphNode => ({
+    id: "n",
+    title: "N",
+    category: "model",
+    x: 0,
+    y: 0,
+    w: 256,
+    h: 192,
+    inputs: [],
+    outputs: [],
+    fields: [["k", "v"]],
+  });
+  /** apply a gesture result the way the drag handler does */
+  const apply = (n: GraphNode, s: { w: number; h: number; scale: number }) => {
+    n.w = s.w;
+    n.h = s.h;
+    n.scale = s.scale;
+  };
+  const corner = (n: GraphNode): [number, number] => [
+    n.x + n.w,
+    n.y + nodeHeight(n),
+  ];
+
+  test("resize reflows: footprint grows, content scale untouched", () => {
+    const n = node();
+    const r = gripResize(n, 512, 384, [n], RADIX);
+    expect(r.scale).toBe(1);
+    expect(r.w).toBeGreaterThan(256);
+  });
+
+  test("rescale preserves the aspect ratio", () => {
+    const n = node();
+    const ratio = n.w / nodeHeight(n);
+    const r = gripRescale(n, gripBase(n), 520, 390, [n], RADIX);
+    expect(r.w / r.h).toBeCloseTo(ratio, 10);
+    expect(r.scale).toBeCloseTo(r.w / 256, 10);
+  });
+
+  test("a rebase is a no-op: rescaling to the current corner moves nothing", () => {
+    // THE no-jump property — toggling shift rebases, and until the cursor
+    // moves the projected factor is exactly 1
+    const n = node();
+    apply(n, gripResize(n, 500, 300, [n], RADIX)); // some earlier resize
+    const base = gripBase(n);
+    const r = gripRescale(n, base, ...corner(n), [n], RADIX);
+    expect(r.w).toBeCloseTo(base.w, 10);
+    expect(r.h).toBeCloseTo(base.h, 10);
+    expect(r.scale).toBeCloseTo(base.scale, 10);
+  });
+
+  test("resize after a rescale keeps the magnified scale", () => {
+    const n = node();
+    apply(n, gripRescale(n, gripBase(n), 512, 384, [n], RADIX));
+    const scaled = contentScale(n);
+    expect(scaled).toBeGreaterThan(1);
+    apply(n, gripResize(n, n.x + n.w + 200, n.y + nodeHeight(n), [n], RADIX));
+    expect(contentScale(n)).toBe(scaled); // type stayed magnified
+  });
+
+  test("ratchet: tapping shift on/off/on compounds without releasing", () => {
+    const n = node();
+    let scale = 1;
+    for (let round = 0; round < 3; round++) {
+      // shift ON: rebase, then drag the corner outward. Each round rescales
+      // the node the PREVIOUS round left behind — that is the ratchet.
+      const base = gripBase(n);
+      const [cx, cy] = corner(n);
+      apply(n, gripRescale(n, base, cx + 120, cy + 90, [n], RADIX));
+      expect(contentScale(n)).toBeGreaterThan(scale); // grew from where it was
+      // rescale preserves the ratio it INHERITED, whatever resize left
+      expect(n.w / nodeHeight(n)).toBeCloseTo(base.w / base.h, 8);
+      scale = contentScale(n);
+      // shift OFF: resize onward at that scale. Reflowing may change the
+      // ratio — that is exactly what resize is for — then loop back on.
+      apply(n, gripResize(n, n.x + n.w + 8, n.y + nodeHeight(n), [n], RADIX));
+      expect(contentScale(n)).toBe(scale);
+    }
+    expect(scale).toBeGreaterThan(2); // three taps drove it well past 2x
+  });
+
+  test("rescale stays inside the magnification band", () => {
+    const big = node();
+    apply(big, gripRescale(big, gripBase(big), 1e6, 1e6, [big], RADIX));
+    expect(contentScale(big)).toBe(MAX_SCALE);
+    const small = node();
+    apply(small, gripRescale(small, gripBase(small), -50, -50, [small], RADIX));
+    expect(contentScale(small)).toBe(MIN_SCALE);
+  });
+
+  test("a neighbor stops a rescale without breaking the ratio", () => {
+    const n = node();
+    const ratio = n.w / nodeHeight(n);
+    const right = { ...node(), id: "r", x: 320 };
+    const r = gripRescale(n, gripBase(n), 900, 700, [n, right], RADIX);
+    expect(r.w).toBeLessThanOrEqual(320); // stopped at the neighbor
+    expect(r.w / r.h).toBeCloseTo(ratio, 10);
+  });
+});
+
+describe("size law: which layer do the two axes agree on?", () => {
+  test("per-axis: a tall axis promotes alone (2 × 9 → 2 × 16)", () => {
+    // 9 grids exceeds radix 8, so height re-layers to 2 grids of step 8
+    expect(snapNodeSize(2, 9, 8, "per-axis")).toEqual({ w: 2, h: 16 });
+    expect(snapNodeSize(100, 900, 8, "per-axis")).toEqual({ w: 128, h: 1024 });
+  });
+
+  test("finest-axis: the shorter axis names the cell (2 × 9 stays 2 × 9)", () => {
+    // width lives on step 1, so height counts 9 of those — past radix, and
+    // that is the point: one node, one cell size
+    expect(snapNodeSize(2, 9, 8, "finest-axis")).toEqual({ w: 2, h: 9 });
+    expect(snapNodeSize(2, 9.5, 8, "finest-axis")).toEqual({ w: 2, h: 10 });
+    expect(snapNodeSize(100, 900, 8, "finest-axis")).toEqual({ w: 128, h: 960 });
+  });
+
+  test("the laws agree whenever both axes already share a layer", () => {
+    for (const [w, h] of [
+      [64, 512],
+      [3, 40],
+      [200, 200],
+    ] as const) {
+      expect(snapNodeSize(w, h, 8, "per-axis")).toEqual(
+        snapNodeSize(w, h, 8, "finest-axis"),
+      );
+      expect(snapNodeSize(w, h, 8, "sibling")).toEqual(
+        snapNodeSize(w, h, 8, "per-axis"),
+      );
+    }
+  });
+
+  test("sibling is the default, and the default-arg path honors it", () => {
+    expect(DEFAULT_RULE.sizeLaw).toBe("sibling");
+    // omitting the law must match asking for sibling explicitly
+    expect(snapNodeSize(2, 9, 4)).toEqual(snapNodeSize(2, 9, 4, "sibling"));
+    expect(snapNodeSize(2, 9, 8)).toEqual({ w: 2, h: 9 });
+  });
+
+  test("sibling: the long axis drops exactly ONE layer toward the short one", () => {
+    // taku's radix-4 cases. 9 needs layer 16, descends to 4 → 3 cells = 12
+    // under depth 0; sibling lets it drop once more, to layer 1 → 9.
+    expect(snapNodeSize(2, 9, 4, "per-axis")).toEqual({ w: 2, h: 12 });
+    expect(snapNodeSize(2, 9, 4, "sibling")).toEqual({ w: 2, h: 9 });
+    // 513 needs layer 1024 (4^5); depth 0 descends to 256 → 3 cells = 768
+    expect(snapNodeSize(2, 513, 4, "per-axis")).toEqual({ w: 2, h: 768 });
+    // sibling drops once more, to layer 64 → 9 cells = 576
+    expect(snapNodeSize(2, 513, 4, "sibling")).toEqual({ w: 2, h: 576 });
+    // and finest-axis drops all the way to the width's own layer
+    expect(snapNodeSize(2, 513, 4, "finest-axis")).toEqual({ w: 2, h: 513 });
+  });
+
+  test("depth is monotone: deeper never snaps a size further up", () => {
+    for (let w = 1; w < 40; w += 3)
+      for (let h = 1; h < 600; h += 37) {
+        const a = snapNodeSize(w, h, 4, "per-axis");
+        const b = snapNodeSize(w, h, 4, "sibling");
+        const c = snapNodeSize(w, h, 4, "finest-axis");
+        expect(b.h).toBeLessThanOrEqual(a.h);
+        expect(c.h).toBeLessThanOrEqual(b.h);
+        expect(b.w).toBeLessThanOrEqual(a.w);
+        expect(c.w).toBeLessThanOrEqual(b.w);
+      }
+  });
+
+  test("every law only ever snaps UP, never below the requested size", () => {
+    for (const law of ["per-axis", "sibling", "finest-axis"] as const)
+      for (let w = 1; w < 90; w += 7)
+        for (let h = 1; h < 300; h += 13) {
+          const s = snapNodeSize(w, h, 8, law);
+          expect(s.w).toBeGreaterThanOrEqual(w);
+          expect(s.h).toBeGreaterThanOrEqual(h);
+        }
   });
 });

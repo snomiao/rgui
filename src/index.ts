@@ -18,6 +18,11 @@ export {
   gridRange,
   snap,
   snapSizeRadix,
+  snapNodeSize,
+  sizeStepFor,
+  sizeStepsFor,
+  sizeLawDepth,
+  type SizeLaw,
   sizeLayerStep,
   worldToScreen,
   screenToWorld,
@@ -51,8 +56,14 @@ export {
 } from "./core/aggregate.js";
 export {
   nodeHeight,
+  nodeMinHeight,
+  nodeMinWidth,
+  nodeMetrics,
+  nodeRowY,
+  nodeRows,
   nodeScale,
   annotationNode,
+  contentScale,
   bodyRect,
   inputPortPos,
   outputPortPos,
@@ -65,6 +76,7 @@ export {
   NODE_HEADER_H,
   NODE_ROW_H,
   NODE_PAD,
+  NODE_MIN_W,
   PORT_R,
   type Graph,
   type GraphNode,
@@ -98,6 +110,15 @@ export {
   type SideCoverage,
   type PortPlacement,
 } from "./core/pack.js";
+export {
+  gripBase,
+  gripRescale,
+  gripResize,
+  MIN_SCALE,
+  MAX_SCALE,
+  type GripBase,
+  type GripSize,
+} from "./core/grip.js";
 
 // renderers (Canvas 2D first impl)
 export {

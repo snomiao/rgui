@@ -1,5 +1,14 @@
 /** Demo app — dogfoods the library exactly as a consumer would. */
-import rgui, { demoGraph, orgChartGraph, annotationNode } from "./index";
+import rgui, {
+  annotationNode,
+  demoGraph,
+  gripBase,
+  gripRescale,
+  orgChartGraph,
+  snapNodeSize,
+  type GraphNode,
+  type SizeLaw,
+} from "./index";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
 const debug = document.querySelector<HTMLDivElement>("#debug")!;
@@ -158,6 +167,73 @@ const viewer = rgui(canvas, {
     },
   ],
 });
+
+// --- grid radix (进制) picker -----------------------------------------
+// Radix sets the grid LAYERS (radix^n), and node sizes must span 1..radix
+// grids at some layer. So it also decides which magnifications a shift-drag
+// rescale can even land on: radix 8 steps by quarters up to 2x then jumps,
+// radix 4 reaches 1x, 2x, 3x, 4x, radix 16 gives sixteenths below 1x.
+// The ladder below is PROBED from the real gesture, not a restated formula —
+// if gripRescale changes, this display follows.
+const probe = (): GraphNode => ({
+  id: "probe",
+  title: "probe",
+  category: "model",
+  x: 0,
+  y: 0,
+  w: 256,
+  h: 192,
+  inputs: [],
+  outputs: [],
+  fields: [],
+});
+
+function scaleLadder(radix: number): number[] {
+  const seen = new Set<number>();
+  for (let i = 0; i < 2000; i++) {
+    const n = probe();
+    // sweep the cursor out along the node's diagonal, collecting what sticks
+    const r = gripRescale(n, gripBase(n), 4 + i * 2.1, 3 + i * 1.575, [n], radix);
+    seen.add(Number(r.scale.toFixed(4)));
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+const radixBox = document.querySelector<HTMLDivElement>("#radix")!;
+const ladderEl = document.querySelector<HTMLDivElement>("#radix-ladder")!;
+
+/** the size law only bites on a node whose axes want DIFFERENT layers */
+function lawExample(radix: number, law: SizeLaw, wg: number, hg: number): string {
+  const step = 64; // one main grid at k=1
+  const { w, h } = snapNodeSize(wg * step, hg * step, radix, law);
+  return `${w / step} × ${h / step}`;
+}
+
+function sync(radix: number, law: SizeLaw) {
+  viewer.setRule({ radix, sizeLaw: law });
+  for (const b of radixBox.querySelectorAll("button")) {
+    if (b.dataset.radix)
+      b.setAttribute("aria-pressed", String(Number(b.dataset.radix) === radix));
+    if (b.dataset.law)
+      b.setAttribute("aria-pressed", String(b.dataset.law === law));
+  }
+  const rungs = scaleLadder(radix)
+    .map((s) => (s === 1 ? `<b>1x</b>` : `${s}x`))
+    .join(" · ");
+  // a squat node is where the law shows: its axes want different layers
+  ladderEl.innerHTML =
+    `radix ${radix} · rescale lands on<br>${rungs}` +
+    `<br>a 2 × 9 node snaps to <b>${lawExample(radix, law, 2, 9)}</b>`;
+}
+
+radixBox.addEventListener("click", (ev) => {
+  const b = (ev.target as HTMLElement).closest("button");
+  if (!b) return;
+  const radix = b.dataset.radix ? Number(b.dataset.radix) : viewer.rule.radix;
+  const law = (b.dataset.law as SizeLaw) ?? viewer.rule.sizeLaw;
+  sync(radix, law);
+});
+sync(viewer.rule.radix, viewer.rule.sizeLaw);
 
 // expose for host debugging / e2e
 (window as unknown as { viewer: typeof viewer }).viewer = viewer;

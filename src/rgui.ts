@@ -37,11 +37,20 @@ import {
   type WebGPUGridRenderer,
 } from "./render/webgpu.js";
 import {
+  gripBase,
+  gripRescale,
+  gripResize,
+  MAX_SCALE,
+  MIN_SCALE,
+} from "./core/grip.js";
+import {
   containmentOf,
+  contentScale,
   descendantsOf,
   inputPortPos,
   nodeHeight,
   nodeMinHeight,
+  nodeMinWidth,
   outputPortPos,
   type Edge,
   type Graph,
@@ -72,7 +81,7 @@ import {
   screenToWorld,
   snap,
   sizeLayerStep,
-  snapSizeRadix,
+  snapNodeSize,
   type ViewTransform,
 } from "./core/grid.js";
 
@@ -118,10 +127,20 @@ export interface RguiOptions {
   onSelectionChange?: (nodeIds: string[]) => void;
   /** a node's pin was toggled via the header glyph */
   onPinChange?: (nodeId: string, pinned: boolean) => void;
-  /** fires during a corner-grip resize (grid-snapped, overlap-clamped) */
-  onNodeResize?: (nodeId: string, size: { w: number; h: number }) => void;
+  /**
+   * fires during a corner-grip resize (grid-snapped, overlap-clamped).
+   * `scale` is the node's content scale — it only moves in the shift-drag
+   * RESCALE mode, where the node magnifies instead of reflowing.
+   */
+  onNodeResize?: (
+    nodeId: string,
+    size: { w: number; h: number; scale: number },
+  ) => void;
   /** fires once when a corner-grip resize ends */
-  onNodeResizeEnd?: (nodeId: string, size: { w: number; h: number }) => void;
+  onNodeResizeEnd?: (
+    nodeId: string,
+    size: { w: number; h: number; scale: number },
+  ) => void;
   /**
    * screen-anchored palettes/panels drawn as canvas chrome — items support
    * click-to-add (Panel.onItemClick) and drag-onto-canvas (Panel.onItemDrop)
@@ -263,6 +282,12 @@ export interface Rgui {
    */
   resizeNode(nodeId: string, size: { w?: number; h?: number }): void;
   /**
+   * programmatic RESCALE: magnify the node about its top-left corner,
+   * w/h ratio preserved and every interior metric scaled with it — the
+   * shift+grip drag's endpoint, reachable from code.
+   */
+  rescaleNode(nodeId: string, scale: number): void;
+  /**
    * auto-layout by connection optimization (layered + barycenter). Pinned
    * nodes stay put. Animates ~300ms, then fires onNodeMoveEnd per moved node
    so hosts can broadcast the new positions.
@@ -287,6 +312,13 @@ export interface Rgui {
   readonly theme: RgTheme;
   /** swap the chrome palette live: "dark" | "light" | partial over a base */
   setTheme(theme: RgThemeInput): void;
+  /**
+   * change rg-rule fields live (radix, readability thresholds…). Existing
+   * node sizes are left alone — they were snapped under the OLD radix, and
+   * re-snapping them would skew any rescaled node's ratio; call snapGraph()
+   * afterwards to re-seat the graph on the new lattice.
+   */
+  setRule(rule: Partial<RgRule>): void;
   /** request a re-render on the next animation frame */
   invalidate(): void;
   destroy(): void;
@@ -963,7 +995,22 @@ export function createRgui(
         y1: number;
         button: number;
       }
-    | { type: "resize"; node: GraphNode; moved: boolean }
+    | {
+        type: "resize";
+        node: GraphNode;
+        moved: boolean;
+        /** which gesture the grip is currently performing — shift toggles it
+         * mid-drag, without releasing the button */
+        mode: "resize" | "rescale";
+        /** geometry at the last REBASE (grip-down, or a shift toggle) —
+         * rescale is a ratio against THIS, not the live node, so a drag out
+         * and back lands exactly where it began */
+        base: { w: number; h: number; scale: number };
+        /** world offset from the node's corner to the pointer at that same
+         * rebase — subtracting it keeps the corner glued to the cursor, so
+         * toggling shift never teleports the node */
+        grab: { dx: number; dy: number };
+      }
     | {
         type: "panelItem";
         panel: Panel;
@@ -1034,6 +1081,34 @@ export function createRgui(
     return null;
   }
 
+  /**
+   * Re-anchor a grip drag to the node's CURRENT size and the cursor's
+   * CURRENT position. Called at grip-down and on every shift toggle, which
+   * is what lets one held button ratchet between the two gestures: each
+   * mode starts from wherever the other one left the node, so shift can be
+   * tapped repeatedly to drive a node huge or tiny in one continuous drag.
+   */
+  function rebaseGrip(
+    d: Extract<typeof drag, { type: "resize" }>,
+    mode: "resize" | "rescale",
+    wx: number,
+    wy: number,
+  ) {
+    const n = d.node;
+    d.mode = mode;
+    d.base = gripBase(n);
+    d.grab = { dx: wx - (n.x + d.base.w), dy: wy - (n.y + d.base.h) };
+  }
+
+  /** shift toggled mid-drag: rebase against the pointer where it now is */
+  function syncGripMode(shift: boolean) {
+    if (drag?.type !== "resize") return;
+    const mode = shift ? "rescale" : "resize";
+    if (mode === drag.mode) return;
+    const [wx, wy] = screenToWorld(view, pointer.sx, pointer.sy);
+    rebaseGrip(drag, mode, wx, wy);
+  }
+
   /** pin-glyph hit-test (screen ~9px around the glyph) */
   function pinHitAt(sx: number, sy: number): GraphNode | null {
     for (const n of lastRg?.nodes ?? dGraph.nodes) {
@@ -1099,7 +1174,16 @@ export function createRgui(
     const gripHit = gripHitAt(vx0, vy0);
     const gripNode = gripHit && baseOf(gripHit);
     if (gripNode && !gripNode.pinned) {
-      drag = { type: "resize", node: gripNode, moved: false };
+      drag = {
+        type: "resize",
+        node: gripNode,
+        moved: false,
+        mode: "resize",
+        base: { w: 0, h: 0, scale: 1 },
+        grab: { dx: 0, dy: 0 },
+      };
+      const [gwx, gwy] = screenToWorld(view, vx0, vy0);
+      rebaseGrip(drag, ev.shiftKey ? "rescale" : "resize", gwx, gwy);
       capturePointer(ev);
       return;
     }
@@ -1208,29 +1292,36 @@ export function createRgui(
       const step = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
       if (drag.type === "resize") {
         const n = drag.node;
-        // grid-snap the corner, respect minimums, stop at neighbors
-        // node-size law: spans 1..radix grids at SOME layer — exceeding
-        // radix grids promotes to the next layer, snapped to the limit
-        const minW = 96;
-        const wantW = Math.max(minW, snapSizeRadix(wx - n.x, rule.radix));
-        const wantH = Math.max(
-          nodeMinHeight(n),
-          snapSizeRadix(wy - n.y, rule.radix),
-        );
         // containment relatives don't clamp: a frame resizes over its
         // children, a child resizes within its frame
         const rel = containmentOf(graph.nodes).related;
-        const { w, h } = clampSize(
-          n,
-          wantW,
-          wantH,
-          graph.nodes.filter((o) => !rel(n.id, o.id)),
-        );
-        if (w !== n.w || h !== nodeHeight(n)) {
-          n.w = w;
-          n.h = h;
+        const others = graph.nodes.filter((o) => !rel(n.id, o.id));
+        // SHIFT = rescale: the node magnifies (type, ports, body hook and
+        // all) instead of reflowing at a fixed type size. Read live, so the
+        // grip can switch gestures without releasing the button — a key
+        // event may have rebased already, this catches the rest.
+        syncGripMode(ev.shiftKey);
+        // the corner tracks the cursor at the offset it was grabbed with
+        const cx = wx - drag.grab.dx;
+        const cy = wy - drag.grab.dy;
+        const next =
+          drag.mode === "rescale"
+            ? gripRescale(n, drag.base, cx, cy, others, rule.radix, rule.sizeLaw)
+            : gripResize(n, cx, cy, others, rule.radix, rule.sizeLaw);
+        if (
+          next.w !== n.w ||
+          next.h !== nodeHeight(n) ||
+          next.scale !== contentScale(n)
+        ) {
+          n.w = next.w;
+          n.h = next.h;
+          n.scale = next.scale;
           drag.moved = true;
-          options.onNodeResize?.(n.id, { w, h: nodeHeight(n) });
+          options.onNodeResize?.(n.id, {
+            w: n.w,
+            h: nodeHeight(n),
+            scale: next.scale,
+          });
         }
       } else if (drag.type === "panelItem") {
         drag.sx = ev.offsetX;
@@ -1362,6 +1453,7 @@ export function createRgui(
         options.onNodeResizeEnd?.(drag.node.id, {
           w: drag.node.w,
           h: nodeHeight(drag.node),
+          scale: contentScale(drag.node),
         });
       drag = null;
       invalidate();
@@ -1642,6 +1734,8 @@ export function createRgui(
       ["Tab / ⇧Tab", "Focus next / prev node"],
       ["Space + drag", "Pan"],
       ["Scroll / pinch", "Pan / zoom"],
+      ["Drag corner", "Resize node"],
+      ["⇧ while dragging", "Rescale node (magnify, keeps ratio)"],
       ["?", "Toggle this panel"],
     ];
     helpEl = document.createElement("div");
@@ -1705,6 +1799,10 @@ export function createRgui(
   };
 
   const onKeyDown = (ev: KeyboardEvent) => {
+    // shift pressed DURING a grip drag switches resize → rescale at the
+    // size the node has right now (autorepeat re-fires; syncGripMode is a
+    // no-op once the mode already matches)
+    if (ev.key === "Shift") syncGripMode(true);
     if (ev.code === "Space" && !ev.repeat) {
       if (typingInField(ev)) return;
       spaceHeld = true;
@@ -1765,6 +1863,8 @@ export function createRgui(
     navKick();
   };
   const onKeyUp = (ev: KeyboardEvent) => {
+    // shift released mid-drag: resize resumes at the scale rescale reached
+    if (ev.key === "Shift") syncGripMode(false);
     if (ev.code === "Space") spaceHeld = false;
     if (!kbEnabled) return;
     switch (ev.key.toLowerCase()) {
@@ -1930,6 +2030,12 @@ export function createRgui(
       Object.assign(theme, resolveTheme(input));
       invalidate();
     },
+    setRule(input: Partial<RgRule>) {
+      // same trick as setTheme: every read goes through this one object,
+      // so a live radix change re-layers the grid and re-ladders the snaps
+      Object.assign(rule, input);
+      invalidate();
+    },
     get rotation() {
       return rot3.roll;
     },
@@ -2035,13 +2141,25 @@ export function createRgui(
         }
         // size law: 1..radix grids at some layer, never below minimums
         const minH = nodeMinHeight(n);
-        const nw = Math.max(96, snapSizeRadix(n.w, rule.radix));
-        const nh = Math.max(minH, snapSizeRadix(nodeHeight(n), rule.radix));
+        const snapped = snapNodeSize(
+          n.w,
+          nodeHeight(n),
+          rule.radix,
+          rule.sizeLaw,
+        );
+        const nw = Math.max(nodeMinWidth(n), snapped.w);
+        const nh = Math.max(minH, snapped.h);
         if (nw !== n.w || nh !== nodeHeight(n)) {
           n.w = nw;
           n.h = nh;
+          // snapping is a RESIZE: the footprint lands on the lattice, the
+          // node's own magnification is left alone
           if (!opts?.silent)
-            options.onNodeResizeEnd?.(n.id, { w: nw, h: nodeHeight(n) });
+            options.onNodeResizeEnd?.(n.id, {
+              w: nw,
+              h: nodeHeight(n),
+              scale: contentScale(n),
+            });
         }
       }
       invalidate();
@@ -2092,12 +2210,22 @@ export function createRgui(
       const rel = containmentOf(graph.nodes).related;
       const { w, h } = clampSize(
         n,
-        Math.max(96, size.w ?? n.w),
+        Math.max(nodeMinWidth(n), size.w ?? n.w),
         Math.max(nodeMinHeight(n), size.h ?? nodeHeight(n)),
         graph.nodes.filter((o) => !rel(n.id, o.id)),
       );
       n.w = w;
       n.h = h;
+      invalidate();
+    },
+    rescaleNode(nodeId: string, scale: number) {
+      const n = graph.nodes.find((m) => m.id === nodeId);
+      if (!n) return;
+      const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+      const f = next / contentScale(n);
+      n.w *= f;
+      n.h = nodeHeight(n) * f;
+      n.scale = next;
       invalidate();
     },
     portScreenPos(nodeId: string, portId: string, side: "in" | "out") {

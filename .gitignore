@@ -3,3 +3,6 @@ dist
 site-dist
 tmp
 .playwright-cli-multi-tab
+
+# agent worktrees (embedded git repos)
+.claude/worktrees/

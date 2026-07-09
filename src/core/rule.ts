@@ -3,6 +3,7 @@
  * object. Different use cases (dense DAW-style patching, sparse mind-maps,
  * dashboards…) tune these numbers; all rgui math takes a resolved RgRule.
  */
+import type { SizeLaw } from "./grid.js";
 
 export interface RgRule {
   /** readable grid: minimum on-screen spacing of major grid points (px) */
@@ -12,6 +13,15 @@ export interface RgRule {
    * cell spans radix sub-steps per axis. 4 / 5 / 8 / 10 / 16 … all valid.
    */
   radix: number;
+  /**
+   * how many layers a node's LONGER axis may descend toward its shorter one
+   * (default "sibling" = one). "per-axis" (zero) lets each axis promote
+   * alone, so 2 × 9 grids snaps to 2 × 16 at radix 8. "sibling" drops the
+   * long axis one layer to meet the short one: 2 × 9 stays 2 × 9, while a
+   * 1:256 node still pays only 9 cells rather than 513. "finest-axis"
+   * (unbounded) hands the whole node the short axis's cell.
+   */
+  sizeLaw: SizeLaw;
   /** a node collapses into a pseudo-node below this screen height (px) */
   collapsePx: number;
   /**
@@ -52,6 +62,7 @@ export interface RgRule {
 export const DEFAULT_RULE: RgRule = {
   minGridPx: 48,
   radix: 8,
+  sizeLaw: "sibling",
   collapsePx: 56,
   collapseSnappedPx: 84,
   fieldMinPx: 9,
