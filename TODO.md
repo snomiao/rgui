@@ -28,6 +28,13 @@
 - [x] pinning / panel primitive / 単一 block 化 / GraphNode.draw / corner resize
 - [x] auto-layout (layered + barycenter, viewer.autoLayout, pinned 除外)
 - [x] core unit tests (bun test, 12 pass)
+- [x] signal algebra (`core/signal`): port が `measure`(extensive/intensive) と
+      `fanout`(copy/split/route) を宣言。fan-in の `sum`/`concat` は extensive でのみ合法、
+      fan-out は copy=broadcast / split=保存分割(grain: continuous|atom) / route=丸ごと1本へ。
+      3 種の wire を描き分け、`checkSignals()` で配線を検証。`docs/signal.md` に根拠。
+      sflow は `lib/sflow` に submodule として参照のみ (core は依存ゼロを維持)。
+- [ ] sflow adapter (`@snomiao/rgui/sflow`): `SignalSpec` → `tees`/`distributeBys`/`merges`
+      の TransformStream を組む optional entry point。peerDep + 別 build entry が要る。
 - [ ] WebGPU renderer (同一 interface の背後に)
 - [ ] npm publish v0.3.0 (要 Touch ID)
 - [x] 公式ページ公開: live demo 上に hero overlay (rgui 大タイトル + backronym を CRT グリッチで巡回、tagline、GitHub/npm リンク)。`src/hero.ts` + `index.html` に追加、`bunx vite build --outDir site-dist` で site 生成 (npm lib の `dist/` は不変)。

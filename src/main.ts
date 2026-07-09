@@ -5,6 +5,7 @@ import rgui, {
   gripBase,
   gripRescale,
   orgChartGraph,
+  signalGraph,
   snapNodeSize,
   type GraphNode,
   type SizeLaw,
@@ -27,6 +28,14 @@ noteEl.innerHTML =
 graph.nodes.push(
   annotationNode({ id: "note-1", x: -300, y: -120, w: 240, h: 120, el: noteEl, bg: "#232833" }),
 );
+
+// the signal algebra, side by side: the SAME topology (one port, two edges)
+// drawn three ways because the ports declare three different fan-outs —
+// copy (full wires), split (thin "1/2" wires), route (dotted wires)
+// clear of the org chart's company frame (which spans x −128…1920), on-lattice
+const sig = signalGraph(2560, -256);
+graph.nodes.push(...sig.nodes);
+graph.edges.push(...sig.edges);
 
 // second domain on the same canvas: an org chart built from CONTAINER
 // nodes — teams hold their people, and zooming out makes each team absorb

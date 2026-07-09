@@ -1,0 +1,6 @@
+# `bun test` covers rgui's own sources only. lib/sflow is a vendored submodule
+# (research reference for the signal algebra's fork/merge semantics) and ships
+# its own vitest suite — running it here would report another project's failures
+# as ours.
+[test]
+root = "src"

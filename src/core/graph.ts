@@ -24,14 +24,36 @@ export type Flow = "ltr" | "rtl" | "ttb" | "btt";
 /** an edge of a node's rect */
 export type Side = "top" | "right" | "bottom" | "left";
 
+/**
+ * A port carries a signal, and may DECLARE that signal's algebra: whether its
+ * values add (`measure`) and what a fan-out does to them (`fanout`/`grain`).
+ * Both default to the conservative choice — an unmarked port copies its value
+ * downstream and refuses to be summed — so graphs written before the signal
+ * algebra existed keep their exact behavior. See core/signal.ts.
+ */
 export interface Port {
   id: string;
   label: string;
   kind: SignalKind;
+  /** is `+` meaningful across parallel sources? (default "intensive": no) */
+  measure?: Measure;
+  /**
+   * may this signal be duplicated, and if not how is it shared out (default
+   * "copy"). On an output feeding several edges it decides the distribution;
+   * on an input it declares that the consumer takes ownership.
+   */
+  fanout?: Fanout;
+  /** split only: where cuts are legal */
+  grain?: Grain;
+  /** grain "atom" only: the boundary's name — "line" | "frame" | "row" | … */
+  atom?: string;
+  /** fan-in rule when several edges converge here (default per defaultMerge) */
+  merge?: MergeRule;
 }
 
 import type { MergeRule } from "./aggregate.js";
 import { sizeLayerStep } from "./grid.js";
+import { SIGNALS, type Fanout, type Grain, type Measure } from "./signal.js";
 
 export interface GraphNode {
   id: string;
@@ -516,7 +538,7 @@ export function demoGraph(): Graph {
       w: 256,
       h: 128,
       inputs: [],
-      outputs: [{ id: "image", label: "image", kind: "image" }],
+      outputs: [{ id: "image", label: "image", ...SIGNALS.frame }],
       fields: [
         ["peer", "rusty-fox (me)"],
         ["device", "Default camera"],
@@ -531,7 +553,7 @@ export function demoGraph(): Graph {
       w: 256,
       h: 128,
       inputs: [],
-      outputs: [{ id: "audio", label: "audio", kind: "audio" }],
+      outputs: [{ id: "audio", label: "audio", ...SIGNALS.pcm }],
       fields: [
         ["peer", "rusty-fox (me)"],
         ["vad", "on"],
@@ -546,12 +568,15 @@ export function demoGraph(): Graph {
       y: -256,
       w: 256,
       h: 192,
-      inputs: [{ id: "image", label: "image", kind: "image" }],
+      inputs: [{ id: "image", label: "image", ...SIGNALS.frame }],
       outputs: [
-        { id: "image", label: "image", kind: "image" },
-        { id: "labels", label: "labels.txt", kind: "text" },
-        { id: "json", label: "json.txt", kind: "text" },
-        { id: "rate", label: "rate-ctl", kind: "ctl" },
+        { id: "image", label: "image", ...SIGNALS.frame },
+        // a STATE: "person, chair" describes one frame. Concatenating the label
+        // sets of two frames says nothing — so this port refuses to be summed.
+        { id: "labels", label: "labels.txt", ...SIGNALS.labels },
+        // line-delimited records: divisible, but only ON a line boundary
+        { id: "json", label: "json.txt", ...SIGNALS.jsonl },
+        { id: "rate", label: "rate-ctl", ...SIGNALS.coord },
       ],
       fields: [
         ["task", "Object detection"],
@@ -569,8 +594,12 @@ export function demoGraph(): Graph {
       y: 128,
       w: 256,
       h: 192,
-      inputs: [{ id: "audio", label: "audio", kind: "audio" }],
-      outputs: [{ id: "transcript", label: "transcript", kind: "text" }],
+      inputs: [{ id: "audio", label: "audio", ...SIGNALS.pcm }],
+      // a CHANGE: successive segments concatenate into the full transcript.
+      // Extensive — yet it still BROADCASTS. A transcript is a fact, and a
+      // translator and a subtitle sink each need the whole sentence; you do
+      // not hand half of it to each. Additivity and conservation are separate.
+      outputs: [{ id: "transcript", label: "transcript", ...SIGNALS.transcript }],
       fields: [["lang", "auto"]],
     },
     {
@@ -581,8 +610,8 @@ export function demoGraph(): Graph {
       y: 128,
       w: 256,
       h: 128,
-      inputs: [{ id: "text", label: "text", kind: "text" }],
-      outputs: [{ id: "text", label: "text", kind: "text" }],
+      inputs: [{ id: "text", label: "text", ...SIGNALS.transcript }],
+      outputs: [{ id: "text", label: "text", ...SIGNALS.transcript }],
       fields: [["to", "en"]],
       fieldRules: { to: "set" },
     },
@@ -595,9 +624,11 @@ export function demoGraph(): Graph {
       w: 256,
       h: 192,
       inputs: [
-        { id: "transcript", label: "transcript", kind: "text" },
-        { id: "labels", label: "labels", kind: "text" },
-        { id: "rate", label: "rate-ctl", kind: "ctl" },
+        // several speakers' transcripts converging here concatenate…
+        { id: "transcript", label: "transcript", ...SIGNALS.transcript, merge: "concat" },
+        // …while converging label sets can only pick, never add
+        { id: "labels", label: "labels", ...SIGNALS.labels, merge: "set" },
+        { id: "rate", label: "rate-ctl", ...SIGNALS.coord, merge: "last" },
       ],
       outputs: [],
       fields: [
@@ -633,6 +664,104 @@ export function demoGraph(): Graph {
   ];
 
   return { nodes, edges };
+}
+
+// --- demo: the signal algebra — one source, two consumers, three times ---
+// The same topology (a port feeding two edges) means three different things
+// depending on the port's declared algebra, and rgui draws each differently:
+//   copy  → two full-width wires   (both consumers get the whole value)
+//   split → two thin "1/2" wires   (the value is divided; the halves sum back)
+//   route → two dotted wires       (each chunk goes to exactly one consumer)
+
+export function signalGraph(ox = 0, oy = 0): Graph {
+  const sink = (id: string, title: string, x: number, y: number, input: Port): GraphNode => ({
+    id,
+    title,
+    category: "sink",
+    x: ox + x,
+    y: oy + y,
+    w: 256,
+    h: 128,
+    inputs: [input],
+    outputs: [],
+    fields: [],
+  });
+
+  const nodes: GraphNode[] = [
+    // COPY — extensive, yet broadcast. The transcript is a fact: both the
+    // translator and the subtitles need the whole sentence.
+    {
+      id: "sig-stt",
+      title: "STT",
+      category: "model",
+      x: ox,
+      y: oy,
+      w: 256,
+      h: 128,
+      inputs: [],
+      outputs: [{ id: "transcript", label: "transcript", ...SIGNALS.transcript }],
+      fields: [["fan-out", "copy"]],
+    },
+    sink("sig-tr", "Translate", 512, -96, {
+      id: "text",
+      label: "text",
+      ...SIGNALS.transcript,
+    }),
+    sink("sig-sub", "Subtitles", 512, 160, {
+      id: "text",
+      label: "text",
+      ...SIGNALS.transcript,
+    }),
+
+    // SPLIT — a divisible resource, cut only on line boundaries
+    {
+      id: "sig-log",
+      title: "Event log",
+      category: "source",
+      x: ox,
+      y: oy + 512,
+      w: 256,
+      h: 128,
+      inputs: [],
+      outputs: [{ id: "rows", label: "rows.jsonl", ...SIGNALS.jsonl }],
+      fields: [["fan-out", "split / line"]],
+    },
+    sink("sig-idx-a", "Indexer A", 512, 416, { id: "rows", label: "rows", ...SIGNALS.jsonl }),
+    sink("sig-idx-b", "Indexer B", 512, 672, { id: "rows", label: "rows", ...SIGNALS.jsonl }),
+
+    // ROUTE — an indivisible work item goes to exactly one worker
+    {
+      id: "sig-disp",
+      title: "Dispatcher",
+      category: "source",
+      x: ox,
+      y: oy + 1024,
+      w: 256,
+      h: 128,
+      inputs: [],
+      outputs: [{ id: "job", label: "job", ...SIGNALS.work }],
+      fields: [["fan-out", "route"]],
+    },
+    sink("sig-w1", "Worker 1", 512, 928, { id: "job", label: "job", ...SIGNALS.work }),
+    sink("sig-w2", "Worker 2", 512, 1184, { id: "job", label: "job", ...SIGNALS.work }),
+  ];
+
+  const wire = (fn: string, fp: string, tn: string, tp: string): Edge => ({
+    from: { node: fn, port: fp },
+    to: { node: tn, port: tp },
+  });
+
+  return {
+    nodes,
+    edges: [
+      wire("sig-stt", "transcript", "sig-tr", "text"),
+      wire("sig-stt", "transcript", "sig-sub", "text"),
+      wire("sig-log", "rows", "sig-idx-a", "rows"),
+      wire("sig-log", "rows", "sig-idx-b", "rows"),
+      wire("sig-disp", "job", "sig-w1", "job"),
+      wire("sig-disp", "job", "sig-w2", "job"),
+    ],
+  };
 }
 
 // --- demo: org chart — containment drives the RG levels ----------------

@@ -26,9 +26,12 @@ import {
   buildRenderGraph,
   endpointPos,
   pseudoRect,
+  type EndpointRef,
   type PseudoNode,
+  type RenderEdge,
   type RenderGraph,
 } from "../core/lod.js";
+import { DEFAULT_SIGNAL, resolveSignal, type SignalSpec } from "../core/signal.js";
 import { DEFAULT_RULE, type RgRule } from "../core/rule.js";
 import { defaultSummarize } from "../core/aggregate.js";
 import type { SummarizeFn, SummaryContent } from "../core/summary.js";
@@ -147,6 +150,17 @@ export function drawGraph(
   }
   for (const p of rg.pseudo) drawPseudoNode(ctx, p, t.k, rule, summarize);
 
+  // A FAN-OUT is a source port feeding more than one wire, and what happens
+  // there depends on the port's signal algebra (core/signal.ts): a "copy" hands
+  // each downstream the whole value, a "split" divides it, a "route" gives the
+  // whole chunk to exactly one downstream at a time. Those are three different
+  // physical claims about the wire, so they get three different wires.
+  const fanOut = new Map<string, number>();
+  for (const e of rg.edges) {
+    const k = fanKey(e.from);
+    if (k) fanOut.set(k, (fanOut.get(k) ?? 0) + 1);
+  }
+
   // wires draw ON TOP of nodes: connections carry the meaning of the graph
   // and cost far fewer pixels than nodes — never hide them.
   // Exception (辺界消融): a wire between DIRECTLY touching nodes dissolves
@@ -165,10 +179,23 @@ export function drawGraph(
     const to = endpointPlaced(e.to, layout, t.k, rule);
     const style = e.source.style;
     const color = style?.color ?? kindColor(e.kind);
-    const width = style?.width ?? 2;
+    const degree = fanOut.get(fanKey(e.from) ?? "") ?? 1;
+    const spec = sourceSignal(e);
+    // a lone wire carries the whole signal whatever the port's fanout says
+    const forked = degree > 1 ? spec.fanout : "copy";
+    // "split" wires each carry 1/degree of the value: thin them toward that
+    // share (sqrt, so a 1/8 split stays visible rather than vanishing)
+    const width =
+      style?.width ??
+      (forked === "split" ? Math.max(0.9, 2 * Math.sqrt(1 / degree)) : 2);
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.min(width, width / t.k); // cap at `width` screen px
-    const dash = style?.dash ?? (e.dashed ? [6, 5] : []);
+    // "route" wires carry a whole chunk only some of the time — draw them as
+    // discrete dots, distinct from the long dashes of an event stream
+    const dash =
+      style?.dash ??
+      (forked === "route" ? [0.5, 6] : e.dashed ? [6, 5] : []);
+    ctx.lineCap = forked === "route" ? "round" : "butt";
     ctx.setLineDash(dash.map((d) => d / t.k));
     // control points bow OUT of each port along its edge normal
     const bow = Math.max(40, Math.hypot(to.x - from.x, to.y - from.y) * 0.4);
@@ -181,6 +208,13 @@ export function drawGraph(
     ctx.bezierCurveTo(c0x, c0y, c1x, c1y, to.x, to.y);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.lineCap = "butt";
+    // a split conserves the whole: say what share of it this wire takes. Drawn
+    // near the source, where the division actually happens.
+    if (forked === "split") {
+      const p = bezierAt(0.18, from, to, c0x, c0y, c1x, c1y);
+      drawWireBadge(ctx, p.x, p.y, `1/${degree}`, t.k, color);
+    }
     if (e.source.label) {
       // label at the bezier midpoint (t=0.5), kept readable on screen
       const mx = 0.125 * (from.x + to.x) + 0.375 * (c0x + c1x);
@@ -202,6 +236,68 @@ export function drawGraph(
 
   ctx.restore();
   return rg;
+}
+
+/**
+ * Identity of the port a wire leaves from, or null when it leaves a collapsed
+ * pseudo-node — a pseudo port stands for several real ones, so no single
+ * signal algebra governs it and the wire draws plain.
+ */
+function fanKey(ref: EndpointRef): string | null {
+  return ref.at === "node" && ref.side === "out"
+    ? `${ref.node.id}/${ref.index}`
+    : null;
+}
+
+/** the signal algebra declared by the port this wire leaves from */
+function sourceSignal(e: RenderEdge): SignalSpec {
+  if (e.from.at !== "node") return DEFAULT_SIGNAL;
+  const p = e.from.node.outputs[e.from.index];
+  return p ? resolveSignal(p) : DEFAULT_SIGNAL;
+}
+
+/** point on the wire's cubic bezier at parameter t */
+function bezierAt(
+  t: number,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  c0x: number,
+  c0y: number,
+  c1x: number,
+  c1y: number,
+): { x: number; y: number } {
+  const u = 1 - t;
+  const a = u * u * u;
+  const b = 3 * u * u * t;
+  const c = 3 * u * t * t;
+  const d = t * t * t;
+  return {
+    x: a * from.x + b * c0x + c * c1x + d * to.x,
+    y: a * from.y + b * c0y + c * c1y + d * to.y,
+  };
+}
+
+/** small screen-constant chip on a wire (the split share) */
+function drawWireBadge(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  text: string,
+  k: number,
+  color: string,
+): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(1 / k, 1 / k);
+  ctx.font = "9px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const tw = ctx.measureText(text).width;
+  ctx.fillStyle = T.labelBg;
+  ctx.fillRect(-tw / 2 - 3, -7, tw + 6, 14);
+  ctx.fillStyle = color;
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
 }
 
 /**
