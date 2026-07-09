@@ -221,11 +221,68 @@
         color: var(--accent);
         transform: rotate(-15deg);
       }
+
+      /* grid radix (进制) — relayers the grid AND re-ladders the snap sizes */
+      #radix {
+        position: fixed;
+        top: 54px;
+        right: 12px;
+        z-index: 40;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+        font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--text-dim);
+      }
+      #radix .row {
+        display: flex;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+      #radix button {
+        border: 0;
+        padding: 5px 10px;
+        background: transparent;
+        color: var(--text-dim);
+        font: inherit;
+        cursor: pointer;
+      }
+      #radix button + button {
+        border-left: 1px solid var(--border);
+      }
+      #radix button:hover {
+        color: var(--accent);
+      }
+      #radix button[aria-pressed="true"] {
+        background: var(--accent);
+        color: var(--panel);
+      }
+      #radix .ladder {
+        max-width: 260px;
+        text-align: right;
+        opacity: 0.75;
+      }
+      #radix .ladder b {
+        color: var(--accent);
+        font-weight: 600;
+      }
     </style>
   </head>
   <body>
     <canvas id="viewer"></canvas>
     <div id="debug"></div>
+
+    <div id="radix">
+      <div class="row" role="group" aria-label="grid radix">
+        <button data-radix="4">4</button>
+        <button data-radix="8">8</button>
+        <button data-radix="16">16</button>
+      </div>
+      <div class="ladder" id="radix-ladder"></div>
+    </div>
 
     <div id="hero">
       <h1 class="title">RGUI</h1>

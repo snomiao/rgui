@@ -312,6 +312,13 @@ export interface Rgui {
   readonly theme: RgTheme;
   /** swap the chrome palette live: "dark" | "light" | partial over a base */
   setTheme(theme: RgThemeInput): void;
+  /**
+   * change rg-rule fields live (radix, readability thresholds…). Existing
+   * node sizes are left alone — they were snapped under the OLD radix, and
+   * re-snapping them would skew any rescaled node's ratio; call snapGraph()
+   * afterwards to re-seat the graph on the new lattice.
+   */
+  setRule(rule: Partial<RgRule>): void;
   /** request a re-render on the next animation frame */
   invalidate(): void;
   destroy(): void;
@@ -2018,6 +2025,12 @@ export function createRgui(
     setTheme(input: RgThemeInput) {
       // one mutable theme object: layers close over it — assign + redraw
       Object.assign(theme, resolveTheme(input));
+      invalidate();
+    },
+    setRule(input: Partial<RgRule>) {
+      // same trick as setTheme: every read goes through this one object,
+      // so a live radix change re-layers the grid and re-ladders the snaps
+      Object.assign(rule, input);
       invalidate();
     },
     get rotation() {
