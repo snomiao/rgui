@@ -6,3 +6,4 @@ tmp
 
 # agent worktrees (embedded git repos)
 .claude/worktrees/
+*.local
