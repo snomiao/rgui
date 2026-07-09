@@ -188,10 +188,10 @@ const radixBox = document.querySelector<HTMLDivElement>("#radix")!;
 const ladderEl = document.querySelector<HTMLDivElement>("#radix-ladder")!;
 
 /** the size law only bites on a node whose axes want DIFFERENT layers */
-function lawExample(radix: number, law: SizeLaw): string {
+function lawExample(radix: number, law: SizeLaw, wg: number, hg: number): string {
   const step = 64; // one main grid at k=1
-  const { w, h } = snapNodeSize(2 * step, 9 * step, radix, law);
-  return `${w / step} × ${h / step} grids`;
+  const { w, h } = snapNodeSize(wg * step, hg * step, radix, law);
+  return `${w / step} × ${h / step}`;
 }
 
 function sync(radix: number, law: SizeLaw) {
@@ -205,9 +205,10 @@ function sync(radix: number, law: SizeLaw) {
   const rungs = scaleLadder(radix)
     .map((s) => (s === 1 ? `<b>1x</b>` : `${s}x`))
     .join(" · ");
+  // a squat node is where the law shows: its axes want different layers
   ladderEl.innerHTML =
     `radix ${radix} · rescale lands on<br>${rungs}` +
-    `<br>a 2 × 9 grid node snaps to <b>${lawExample(radix, law)}</b>`;
+    `<br>a 2 × 9 node snaps to <b>${lawExample(radix, law, 2, 9)}</b>`;
 }
 
 radixBox.addEventListener("click", (ev) => {

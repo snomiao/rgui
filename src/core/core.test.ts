@@ -738,11 +738,40 @@ describe("size law: which layer do the two axes agree on?", () => {
       expect(snapNodeSize(w, h, 8, "per-axis")).toEqual(
         snapNodeSize(w, h, 8, "finest-axis"),
       );
+      expect(snapNodeSize(w, h, 8, "sibling")).toEqual(
+        snapNodeSize(w, h, 8, "per-axis"),
+      );
     }
   });
 
-  test("both laws only ever snap UP, never below the requested size", () => {
-    for (const law of ["per-axis", "finest-axis"] as const)
+  test("sibling: the long axis drops exactly ONE layer toward the short one", () => {
+    // taku's radix-4 cases. 9 needs layer 16, descends to 4 → 3 cells = 12
+    // under depth 0; sibling lets it drop once more, to layer 1 → 9.
+    expect(snapNodeSize(2, 9, 4, "per-axis")).toEqual({ w: 2, h: 12 });
+    expect(snapNodeSize(2, 9, 4, "sibling")).toEqual({ w: 2, h: 9 });
+    // 513 needs layer 1024 (4^5); depth 0 descends to 256 → 3 cells = 768
+    expect(snapNodeSize(2, 513, 4, "per-axis")).toEqual({ w: 2, h: 768 });
+    // sibling drops once more, to layer 64 → 9 cells = 576
+    expect(snapNodeSize(2, 513, 4, "sibling")).toEqual({ w: 2, h: 576 });
+    // and finest-axis drops all the way to the width's own layer
+    expect(snapNodeSize(2, 513, 4, "finest-axis")).toEqual({ w: 2, h: 513 });
+  });
+
+  test("depth is monotone: deeper never snaps a size further up", () => {
+    for (let w = 1; w < 40; w += 3)
+      for (let h = 1; h < 600; h += 37) {
+        const a = snapNodeSize(w, h, 4, "per-axis");
+        const b = snapNodeSize(w, h, 4, "sibling");
+        const c = snapNodeSize(w, h, 4, "finest-axis");
+        expect(b.h).toBeLessThanOrEqual(a.h);
+        expect(c.h).toBeLessThanOrEqual(b.h);
+        expect(b.w).toBeLessThanOrEqual(a.w);
+        expect(c.w).toBeLessThanOrEqual(b.w);
+      }
+  });
+
+  test("every law only ever snaps UP, never below the requested size", () => {
+    for (const law of ["per-axis", "sibling", "finest-axis"] as const)
       for (let w = 1; w < 90; w += 7)
         for (let h = 1; h < 300; h += 13) {
           const s = snapNodeSize(w, h, 8, law);
