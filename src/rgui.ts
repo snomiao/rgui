@@ -285,6 +285,11 @@ export interface Rgui {
    * programmatic RESCALE: magnify the node about its top-left corner,
    * w/h ratio preserved and every interior metric scaled with it — the
    * shift+grip drag's endpoint, reachable from code.
+   *
+   * RELATIVE, not an absolute setter: the factor applied is
+   * `scale / contentScale(node)`. Calling rescaleNode(id, 2) on a node
+   * whose `scale` you already set to 2 by hand is a NO-OP (factor 1) and
+   * leaves the box unscaled. Rescale from a node still at its base scale.
    */
   rescaleNode(nodeId: string, scale: number): void;
   /**

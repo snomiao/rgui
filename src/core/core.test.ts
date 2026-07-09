@@ -598,6 +598,34 @@ describe("content scale", () => {
     expect(b2.h).toBe(2 * b1.h);
   });
 
+  test("setting scale ALONE does not resize the box (a host footgun)", () => {
+    // consumers reach for `n.scale = 2` on a fresh node; the box keeps its
+    // width while the type doubles, and the height silently snaps up to the
+    // new minimum. Documented on GraphNode.scale — pinned here.
+    const base = node();
+    base.h = 192;
+    const baseRatio = base.w / nodeHeight(base);
+
+    const lone = node(2);
+    lone.h = 192;
+    expect(lone.w).toBe(256); // width untouched, though the type doubled
+    expect(nodeHeight(lone)).toBeGreaterThan(192); // min-height overrode h
+    // the box reshapes: how far depends on the node's row count, but it
+    // always drifts away from the ratio the author declared
+    expect(lone.w / nodeHeight(lone)).toBeLessThan(baseRatio);
+
+    // moving all three together is what magnifies faithfully
+    const whole = node();
+    whole.h = 192;
+    const ratio = whole.w / nodeHeight(whole);
+    const s = 2;
+    whole.w *= s;
+    whole.h = nodeHeight(whole) * s; // height read BEFORE scale is assigned
+    whole.scale = s;
+    expect(whole.w / nodeHeight(whole)).toBeCloseTo(ratio, 10);
+    expect(nodeHeight(whole)).toBe(384);
+  });
+
   test("rescaling by f preserves the aspect ratio and the min-height law", () => {
     const base = node();
     base.h = 192;

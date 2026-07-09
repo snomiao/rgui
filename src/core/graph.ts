@@ -75,6 +75,19 @@ export interface GraphNode {
    * 11px rows more room, raising scale magnifies the node like a lens.
    * Shift+drag on the corner grip rescales (aspect-preserving); a plain
    * drag resizes.
+   *
+   * SETTING THIS ALONE DOES NOT RESIZE THE BOX. w/h are not derived from
+   * scale, so a node left at its base w/h with scale=2 keeps its old width
+   * while its type doubles: nodeMinHeight doubles, nodeHeight() silently
+   * snaps the height up past the declared h (how far depends on the row
+   * count — the box always drifts off the ratio the author declared), and
+   * the body/draw hooks receive half the content width they had. Nothing
+   * throws. To magnify a node, move all
+   * three together, height read BEFORE scale is assigned:
+   *
+   *     n.w *= s; n.h = nodeHeight(n) * s; n.scale = s;
+   *
+   * or let Rgui.rescaleNode(id, s) do it for you.
    */
   scale?: number;
   /** custom block background fill (default #2b3036) */
