@@ -161,3 +161,42 @@ describe("overlay options survive a graph re-map", () => {
     expect(el2.parentElement).not.toBeNull();
   });
 });
+
+describe("clip:'node' background presses forward to the canvas", () => {
+  let canvas: HTMLCanvasElement;
+  let el: HTMLElement;
+
+  beforeEach(() => {
+    canvas = mkCanvas();
+    el = document.createElement("div");
+  });
+
+  const press = (target: HTMLElement, type = "pointerdown") =>
+    target.dispatchEvent(
+      new MouseEvent(type, { bubbles: true, cancelable: true }),
+    );
+
+  test("a press on the wrap itself re-dispatches to the canvas", () => {
+    const mgr = createOverlayManager(canvas);
+    const got: string[] = [];
+    canvas.addEventListener("pointerdown", () => got.push("pointerdown"));
+    canvas.addEventListener("dblclick", () => got.push("dblclick"));
+    mgr.sync(remap({ el, anchor: "over", clip: "node" }), null, VIEW, DEFAULT_RULE);
+
+    press(wrapOf(el)); // full-bleed overlay background = node drag
+    press(wrapOf(el), "dblclick");
+    expect(got).toEqual(["pointerdown", "dblclick"]);
+  });
+
+  test("a press on a control does NOT forward (it owns the gesture)", () => {
+    const mgr = createOverlayManager(canvas);
+    let forwarded = 0;
+    canvas.addEventListener("pointerdown", () => forwarded++);
+    const btn = document.createElement("button");
+    el.appendChild(btn);
+    mgr.sync(remap({ el, anchor: "over", clip: "node" }), null, VIEW, DEFAULT_RULE);
+
+    press(btn); // bubbles through the wrap, but the control is the target
+    expect(forwarded).toBe(0);
+  });
+});
