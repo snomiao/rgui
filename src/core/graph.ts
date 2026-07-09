@@ -70,6 +70,14 @@ export interface GraphNode {
   /** custom block background fill (default #2b3036) */
   bg?: string;
   /**
+   * annotation / sticky-card node: renders as a plain card frame (no header
+   * band, ports, or field rows) whose rich content is the HTML `overlay` (or a
+   * `draw` callback). It still lives in world space and drags/snaps/selects
+   * like any node, and may be connectable if given outputs. Use annotationNode()
+   * to build one. Beats overloading a data node with custom draw + an overlay.
+   */
+  note?: boolean;
+  /**
    * node-anchored HTML overlay (interactive form controls etc.) — rgui
    * glues the element to the node's screen rect every frame and hides it
    * (without destroying) when the node collapses, goes off-screen, or is
@@ -158,6 +166,49 @@ export function nodeMinHeight(n: GraphNode): number {
 
 export function nodeHeight(n: GraphNode): number {
   return Math.max(nodeMinHeight(n), n.h ?? 0);
+}
+
+/**
+ * Build a first-class annotation / sticky-card node: a world-space card whose
+ * body is rich HTML (the overlay `el`), with no ports/header/fields. It drags,
+ * snaps, and selects like any node, and is connectable if given `outputs`.
+ *   graph.nodes.push(annotationNode({ id, x, y, w: 240, el: myCard,
+ *     title: "What is this?" }))
+ */
+export function annotationNode(opts: {
+  id: string;
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+  /** rich HTML body glued over the card (interactive) */
+  el?: HTMLElement;
+  /** or a canvas-draw body (screen px within the card rect) */
+  draw?: (ctx: CanvasRenderingContext2D, rect: { width: number; height: number }) => void;
+  title?: string;
+  /** card fill (default node background) */
+  bg?: string;
+  /** make the card connectable by giving it output ports */
+  outputs?: Port[];
+}): GraphNode {
+  return {
+    id: opts.id,
+    title: opts.title ?? "",
+    category: "note",
+    x: opts.x,
+    y: opts.y,
+    w: opts.w ?? 220,
+    h: opts.h ?? 120,
+    inputs: [],
+    outputs: opts.outputs ?? [],
+    fields: [],
+    bg: opts.bg,
+    note: true,
+    draw: opts.draw,
+    overlay: opts.el
+      ? { el: opts.el, anchor: "over", interactive: true }
+      : undefined,
+  };
 }
 
 /**

@@ -52,6 +52,7 @@ export {
 export {
   nodeHeight,
   nodeScale,
+  annotationNode,
   bodyRect,
   inputPortPos,
   outputPortPos,

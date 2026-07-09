@@ -335,6 +335,30 @@ function drawNode(
   ctx.fill();
 
   drawNodeBorder(ctx, n, h, [tl, tr, br, bl], cov);
+
+  // annotation / sticky-card node: a plain card frame — no header band, ports,
+  // or field rows. Its rich content is the HTML overlay (glued on top by the
+  // overlay manager) or an optional draw() body. Everything else (drag, snap,
+  // selection, fused boundaries) still applies since it's a normal node.
+  if (n.note) {
+    if (n.draw) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(n.x, n.y, n.w, h, [tl, tr, br, bl]);
+      ctx.clip();
+      ctx.translate(n.x, n.y);
+      ctx.scale(1 / k, 1 / k);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      try {
+        n.draw(ctx, { width: n.w * k, height: h * k }, { k });
+      } catch (err) {
+        console.error("[rgui] annotation draw hook failed:", err);
+      }
+      ctx.restore();
+    }
+    return;
+  }
   if (n.draw) {
     // full-content override: the node draws its own title/fields/body in
     // screen px; rgui keeps the block, ports, pin and fused boundaries

@@ -1,10 +1,23 @@
 /** Demo app — dogfoods the library exactly as a consumer would. */
-import rgui, { demoGraph, orgChartGraph } from "./index";
+import rgui, { demoGraph, orgChartGraph, annotationNode } from "./index";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
 const debug = document.querySelector<HTMLDivElement>("#debug")!;
 
 const graph = demoGraph();
+
+// showcase the first-class annotation / sticky-card node (rich HTML body)
+const noteEl = document.createElement("div");
+noteEl.style.cssText =
+  "width:100%;height:100%;box-sizing:border-box;padding:12px 14px;" +
+  "font:13px/1.5 ui-sans-serif,system-ui,sans-serif;color:#e6e9ec;";
+noteEl.innerHTML =
+  '<div style="font-weight:700;margin-bottom:6px">📌 Annotation card</div>' +
+  '<div style="color:#aeb6bf">A first-class <code>annotationNode()</code> — a ' +
+  "world-space sticky card with a rich HTML body. Drag / snap it like any node.</div>";
+graph.nodes.push(
+  annotationNode({ id: "note-1", x: -300, y: -120, w: 240, h: 120, el: noteEl, bg: "#232833" }),
+);
 
 // second domain on the same canvas: an org chart built from CONTAINER
 // nodes — teams hold their people, and zooming out makes each team absorb
