@@ -4,7 +4,9 @@ import rgui, {
   gripBase,
   gripRescale,
   orgChartGraph,
+  snapNodeSize,
   type GraphNode,
+  type SizeLaw,
 } from "./index";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
@@ -185,21 +187,37 @@ function scaleLadder(radix: number): number[] {
 const radixBox = document.querySelector<HTMLDivElement>("#radix")!;
 const ladderEl = document.querySelector<HTMLDivElement>("#radix-ladder")!;
 
-function setRadix(radix: number) {
-  viewer.setRule({ radix });
-  for (const b of radixBox.querySelectorAll("button"))
-    b.setAttribute("aria-pressed", String(Number(b.dataset.radix) === radix));
+/** the size law only bites on a node whose axes want DIFFERENT layers */
+function lawExample(radix: number, law: SizeLaw): string {
+  const step = 64; // one main grid at k=1
+  const { w, h } = snapNodeSize(2 * step, 9 * step, radix, law);
+  return `${w / step} × ${h / step} grids`;
+}
+
+function sync(radix: number, law: SizeLaw) {
+  viewer.setRule({ radix, sizeLaw: law });
+  for (const b of radixBox.querySelectorAll("button")) {
+    if (b.dataset.radix)
+      b.setAttribute("aria-pressed", String(Number(b.dataset.radix) === radix));
+    if (b.dataset.law)
+      b.setAttribute("aria-pressed", String(b.dataset.law === law));
+  }
   const rungs = scaleLadder(radix)
     .map((s) => (s === 1 ? `<b>1x</b>` : `${s}x`))
     .join(" · ");
-  ladderEl.innerHTML = `radix ${radix} · rescale lands on<br>${rungs}`;
+  ladderEl.innerHTML =
+    `radix ${radix} · rescale lands on<br>${rungs}` +
+    `<br>a 2 × 9 grid node snaps to <b>${lawExample(radix, law)}</b>`;
 }
 
 radixBox.addEventListener("click", (ev) => {
   const b = (ev.target as HTMLElement).closest("button");
-  if (b?.dataset.radix) setRadix(Number(b.dataset.radix));
+  if (!b) return;
+  const radix = b.dataset.radix ? Number(b.dataset.radix) : viewer.rule.radix;
+  const law = (b.dataset.law as SizeLaw) ?? viewer.rule.sizeLaw;
+  sync(radix, law);
 });
-setRadix(viewer.rule.radix);
+sync(viewer.rule.radix, viewer.rule.sizeLaw);
 
 // expose for host debugging / e2e
 (window as unknown as { viewer: typeof viewer }).viewer = viewer;

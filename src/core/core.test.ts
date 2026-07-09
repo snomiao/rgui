@@ -5,6 +5,7 @@ import {
   readableStep,
   snap,
   sizeLayerStep,
+  snapNodeSize,
   snapSizeRadix,
 } from "./grid";
 import {
@@ -710,5 +711,43 @@ describe("corner-grip gestures (resize ⇄ rescale)", () => {
     const r = gripRescale(n, gripBase(n), 900, 700, [n, right], RADIX);
     expect(r.w).toBeLessThanOrEqual(320); // stopped at the neighbor
     expect(r.w / r.h).toBeCloseTo(ratio, 10);
+  });
+});
+
+describe("size law: which layer do the two axes agree on?", () => {
+  test("per-axis: a tall axis promotes alone (2 × 9 → 2 × 16)", () => {
+    // 9 grids exceeds radix 8, so height re-layers to 2 grids of step 8
+    expect(snapNodeSize(2, 9, 8, "per-axis")).toEqual({ w: 2, h: 16 });
+    expect(snapNodeSize(100, 900, 8, "per-axis")).toEqual({ w: 128, h: 1024 });
+  });
+
+  test("finest-axis: the shorter axis names the cell (2 × 9 stays 2 × 9)", () => {
+    // width lives on step 1, so height counts 9 of those — past radix, and
+    // that is the point: one node, one cell size
+    expect(snapNodeSize(2, 9, 8, "finest-axis")).toEqual({ w: 2, h: 9 });
+    expect(snapNodeSize(2, 9.5, 8, "finest-axis")).toEqual({ w: 2, h: 10 });
+    expect(snapNodeSize(100, 900, 8, "finest-axis")).toEqual({ w: 128, h: 960 });
+  });
+
+  test("the laws agree whenever both axes already share a layer", () => {
+    for (const [w, h] of [
+      [64, 512],
+      [3, 40],
+      [200, 200],
+    ] as const) {
+      expect(snapNodeSize(w, h, 8, "per-axis")).toEqual(
+        snapNodeSize(w, h, 8, "finest-axis"),
+      );
+    }
+  });
+
+  test("both laws only ever snap UP, never below the requested size", () => {
+    for (const law of ["per-axis", "finest-axis"] as const)
+      for (let w = 1; w < 90; w += 7)
+        for (let h = 1; h < 300; h += 13) {
+          const s = snapNodeSize(w, h, 8, law);
+          expect(s.w).toBeGreaterThanOrEqual(w);
+          expect(s.h).toBeGreaterThanOrEqual(h);
+        }
   });
 });

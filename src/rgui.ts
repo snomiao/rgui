@@ -81,7 +81,7 @@ import {
   screenToWorld,
   snap,
   sizeLayerStep,
-  snapSizeRadix,
+  snapNodeSize,
   type ViewTransform,
 } from "./core/grid.js";
 
@@ -1303,8 +1303,8 @@ export function createRgui(
         const cy = wy - drag.grab.dy;
         const next =
           drag.mode === "rescale"
-            ? gripRescale(n, drag.base, cx, cy, others, rule.radix)
-            : gripResize(n, cx, cy, others, rule.radix);
+            ? gripRescale(n, drag.base, cx, cy, others, rule.radix, rule.sizeLaw)
+            : gripResize(n, cx, cy, others, rule.radix, rule.sizeLaw);
         if (
           next.w !== n.w ||
           next.h !== nodeHeight(n) ||
@@ -2126,8 +2126,14 @@ export function createRgui(
         }
         // size law: 1..radix grids at some layer, never below minimums
         const minH = nodeMinHeight(n);
-        const nw = Math.max(nodeMinWidth(n), snapSizeRadix(n.w, rule.radix));
-        const nh = Math.max(minH, snapSizeRadix(nodeHeight(n), rule.radix));
+        const snapped = snapNodeSize(
+          n.w,
+          nodeHeight(n),
+          rule.radix,
+          rule.sizeLaw,
+        );
+        const nw = Math.max(nodeMinWidth(n), snapped.w);
+        const nh = Math.max(minH, snapped.h);
         if (nw !== n.w || nh !== nodeHeight(n)) {
           n.w = nw;
           n.h = nh;

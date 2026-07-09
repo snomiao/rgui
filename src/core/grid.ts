@@ -104,6 +104,54 @@ export function snapSizeRadix(
   return Math.ceil(cells / radix) * step * radix;
 }
 
+/**
+ * How a node's two axes pick the layer they snap on.
+ *
+ * - "per-axis" (default): each axis obeys the size law alone. A 2-grid
+ *   width stays 2 grids; a 9-grid height has outgrown its layer, so it
+ *   promotes and becomes 2 grids of the next one — 16 fine grids. The
+ *   node's own aspect ratio has no say.
+ * - "finest-axis": the SHORTER axis names the node's cell, and the longer
+ *   one is an integer count of that same cell. 2 × 9 stays 2 × 9. One node,
+ *   one cell size — at the cost of letting the long axis run past `radix`
+ *   grids, which the per-axis law forbids.
+ */
+export type SizeLaw = "per-axis" | "finest-axis";
+
+/**
+ * The step a node's WIDTH snaps on, given the height it will end up with.
+ * Under "per-axis" the height is irrelevant.
+ */
+export function sizeStepFor(
+  w: number,
+  h: number,
+  radix = DEFAULT_RULE.radix,
+  law: SizeLaw = "per-axis",
+  baseStep = 1,
+): number {
+  const sw = sizeLayerStep(w, radix, baseStep);
+  if (law === "per-axis") return sw;
+  return Math.min(sw, sizeLayerStep(h, radix, baseStep));
+}
+
+/** snap a node's size under the active size law */
+export function snapNodeSize(
+  w: number,
+  h: number,
+  radix = DEFAULT_RULE.radix,
+  law: SizeLaw = "per-axis",
+  baseStep = 1,
+): { w: number; h: number } {
+  if (law === "per-axis")
+    return {
+      w: snapSizeRadix(w, radix, baseStep),
+      h: snapSizeRadix(h, radix, baseStep),
+    };
+  const step = sizeStepFor(w, h, radix, law, baseStep);
+  const cells = (v: number) => Math.max(1, Math.ceil(v / step - 1e-9)) * step;
+  return { w: cells(w), h: cells(h) };
+}
+
 /** Iterate world-space grid coordinates visible in a screen rect. */
 export function gridRange(
   t: ViewTransform,

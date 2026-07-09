@@ -13,7 +13,7 @@
  * gestures interchangeable mid-drag: each starts from wherever the other
  * left the node, and a rebase is a no-op until the cursor actually moves.
  */
-import { snapSizeRadix } from "./grid.js";
+import { sizeStepFor, snapNodeSize, type SizeLaw } from "./grid.js";
 import {
   contentScale,
   nodeHeight,
@@ -56,9 +56,13 @@ export function gripResize(
   cy: number,
   others: GraphNode[],
   radix: number,
+  law: SizeLaw = "per-axis",
 ): GripSize {
-  const wantW = Math.max(nodeMinWidth(n), snapSizeRadix(cx - n.x, radix));
-  const wantH = Math.max(nodeMinHeight(n), snapSizeRadix(cy - n.y, radix));
+  // the two axes snap TOGETHER: under "finest-axis" the shorter one names
+  // the cell both are counted in, so a squat node keeps a fine height
+  const snapped = snapNodeSize(cx - n.x, cy - n.y, radix, law);
+  const wantW = Math.max(nodeMinWidth(n), snapped.w);
+  const wantH = Math.max(nodeMinHeight(n), snapped.h);
   const { w, h } = clampSize(n, wantW, wantH, others);
   return { w, h, scale: contentScale(n) };
 }
@@ -80,6 +84,7 @@ export function gripRescale(
   cy: number,
   others: GraphNode[],
   radix: number,
+  law: SizeLaw = "per-axis",
 ): GripSize {
   const { w: bw, h: bh } = base;
   const dx = cx - n.x;
@@ -87,8 +92,10 @@ export function gripRescale(
   const floor = MIN_SCALE / base.scale;
   let f = (dx * bw + dy * bh) / (bw * bw + bh * bh);
   if (!(f > 0)) f = floor; // corner at or behind the node's origin
-  // snap the width to the visible lattice, then re-derive the factor
-  f = snapSizeRadix(bw * f, radix) / bw;
+  // snap the width to the lattice — under "finest-axis" the height the
+  // ratio implies gets a vote on which layer that lattice is
+  const step = sizeStepFor(bw * f, bh * f, radix, law);
+  f = (Math.max(1, Math.ceil((bw * f) / step - 1e-9)) * step) / bw;
   // a magnified node is still a node: keep it in a sane band
   f = clamp(base.scale * f, MIN_SCALE, MAX_SCALE) / base.scale;
   const { w, h } = clampSize(n, bw * f, bh * f, others);
