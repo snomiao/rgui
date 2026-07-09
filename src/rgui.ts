@@ -762,8 +762,9 @@ export function createRgui(
 
   const overlays = createOverlayManager(canvas, {
     // wheel over an overlay must drive rgui pan/zoom (not scroll the page)
-    // unless an inner scrollable control consumes it
+    // unless an ENGAGED overlay's inner scrollable control consumes it
     forwardWheelTo: canvas,
+    isNodeEngaged: (id) => selection.has(id),
   });
   // remember imperative overlays by node id so they survive setGraph (which
   // brings new node objects) without the host having to re-attach them

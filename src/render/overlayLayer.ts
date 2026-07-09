@@ -84,9 +84,16 @@ export function createOverlayManager(
     /**
      * re-dispatch wheel events here (usually the rgui canvas) so pan/zoom
      * keeps working over overlays instead of scrolling the page. A wheel is
-     * NOT forwarded when an inner scrollable element can still consume it.
+     * NOT forwarded when an ENGAGED overlay's inner scrollable can consume it.
      */
     forwardWheelTo?: HTMLElement;
+    /**
+     * is this node engaged (selected)? An overlay only captures the wheel for
+     * its own scrolling once engaged — selected, or holding DOM focus. Merely
+     * hovering it must not steal the wheel, or a pan that sweeps the cursor
+     * across a node stalls mid-gesture.
+     */
+    isNodeEngaged?: (nodeId: string) => boolean;
     /** map view-space anchor points to raw screen (viewport rotation) */
     transformPoint?: (x: number, y: number) => readonly [number, number];
   },
@@ -132,9 +139,27 @@ export function createOverlayManager(
     return false;
   }
 
+  /**
+   * an overlay owns the wheel only while engaged: its node is selected, or
+   * focus lives inside it (a clicked input / [data-rgui-interactive] widget).
+   */
+  function engaged(ev: WheelEvent): boolean {
+    let el = ev.target as HTMLElement | null;
+    while (el && el !== layer) {
+      const id = el.dataset?.["nodeId"];
+      if (id !== undefined) {
+        const active = document.activeElement;
+        if (active && active !== document.body && el.contains(active)) return true;
+        return opts?.isNodeEngaged?.(id) ?? false;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  }
+
   const onLayerWheel = (ev: WheelEvent) => {
     if (!opts?.forwardWheelTo) return;
-    if (scrollableConsumes(ev)) return; // let the control scroll natively
+    if (engaged(ev) && scrollableConsumes(ev)) return; // let the control scroll natively
     ev.preventDefault(); // never scroll/zoom the page
     ev.stopPropagation();
     opts.forwardWheelTo.dispatchEvent(new WheelEvent("wheel", ev));
