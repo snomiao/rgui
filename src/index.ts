@@ -104,6 +104,15 @@ export {
   type SideCoverage,
   type PortPlacement,
 } from "./core/pack.js";
+export {
+  gripBase,
+  gripRescale,
+  gripResize,
+  MIN_SCALE,
+  MAX_SCALE,
+  type GripBase,
+  type GripSize,
+} from "./core/grip.js";
 
 // renderers (Canvas 2D first impl)
 export {

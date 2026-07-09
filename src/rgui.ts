@@ -37,6 +37,13 @@ import {
   type WebGPUGridRenderer,
 } from "./render/webgpu.js";
 import {
+  gripBase,
+  gripRescale,
+  gripResize,
+  MAX_SCALE,
+  MIN_SCALE,
+} from "./core/grip.js";
+import {
   containmentOf,
   contentScale,
   descendantsOf,
@@ -77,10 +84,6 @@ import {
   snapSizeRadix,
   type ViewTransform,
 } from "./core/grid.js";
-
-/** magnification band a shift-drag rescale may reach */
-export const MIN_SCALE = 0.25;
-export const MAX_SCALE = 8;
 
 export interface RguiOptions {
   /** the node graph to render (mutated in place by dragging) */
@@ -986,9 +989,17 @@ export function createRgui(
         type: "resize";
         node: GraphNode;
         moved: boolean;
-        /** geometry at grip-down — rescale is a ratio against THIS, not the
-         * live node, so a drag out and back lands exactly where it began */
+        /** which gesture the grip is currently performing — shift toggles it
+         * mid-drag, without releasing the button */
+        mode: "resize" | "rescale";
+        /** geometry at the last REBASE (grip-down, or a shift toggle) —
+         * rescale is a ratio against THIS, not the live node, so a drag out
+         * and back lands exactly where it began */
         base: { w: number; h: number; scale: number };
+        /** world offset from the node's corner to the pointer at that same
+         * rebase — subtracting it keeps the corner glued to the cursor, so
+         * toggling shift never teleports the node */
+        grab: { dx: number; dy: number };
       }
     | {
         type: "panelItem";
@@ -1060,62 +1071,32 @@ export function createRgui(
     return null;
   }
 
-  const clamp = (v: number, lo: number, hi: number) =>
-    Math.min(hi, Math.max(lo, v));
-
   /**
-   * RESIZE (plain grip drag): the node's world footprint changes, its type
-   * does not — more room for the same 11px rows. Grid-snapped corner,
-   * minimums respected, stopped at neighbors. Node-size law: a node spans
-   * 1..radix grids at SOME layer — exceeding radix grids promotes it to the
-   * next layer, snapped to the limit.
+   * Re-anchor a grip drag to the node's CURRENT size and the cursor's
+   * CURRENT position. Called at grip-down and on every shift toggle, which
+   * is what lets one held button ratchet between the two gestures: each
+   * mode starts from wherever the other one left the node, so shift can be
+   * tapped repeatedly to drive a node huge or tiny in one continuous drag.
    */
-  function resizeTo(
-    n: GraphNode,
+  function rebaseGrip(
+    d: Extract<typeof drag, { type: "resize" }>,
+    mode: "resize" | "rescale",
     wx: number,
     wy: number,
-    others: GraphNode[],
-  ): { w: number; h: number; scale: number } {
-    const wantW = Math.max(nodeMinWidth(n), snapSizeRadix(wx - n.x, rule.radix));
-    const wantH = Math.max(
-      nodeMinHeight(n),
-      snapSizeRadix(wy - n.y, rule.radix),
-    );
-    const { w, h } = clampSize(n, wantW, wantH, others);
-    return { w, h, scale: contentScale(n) };
+  ) {
+    const n = d.node;
+    d.mode = mode;
+    d.base = gripBase(n);
+    d.grab = { dx: wx - (n.x + d.base.w), dy: wy - (n.y + d.base.h) };
   }
 
-  /**
-   * RESCALE (shift + grip drag): the node is magnified — one factor drives
-   * w, h and the content scale together, so the ASPECT RATIO is preserved
-   * and everything inside (type, ports, padding, the body hook's pixels)
-   * grows with the box. The factor is the pointer's projection onto the
-   * node's base diagonal: it is exactly 1 when the pointer sits on the
-   * corner it grabbed, so the drag starts without a jump.
-   *
-   * Only the width lands on the lattice: honoring the ratio means the bottom
-   * edge follows from the factor rather than snapping on its own.
-   */
-  function rescaleTo(
-    n: GraphNode,
-    base: { w: number; h: number; scale: number },
-    wx: number,
-    wy: number,
-    others: GraphNode[],
-  ): { w: number; h: number; scale: number } {
-    const { w: bw, h: bh } = base;
-    const dx = wx - n.x;
-    const dy = wy - n.y;
-    let f = (dx * bw + dy * bh) / (bw * bw + bh * bh);
-    if (!(f > 0)) f = MIN_SCALE / base.scale; // pointer at/behind the origin
-    // snap the width to the visible lattice, then re-derive the factor
-    f = snapSizeRadix(bw * f, rule.radix) / bw;
-    // a scaled node is still a node: keep it in a sane magnification band
-    f = clamp(base.scale * f, MIN_SCALE, MAX_SCALE) / base.scale;
-    // stop at neighbors — whichever axis hits first governs both
-    const { w, h } = clampSize(n, bw * f, bh * f, others);
-    f = Math.max(Math.min(w / bw, h / bh), MIN_SCALE / base.scale);
-    return { w: bw * f, h: bh * f, scale: base.scale * f };
+  /** shift toggled mid-drag: rebase against the pointer where it now is */
+  function syncGripMode(shift: boolean) {
+    if (drag?.type !== "resize") return;
+    const mode = shift ? "rescale" : "resize";
+    if (mode === drag.mode) return;
+    const [wx, wy] = screenToWorld(view, pointer.sx, pointer.sy);
+    rebaseGrip(drag, mode, wx, wy);
   }
 
   /** pin-glyph hit-test (screen ~9px around the glyph) */
@@ -1187,12 +1168,12 @@ export function createRgui(
         type: "resize",
         node: gripNode,
         moved: false,
-        base: {
-          w: gripNode.w,
-          h: nodeHeight(gripNode),
-          scale: contentScale(gripNode),
-        },
+        mode: "resize",
+        base: { w: 0, h: 0, scale: 1 },
+        grab: { dx: 0, dy: 0 },
       };
+      const [gwx, gwy] = screenToWorld(view, vx0, vy0);
+      rebaseGrip(drag, ev.shiftKey ? "rescale" : "resize", gwx, gwy);
       capturePointer(ev);
       return;
     }
@@ -1306,11 +1287,17 @@ export function createRgui(
         const rel = containmentOf(graph.nodes).related;
         const others = graph.nodes.filter((o) => !rel(n.id, o.id));
         // SHIFT = rescale: the node magnifies (type, ports, body hook and
-        // all) instead of reflowing at a fixed type size. Held live, so a
-        // drag can switch modes without releasing the grip.
-        const next = ev.shiftKey
-          ? rescaleTo(n, drag.base, wx, wy, others)
-          : resizeTo(n, wx, wy, others);
+        // all) instead of reflowing at a fixed type size. Read live, so the
+        // grip can switch gestures without releasing the button — a key
+        // event may have rebased already, this catches the rest.
+        syncGripMode(ev.shiftKey);
+        // the corner tracks the cursor at the offset it was grabbed with
+        const cx = wx - drag.grab.dx;
+        const cy = wy - drag.grab.dy;
+        const next =
+          drag.mode === "rescale"
+            ? gripRescale(n, drag.base, cx, cy, others, rule.radix)
+            : gripResize(n, cx, cy, others, rule.radix);
         if (
           next.w !== n.w ||
           next.h !== nodeHeight(n) ||
@@ -1738,7 +1725,7 @@ export function createRgui(
       ["Space + drag", "Pan"],
       ["Scroll / pinch", "Pan / zoom"],
       ["Drag corner", "Resize node"],
-      ["⇧ + drag corner", "Rescale node (magnify, keeps ratio)"],
+      ["⇧ while dragging", "Rescale node (magnify, keeps ratio)"],
       ["?", "Toggle this panel"],
     ];
     helpEl = document.createElement("div");
@@ -1802,6 +1789,10 @@ export function createRgui(
   };
 
   const onKeyDown = (ev: KeyboardEvent) => {
+    // shift pressed DURING a grip drag switches resize → rescale at the
+    // size the node has right now (autorepeat re-fires; syncGripMode is a
+    // no-op once the mode already matches)
+    if (ev.key === "Shift") syncGripMode(true);
     if (ev.code === "Space" && !ev.repeat) {
       if (typingInField(ev)) return;
       spaceHeld = true;
@@ -1862,6 +1853,8 @@ export function createRgui(
     navKick();
   };
   const onKeyUp = (ev: KeyboardEvent) => {
+    // shift released mid-drag: resize resumes at the scale rescale reached
+    if (ev.key === "Shift") syncGripMode(false);
     if (ev.code === "Space") spaceHeld = false;
     if (!kbEnabled) return;
     switch (ev.key.toLowerCase()) {
@@ -2194,7 +2187,7 @@ export function createRgui(
     rescaleNode(nodeId: string, scale: number) {
       const n = graph.nodes.find((m) => m.id === nodeId);
       if (!n) return;
-      const next = clamp(scale, MIN_SCALE, MAX_SCALE);
+      const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
       const f = next / contentScale(n);
       n.w *= f;
       n.h = nodeHeight(n) * f;

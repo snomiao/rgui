@@ -33,6 +33,13 @@ import {
 import { buildRenderGraph, pseudoRect } from "./lod";
 import { clampSize, flushSegments, resolveOverlap } from "./pack";
 import { layoutGraph } from "./layout";
+import {
+  gripBase,
+  gripRescale,
+  gripResize,
+  MAX_SCALE,
+  MIN_SCALE,
+} from "./grip";
 import { DEFAULT_RULE } from "./rule";
 import {
   aggregate,
@@ -602,5 +609,106 @@ describe("content scale", () => {
       expect(nodeHeight(scaled)).toBeGreaterThanOrEqual(nodeMinHeight(scaled));
       expect(nodeHeight(scaled)).toBeCloseTo(nodeHeight(base) * f, 10);
     }
+  });
+});
+
+describe("corner-grip gestures (resize ⇄ rescale)", () => {
+  const RADIX = DEFAULT_RULE.radix;
+  const node = (): GraphNode => ({
+    id: "n",
+    title: "N",
+    category: "model",
+    x: 0,
+    y: 0,
+    w: 256,
+    h: 192,
+    inputs: [],
+    outputs: [],
+    fields: [["k", "v"]],
+  });
+  /** apply a gesture result the way the drag handler does */
+  const apply = (n: GraphNode, s: { w: number; h: number; scale: number }) => {
+    n.w = s.w;
+    n.h = s.h;
+    n.scale = s.scale;
+  };
+  const corner = (n: GraphNode): [number, number] => [
+    n.x + n.w,
+    n.y + nodeHeight(n),
+  ];
+
+  test("resize reflows: footprint grows, content scale untouched", () => {
+    const n = node();
+    const r = gripResize(n, 512, 384, [n], RADIX);
+    expect(r.scale).toBe(1);
+    expect(r.w).toBeGreaterThan(256);
+  });
+
+  test("rescale preserves the aspect ratio", () => {
+    const n = node();
+    const ratio = n.w / nodeHeight(n);
+    const r = gripRescale(n, gripBase(n), 520, 390, [n], RADIX);
+    expect(r.w / r.h).toBeCloseTo(ratio, 10);
+    expect(r.scale).toBeCloseTo(r.w / 256, 10);
+  });
+
+  test("a rebase is a no-op: rescaling to the current corner moves nothing", () => {
+    // THE no-jump property — toggling shift rebases, and until the cursor
+    // moves the projected factor is exactly 1
+    const n = node();
+    apply(n, gripResize(n, 500, 300, [n], RADIX)); // some earlier resize
+    const base = gripBase(n);
+    const r = gripRescale(n, base, ...corner(n), [n], RADIX);
+    expect(r.w).toBeCloseTo(base.w, 10);
+    expect(r.h).toBeCloseTo(base.h, 10);
+    expect(r.scale).toBeCloseTo(base.scale, 10);
+  });
+
+  test("resize after a rescale keeps the magnified scale", () => {
+    const n = node();
+    apply(n, gripRescale(n, gripBase(n), 512, 384, [n], RADIX));
+    const scaled = contentScale(n);
+    expect(scaled).toBeGreaterThan(1);
+    apply(n, gripResize(n, n.x + n.w + 200, n.y + nodeHeight(n), [n], RADIX));
+    expect(contentScale(n)).toBe(scaled); // type stayed magnified
+  });
+
+  test("ratchet: tapping shift on/off/on compounds without releasing", () => {
+    const n = node();
+    let scale = 1;
+    for (let round = 0; round < 3; round++) {
+      // shift ON: rebase, then drag the corner outward. Each round rescales
+      // the node the PREVIOUS round left behind — that is the ratchet.
+      const base = gripBase(n);
+      const [cx, cy] = corner(n);
+      apply(n, gripRescale(n, base, cx + 120, cy + 90, [n], RADIX));
+      expect(contentScale(n)).toBeGreaterThan(scale); // grew from where it was
+      // rescale preserves the ratio it INHERITED, whatever resize left
+      expect(n.w / nodeHeight(n)).toBeCloseTo(base.w / base.h, 8);
+      scale = contentScale(n);
+      // shift OFF: resize onward at that scale. Reflowing may change the
+      // ratio — that is exactly what resize is for — then loop back on.
+      apply(n, gripResize(n, n.x + n.w + 8, n.y + nodeHeight(n), [n], RADIX));
+      expect(contentScale(n)).toBe(scale);
+    }
+    expect(scale).toBeGreaterThan(2); // three taps drove it well past 2x
+  });
+
+  test("rescale stays inside the magnification band", () => {
+    const big = node();
+    apply(big, gripRescale(big, gripBase(big), 1e6, 1e6, [big], RADIX));
+    expect(contentScale(big)).toBe(MAX_SCALE);
+    const small = node();
+    apply(small, gripRescale(small, gripBase(small), -50, -50, [small], RADIX));
+    expect(contentScale(small)).toBe(MIN_SCALE);
+  });
+
+  test("a neighbor stops a rescale without breaking the ratio", () => {
+    const n = node();
+    const ratio = n.w / nodeHeight(n);
+    const right = { ...node(), id: "r", x: 320 };
+    const r = gripRescale(n, gripBase(n), 900, 700, [n, right], RADIX);
+    expect(r.w).toBeLessThanOrEqual(320); // stopped at the neighbor
+    expect(r.w / r.h).toBeCloseTo(ratio, 10);
   });
 });
