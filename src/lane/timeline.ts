@@ -413,6 +413,12 @@ export interface TimelineSource extends LaneSource {
   isLogAxis(): boolean;
   /** switch the time axis at runtime (host should re-fit afterwards) */
   setLogAxis(on: boolean): void;
+  /** the event under a screen point (for hover cards), or null */
+  eventAt(
+    screenX: number,
+    screenY: number,
+    view: LaneView,
+  ): { title: string; detail?: string; cat: string } | null;
 }
 
 export function createTimelineSource(
@@ -1039,6 +1045,26 @@ export function createTimelineSource(
     setLogAxis(on) {
       logAxis = on;
       onUpdate();
+    },
+    eventAt(sx, sy, view) {
+      // the event in the hovered track whose y is nearest the cursor
+      const tracks = activeTracks(view);
+      const track = tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
+      if (!track || track.meta.cat === "periodic") return null;
+      let best: Ev | null = null;
+      let bestDy = 11;
+      for (const e of points) {
+        if (e.cat !== track.meta.cat) continue;
+        const ey = worldToScreenY(view, worldOf(e.y));
+        const dy = Math.abs(ey - sy);
+        if (dy < bestDy) {
+          bestDy = dy;
+          best = e;
+        }
+      }
+      if (!best) return null;
+      const title = best.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+      return { title, detail: best.detail, cat: best.cat };
     },
     find(query, limit = 7) {
       const q = query.trim().toLowerCase();

@@ -512,8 +512,115 @@ repoInput.addEventListener("keydown", (e) => {
   if (parsed) loadRepo(parsed.owner, parsed.repo);
   else repoStat.textContent = "bad repo";
 });
-// load the default repo (Linux) in the background; synthetic tree shows first
-void loadRepo("torvalds", "linux");
+// Don't fetch a multi-MB repo tree on load — the synthetic tree (with built-in
+// content) is the instant default; a real GitHub repo is one ↵ away.
+repoStat.textContent = "↵ load any GitHub repo";
+
+// ── Wikipedia hover cards (deep-time view) ────────────────────────────────
+interface WikiSummary {
+  title?: string;
+  extract?: string;
+  type?: string;
+  thumbnail?: { source: string };
+  content_urls?: { desktop?: { page?: string } };
+}
+const cardEl = document.querySelector<HTMLAnchorElement>("#card")!;
+const wikiCache = new Map<string, WikiSummary | null>();
+let cardTitle: string | null = null;
+let hoverTimer = 0;
+let hideTimer = 0;
+let overCard = false;
+
+const WIKI_LANGS = (() => {
+  const l = (navigator.language || "en").split("-")[0];
+  return l === "en" ? ["en"] : [l, "en"]; // browser language first, en fallback
+})();
+async function wikiSummary(title: string): Promise<WikiSummary | null> {
+  if (wikiCache.has(title)) return wikiCache.get(title) ?? null;
+  for (const lang of WIKI_LANGS) {
+    try {
+      const r = await fetch(
+        `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}?redirect=true`,
+      );
+      if (r.ok) {
+        const j = (await r.json()) as WikiSummary;
+        if (j?.extract && j.type !== "disambiguation") {
+          wikiCache.set(title, j);
+          return j;
+        }
+      }
+    } catch {
+      /* try next language */
+    }
+  }
+  wikiCache.set(title, null);
+  return null;
+}
+function positionCard(x: number, y: number) {
+  const w = 290;
+  const h = cardEl.offsetHeight || 200;
+  let left = x + 18;
+  let top = y + 12;
+  if (left + w > innerWidth - 8) left = Math.max(8, x - w - 18);
+  if (top + h > innerHeight - 8) top = Math.max(8, innerHeight - h - 8);
+  cardEl.style.left = `${left}px`;
+  cardEl.style.top = `${top}px`;
+}
+async function showCard(title: string, x: number, y: number) {
+  const s = await wikiSummary(title);
+  if (cardTitle !== title) return; // pointer moved to another event
+  if (!s || s.type === "disambiguation" || !s.extract) {
+    hideCard();
+    return;
+  }
+  cardEl.href =
+    s.content_urls?.desktop?.page ??
+    `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`;
+  const img = s.thumbnail?.source ? `<img src="${esc(s.thumbnail.source)}" alt="">` : "";
+  cardEl.innerHTML =
+    `${img}<div class="body"><p class="t">${esc(s.title ?? title)}</p>` +
+    `<p class="x">${esc(s.extract)}</p><div class="src">WIKIPEDIA ↗</div></div>`;
+  cardEl.classList.add("show");
+  positionCard(x, y);
+}
+function hideCard() {
+  if (overCard) return;
+  cardEl.classList.remove("show");
+  cardTitle = null;
+}
+canvas.addEventListener("pointermove", (e) => {
+  if (current !== "time" || e.buttons) {
+    hideCard();
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const hit = timeSource.eventAt(e.clientX - rect.left, e.clientY - rect.top, lane.view);
+  clearTimeout(hoverTimer);
+  clearTimeout(hideTimer);
+  if (hit) {
+    if (hit.title !== cardTitle) {
+      cardTitle = hit.title;
+      const cx = e.clientX;
+      const cy = e.clientY;
+      hoverTimer = window.setTimeout(() => showCard(hit.title, cx, cy), 200);
+    } else if (cardEl.classList.contains("show")) {
+      positionCard(e.clientX, e.clientY);
+    }
+  } else {
+    hideTimer = window.setTimeout(hideCard, 160);
+  }
+});
+canvas.addEventListener("pointerleave", () => {
+  hideTimer = window.setTimeout(hideCard, 160);
+});
+cardEl.addEventListener("pointerenter", () => {
+  overCard = true;
+  clearTimeout(hideTimer);
+});
+cardEl.addEventListener("pointerleave", () => {
+  overCard = false;
+  hideCard();
+});
 
 // ── theme toggle (mirrors index.html) ─────────────────────────────────────
 const themeToggle = document.querySelector<HTMLButtonElement>("#theme-toggle");
