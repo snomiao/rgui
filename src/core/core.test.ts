@@ -15,12 +15,20 @@ import {
   contentScale,
   demoGraph,
   descendantsOf,
+  flowAxis,
+  inSide,
   inputPortPos,
   nodeHeight,
   nodeMinHeight,
   nodeMinWidth,
   nodeScale,
   orgChartGraph,
+  outSide,
+  outputPortPos,
+  NODE_COL_W,
+  NODE_ROW_H,
+  type Edge,
+  type Flow,
   type GraphNode,
 } from "./graph";
 import { kindColor, categoryColor, KIND_COLOR } from "../render/graphLayer";
@@ -32,7 +40,12 @@ import {
   type PanelRect,
 } from "../render/panelLayer";
 import { buildRenderGraph, pseudoRect } from "./lod";
-import { clampSize, flushSegments, resolveOverlap } from "./pack";
+import {
+  clampSize,
+  flushSegments,
+  resolveOverlap,
+  snapConnections,
+} from "./pack";
 import { layoutGraph } from "./layout";
 import {
   gripBase,
@@ -182,6 +195,165 @@ describe("一格一物 pack", () => {
       });
       expect(r).toEqual({ x: 100, y: 100 });
     });
+  });
+});
+
+// --- flow direction + snap-connect ---------------------------------------
+
+/** a node wired for flow: one input `in`, one output `out`, both `text` */
+const mkIO = (
+  id: string,
+  x: number,
+  y: number,
+  flow: Flow = "ltr",
+  kind = "text",
+  opts: { inputs?: number; outputs?: number } = {},
+): GraphNode => ({
+  id,
+  title: id,
+  category: "model",
+  flow,
+  x,
+  y,
+  w: 200,
+  inputs: Array.from({ length: opts.inputs ?? 1 }, (_, i) => ({
+    id: `in${i}`,
+    label: `in${i}`,
+    kind,
+  })),
+  outputs: Array.from({ length: opts.outputs ?? 1 }, (_, i) => ({
+    id: `out${i}`,
+    label: `out${i}`,
+    kind,
+  })),
+  fields: [],
+});
+
+describe("flow direction", () => {
+  test("default ltr: inputs left, outputs right", () => {
+    const n = mkIO("n", 0, 0);
+    expect(inSide(n)).toBe("left");
+    expect(outSide(n)).toBe("right");
+    expect(inputPortPos(n, 0)[0]).toBe(n.x);
+    expect(outputPortPos(n, 0)[0]).toBe(n.x + n.w);
+  });
+
+  test("rtl mirrors the edges without moving the rows", () => {
+    const l = mkIO("l", 0, 0, "ltr");
+    const r = mkIO("r", 0, 0, "rtl");
+    expect(inSide(r)).toBe("right");
+    expect(outSide(r)).toBe("left");
+    expect(inputPortPos(r, 0)[0]).toBe(r.x + r.w);
+    // same row: only the edge changed
+    expect(inputPortPos(r, 0)[1]).toBe(inputPortPos(l, 0)[1]);
+  });
+
+  test("ttb puts ports on the caps, pitched by column", () => {
+    const n = mkIO("n", 0, 0, "ttb", "text", { inputs: 2, outputs: 2 });
+    expect(inSide(n)).toBe("top");
+    expect(outSide(n)).toBe("bottom");
+    expect(flowAxis(n)).toBe("v");
+    expect(inputPortPos(n, 0)[1]).toBe(n.y);
+    expect(outputPortPos(n, 0)[1]).toBe(n.y + nodeHeight(n));
+    // consecutive ports march across by one column
+    expect(inputPortPos(n, 1)[0] - inputPortPos(n, 0)[0]).toBe(NODE_COL_W);
+  });
+
+  test("btt is ttb reversed", () => {
+    const n = mkIO("n", 0, 0, "btt");
+    expect(inSide(n)).toBe("bottom");
+    expect(outSide(n)).toBe("top");
+  });
+});
+
+describe("snap-connect", () => {
+  /** b placed flush to a's right edge, port rows aligned */
+  const pair = (aFlow: Flow = "ltr", bFlow: Flow = "ltr") => {
+    const a = mkIO("a", 0, 0, aFlow);
+    const b = mkIO("b", a.x + a.w, 0, bFlow);
+    return [a, b] as const;
+  };
+
+  test("flush + facing + same kind → a temp edge appears", () => {
+    const [a, b] = pair();
+    const edges = snapConnections([a, b]);
+    expect(edges.length).toBe(1);
+    expect(edges[0]!.from).toEqual({ node: "a", port: "out0" });
+    expect(edges[0]!.to).toEqual({ node: "b", port: "in0" });
+    expect(edges[0]!.temp).toBe(true);
+  });
+
+  test("pulling the nodes apart breaks it — no state, pure geometry", () => {
+    const [a, b] = pair();
+    expect(snapConnections([a, b]).length).toBe(1);
+    b.x += 1; // no longer flush
+    expect(snapConnections([a, b])).toEqual([]);
+  });
+
+  test("wrong direction: b's OUTPUT faces a's output → nothing", () => {
+    // b is rtl, so its outputs sit on its left edge, meeting a's outputs
+    const [a, b] = pair("ltr", "rtl");
+    expect(snapConnections([a, b])).toEqual([]);
+  });
+
+  test("an rtl pipeline wires right-to-left: the right node feeds the left", () => {
+    // both rtl: b's outputs sit on its left edge, a's inputs on its right —
+    // they meet at the seam, so data flows b → a even though b is downstream
+    // in x. Direction comes from the ports, never from the geometry.
+    const [a, b] = pair("rtl", "rtl");
+    const edges = snapConnections([a, b]);
+    expect(edges.length).toBe(1);
+    expect(edges[0]!.from.node).toBe("b");
+    expect(edges[0]!.to.node).toBe("a");
+  });
+
+  test("incompatible kinds never snap", () => {
+    const a = mkIO("a", 0, 0, "ltr", "image");
+    const b = mkIO("b", 200, 0, "ltr", "audio");
+    expect(snapConnections([a, b])).toEqual([]);
+  });
+
+  test("a custom gate can widen (or close) compatibility", () => {
+    const a = mkIO("a", 0, 0, "ltr", "image");
+    const b = mkIO("b", 200, 0, "ltr", "audio");
+    expect(snapConnections([a, b], { gate: () => true }).length).toBe(1);
+    const [c, d] = pair();
+    expect(snapConnections([c, d], { gate: () => false })).toEqual([]);
+  });
+
+  test("misaligned port rows do not capture", () => {
+    const a = mkIO("a", 0, 0);
+    const b = mkIO("b", 200, 0);
+    b.y = NODE_ROW_H * 2; // rows more than half a pitch apart
+    // still flush (heights overlap), but the ports no longer meet
+    expect(flushSegments([a, b]).length).toBe(1);
+    expect(snapConnections([a, b])).toEqual([]);
+  });
+
+  test("vertical flow snaps through a horizontal seam", () => {
+    const a = mkIO("a", 0, 0, "ttb");
+    const b = mkIO("b", 0, nodeHeight(mkIO("a", 0, 0, "ttb")), "ttb");
+    const edges = snapConnections([a, b]);
+    expect(edges.length).toBe(1);
+    expect(edges[0]!.from.node).toBe("a");
+    expect(edges[0]!.to.node).toBe("b");
+  });
+
+  test("an input already wired by the host is not stolen", () => {
+    const [a, b] = pair();
+    const existing: Edge[] = [
+      { from: { node: "z", port: "out0" }, to: { node: "b", port: "in0" } },
+    ];
+    expect(snapConnections([a, b], { existing })).toEqual([]);
+  });
+
+  test("each port takes at most one snapped wire", () => {
+    // one output, two inputs on b, both within tolerance of the same row
+    const a = mkIO("a", 0, 0);
+    const b = mkIO("b", 200, 0, "ltr", "text", { inputs: 2 });
+    const edges = snapConnections([a, b]);
+    expect(edges.length).toBe(1);
+    expect(edges[0]!.to.port).toBe("in0"); // nearest row wins
   });
 });
 

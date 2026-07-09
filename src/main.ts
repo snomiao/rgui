@@ -85,6 +85,13 @@ const viewer = rgui(canvas, {
     viewer.invalidate();
   },
   onNodeClick: (id, at) => console.log("[rgui] click", id, at),
+  // snap two nodes flush and their facing, kind-matched ports wire themselves
+  // up; drag them apart and the wire is gone
+  onSnapConnectChange: (edges) =>
+    console.log(
+      "[rgui] snapConnect",
+      edges.map((e) => `${e.from.node}.${e.from.port}→${e.to.node}.${e.to.port}`),
+    ),
   onSelectionChange: (ids) => console.log("[rgui] selection", ids),
   onEdgeClick: (e, at) => console.log("[rgui] edgeClick", e.from, e.to, at),
   onEdgeContextMenu: (e) => console.log("[rgui] edgeMenu", e.from, e.to),

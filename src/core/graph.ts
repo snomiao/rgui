@@ -13,6 +13,17 @@ export type SignalKind = "image" | "audio" | "text" | "ctl" | (string & {});
 
 export type NodeCategory = "source" | "model" | "sink" | (string & {});
 
+/**
+ * Which way data runs THROUGH a node: "ltr" (default) reads inputs on the
+ * left edge and outputs on the right, "ttb" runs top-to-bottom, and the
+ * reversed pair mirror them. Flow is per-node, so a right-to-left sink can
+ * sit in a left-to-right pipeline and still present its ports to the wire.
+ */
+export type Flow = "ltr" | "rtl" | "ttb" | "btt";
+
+/** an edge of a node's rect */
+export type Side = "top" | "right" | "bottom" | "left";
+
 export interface Port {
   id: string;
   label: string;
@@ -36,6 +47,13 @@ export interface GraphNode {
    */
   z?: number;
   w: number;
+  /**
+   * data-flow direction through this node (default "ltr"): decides which
+   * edge carries the inputs and which the outputs. It is also what lets two
+   * nodes SNAP-CONNECT — pushed flush together, an output edge meeting a
+   * compatible input edge wires itself up (see snapConnections).
+   */
+  flow?: Flow;
   inputs: Port[];
   outputs: Port[];
   /** label: value rows shown in the node body */
@@ -169,6 +187,14 @@ export interface Edge {
   };
   /** short label drawn at the wire midpoint */
   label?: string;
+  /**
+   * SNAP-CONNECTED: derived from geometry, not authored. Two nodes pushed
+   * flush together with facing, kind-compatible ports wire themselves up;
+   * drag them apart and the edge disappears. Temp edges are recomputed from
+   * scratch on every move, so hosts must never persist them — filter them
+   * out when saving, or promote one to a real edge to keep it.
+   */
+  temp?: boolean;
 }
 
 export interface Graph {
@@ -182,6 +208,8 @@ export const NODE_HEADER_H = 26;
 export const NODE_ROW_H = 22;
 export const NODE_PAD = 10;
 export const PORT_R = 5;
+/** port pitch along a horizontal (top/bottom) edge — the ROW_H of vertical flow */
+export const NODE_COL_W = 64;
 
 /** content scale (default 1, always positive) */
 export function contentScale(n: GraphNode): number {
@@ -383,20 +411,94 @@ export function bodyRect(
   };
 }
 
+// --- flow direction ---------------------------------------------------
+
+/** the axis data runs along: "h" for ltr/rtl, "v" for ttb/btt */
+export function flowAxis(n: GraphNode): "h" | "v" {
+  const f = n.flow ?? "ltr";
+  return f === "ltr" || f === "rtl" ? "h" : "v";
+}
+
+/** the edge this node's inputs sit on */
+export function inSide(n: GraphNode): Side {
+  switch (n.flow ?? "ltr") {
+    case "rtl":
+      return "right";
+    case "ttb":
+      return "top";
+    case "btt":
+      return "bottom";
+    default:
+      return "left";
+  }
+}
+
+/** the edge this node's outputs sit on (always opposite the inputs) */
+export function outSide(n: GraphNode): Side {
+  return oppositeSide(inSide(n));
+}
+
+export function oppositeSide(s: Side): Side {
+  return s === "left"
+    ? "right"
+    : s === "right"
+      ? "left"
+      : s === "top"
+        ? "bottom"
+        : "top";
+}
+
+/** true when `s` runs along the x axis, i.e. it is the top or bottom edge */
+export const isHorizontalSide = (s: Side): boolean =>
+  s === "top" || s === "bottom";
+
 /** world y of a node's i-th port/field row center */
 export function nodeRowY(n: GraphNode, i: number): number {
   const { headerH, rowH, pad } = nodeMetrics(n);
   return n.y + headerH + pad + (i + 0.5) * rowH;
 }
 
+/**
+ * World center of the i-th port on a given SIDE of the node. Ports on the
+ * left/right edges stack down in rowH rows (clearing the title band); ports on
+ * the top/bottom edges march across in NODE_COL_W columns. Both pitches ride the
+ * node's content scale, and both are constant for a given scale — so two nodes
+ * with the same corner alignment and scale present their port i at the same
+ * coordinate, which is what makes snap-connect land on whole ports instead of
+ * guessing.
+ */
+export function sidePortPos(
+  n: GraphNode,
+  side: Side,
+  i: number,
+): [number, number] {
+  if (isHorizontalSide(side)) {
+    const { s, pad } = nodeMetrics(n);
+    return [
+      n.x + pad + (i + 0.5) * NODE_COL_W * s,
+      side === "top" ? n.y : n.y + nodeHeight(n),
+    ];
+  }
+  return [side === "left" ? n.x : n.x + n.w, nodeRowY(n, i)];
+}
+
+/** world position of the i-th port on the node's declared in/out edge */
+export function portPos(
+  n: GraphNode,
+  dir: "in" | "out",
+  i: number,
+): [number, number] {
+  return sidePortPos(n, dir === "in" ? inSide(n) : outSide(n), i);
+}
+
 /** world position of an input port center */
 export function inputPortPos(n: GraphNode, i: number): [number, number] {
-  return [n.x, nodeRowY(n, i)];
+  return portPos(n, "in", i);
 }
 
 /** world position of an output port center */
 export function outputPortPos(n: GraphNode, i: number): [number, number] {
-  return [n.x + n.w, nodeRowY(n, i)];
+  return portPos(n, "out", i);
 }
 
 // --- demo graph: our take on the otoji jolly-finch-ibni pipeline ------
