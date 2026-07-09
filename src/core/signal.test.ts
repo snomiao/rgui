@@ -5,6 +5,10 @@ import {
   type Atomizer,
   SIGNALS,
   allowedMerges,
+  groupFanout,
+  groupWeights,
+  isFanoutLegal,
+  signalConnectionGuard,
   checkSignals,
   defaultMerge,
   forkValue,
@@ -31,15 +35,23 @@ const node = (id: string, inputs: Port[], outputs: Port[]): GraphNode => ({
   outputs,
   fields: [],
 });
-const wire = (fn: string, fp: string, tn: string, tp: string): Edge => ({
+const wire = (
+  fn: string,
+  fp: string,
+  tn: string,
+  tp: string,
+  weight?: number,
+): Edge => ({
   from: { node: fn, port: fp },
   to: { node: tn, port: tp },
+  weight,
 });
 
 describe("defaults are the safe, backward-compatible choice", () => {
-  test("an unmarked port copies and refuses to sum", () => {
+  test("an unmarked port broadcasts a copyable value and refuses to sum", () => {
     const s = resolveSignal({ id: "a", label: "a", kind: "text" });
-    expect(s.fanout).toBe("copy");
+    expect(s.share).toBe("copy");
+    expect(s.fanout).toBe("broadcast");
     expect(s.measure).toBe("intensive");
     expect(isConserved(s)).toBe(false);
   });
@@ -277,6 +289,7 @@ describe("forkValue — the three fan-out modes", () => {
       label: "x",
       kind: "image",
       measure: "extensive",
+      share: "move",
       fanout: "split",
       grain: "continuous",
     });
@@ -292,6 +305,7 @@ describe("forkValue — the three fan-out modes", () => {
     label: "r",
     kind: "text",
     measure: "extensive",
+    share: "copy",
     fanout: "split",
     grain: "atom",
     atom: "row",
@@ -389,15 +403,16 @@ describe("checkSignals", () => {
     expect(checkSignals(g).map((d) => d.code)).toContain("kind-mismatch");
   });
 
-  test("broadcasting into a consumer that conserves is a double-spend warning", () => {
+  test("broadcasting into consumers that take ownership is a double-spend warning", () => {
     const g: Graph = {
       nodes: [
-        // an output that copies…
+        // an output that broadcasts a freely-copyable value…
         node("mint", [], [{ id: "o", label: "coins", kind: "ctl" }]),
-        // …feeding a port that treats its input as an exclusive resource
-        node("wallet", [port("i", "coins", SIGNALS.lease)], []),
+        // …feeding two ports that each treat their input as an exclusive resource
+        node("w1", [port("i", "coins", SIGNALS.lease)], []),
+        node("w2", [port("i", "coins", SIGNALS.lease)], []),
       ],
-      edges: [wire("mint", "o", "wallet", "i")],
+      edges: [wire("mint", "o", "w1", "i"), wire("mint", "o", "w2", "i")],
     };
     expect(checkSignals(g).map((d) => d.code)).toContain("copied-resource");
   });
@@ -424,6 +439,7 @@ describe("checkSignals", () => {
       label: "o",
       kind: "ctl",
       measure: "extensive",
+      share: "move",
       fanout: "split",
     };
     const g: Graph = {
@@ -451,11 +467,11 @@ describe("checkSignals", () => {
 
 describe("the 2×2 the presets span", () => {
   test("measure and fanout vary independently", () => {
-    const cell = (p: { measure: string; fanout: string }) => `${p.measure}/${p.fanout}`;
+    const cell = (p: { measure: string; share: string }) => `${p.measure}/${p.share}`;
     expect(cell(SIGNALS.transcript)).toBe("extensive/copy");
     expect(cell(SIGNALS.coord)).toBe("intensive/copy");
-    expect(cell(SIGNALS.budget)).toBe("extensive/split");
-    expect(cell(SIGNALS.lease)).toBe("intensive/route");
+    expect(cell(SIGNALS.budget)).toBe("extensive/move");
+    expect(cell(SIGNALS.lease)).toBe("intensive/move");
   });
 
   test("a counter is additive across shards yet copied on fan-out", () => {
@@ -465,10 +481,180 @@ describe("the 2×2 the presets span", () => {
       label: "requests",
       kind: "ctl",
       measure: "extensive",
-      fanout: "copy",
+      share: "copy",
+      fanout: "broadcast",
     };
     const s = resolveSignal(counter);
     expect(isMergeLegal("sum", s.measure)).toBe(true); // sum across shards ✓
     expect(forkValue(1523, s, 2)).toEqual([1523, 1523]); // copied, not halved ✓
+  });
+});
+
+describe("capability vs policy — who owns what", () => {
+  test("only broadcast-of-a-move is illegal; splitting a copyable value is fine", () => {
+    expect(isFanoutLegal("move", "broadcast")).toBe(false);
+    expect(isFanoutLegal("move", "split")).toBe(true);
+    expect(isFanoutLegal("move", "route")).toBe(true);
+    // dividing a copyable value is a load-balancing choice, not a safety one
+    for (const s of ["copy", "clone"] as const)
+      for (const f of ["broadcast", "split", "route"] as const)
+        expect(isFanoutLegal(s, f)).toBe(true);
+  });
+
+  test("forkValue refuses to broadcast a move — it would double-spend it", () => {
+    const spec = resolveSignal({
+      id: "c", label: "coins", kind: "ctl", share: "move", fanout: "broadcast",
+    });
+    expect(() => forkValue(100, spec, 2)).toThrow(TypeError);
+  });
+
+  test("the graph overrides a port's default policy per fan-out group", () => {
+    // the same pcm port broadcasts to a recorder here, and round-robins there
+    const g: Graph = {
+      nodes: [
+        node("mic", [], [port("audio", "audio", SIGNALS.pcm)]),
+        node("a", [port("i", "i", SIGNALS.pcm)], []),
+        node("b", [port("i", "i", SIGNALS.pcm)], []),
+      ],
+      edges: [wire("mic", "audio", "a", "i"), wire("mic", "audio", "b", "i")],
+    };
+    expect(groupFanout(g, "mic", "audio")).toBe("broadcast"); // the port's default
+    g.fanout = { "mic.audio": "route" };                      // the group's decision
+    expect(groupFanout(g, "mic", "audio")).toBe("route");
+  });
+
+  test("groupWeights normalizes per-edge weights over the group", () => {
+    const g: Graph = {
+      nodes: [
+        node("log", [], [port("rows", "rows", SIGNALS.jsonl)]),
+        node("a", [port("i", "i", SIGNALS.jsonl)], []),
+        node("b", [port("i", "i", SIGNALS.jsonl)], []),
+      ],
+      edges: [wire("log", "rows", "a", "i", 3), wire("log", "rows", "b", "i", 1)],
+    };
+    expect(groupWeights(g, "log", "rows")).toEqual([0.75, 0.25]);
+    // and those weights apportion whole lines, conserving them
+    const parts = forkValue("a\nb\nc\nd\n", resolveSignal(port("r", "r", SIGNALS.jsonl)), 2, {
+      weights: groupWeights(g, "log", "rows"),
+    }) as string[];
+    expect(parts).toEqual(["a\nb\nc\n", "d\n"]);
+    expect(parts.join("")).toBe("a\nb\nc\nd\n");
+  });
+});
+
+describe("checkSignals — fan-out capability", () => {
+  const two = (out: Port, sink: Port): Graph => ({
+    nodes: [node("src", [], [out]), node("a", [sink], []), node("b", [sink], [])],
+    edges: [wire("src", out.id, "a", sink.id), wire("src", out.id, "b", sink.id)],
+  });
+
+  test("broadcasting a move signal is an ERROR", () => {
+    const g = two(
+      { id: "o", label: "coins", kind: "ctl", share: "move", fanout: "broadcast" },
+      { id: "o", label: "coins", kind: "ctl" },
+    );
+    const d = checkSignals(g).filter((x) => x.code === "broadcast-move");
+    expect(d).toHaveLength(1);
+    expect(d[0]!.severity).toBe("error");
+  });
+
+  test("a graph override that broadcasts a move signal is caught too", () => {
+    const g = two(port("o", "job", SIGNALS.work), { id: "o", label: "job", kind: "ctl" });
+    expect(checkSignals(g).map((x) => x.code)).not.toContain("broadcast-move");
+    g.fanout = { "src.o": "broadcast" };
+    expect(checkSignals(g).map((x) => x.code)).toContain("broadcast-move");
+  });
+
+  test("broadcasting a clone warns about the cost but is legal", () => {
+    const g = two(port("o", "frame", SIGNALS.frame), port("o", "frame", SIGNALS.frame));
+    const d = checkSignals(g).filter((x) => x.code === "cloned-fanout");
+    expect(d).toHaveLength(1);
+    expect(d[0]!.severity).toBe("warn");
+    expect(d[0]!.message).toContain("image");
+  });
+
+  test("broadcasting a cheap copy says nothing at all", () => {
+    const g = two(port("o", "t", SIGNALS.transcript), port("o", "t", SIGNALS.transcript));
+    expect(checkSignals(g)).toEqual([]);
+  });
+
+  test("a single edge off a clone port does not warn — nothing is duplicated", () => {
+    const g: Graph = {
+      nodes: [
+        node("src", [], [port("o", "frame", SIGNALS.frame)]),
+        node("a", [port("o", "frame", SIGNALS.frame)], []),
+      ],
+      edges: [wire("src", "o", "a", "o")],
+    };
+    expect(checkSignals(g)).toEqual([]);
+  });
+
+  test("weights on a non-split fan-out warn", () => {
+    const g: Graph = {
+      nodes: [
+        node("src", [], [port("o", "t", SIGNALS.transcript)]),
+        node("a", [port("o", "t", SIGNALS.transcript)], []),
+      ],
+      edges: [wire("src", "o", "a", "o", 3)],
+    };
+    expect(checkSignals(g).map((x) => x.code)).toContain("weight-without-split");
+  });
+});
+
+describe("signalConnectionGuard — where single-to-single actually bites", () => {
+  const guard = (g: Graph) => signalConnectionGuard(() => g);
+
+  test("a second edge off a broadcasting move port is refused", () => {
+    const g: Graph = {
+      nodes: [
+        node("src", [], [{ id: "o", label: "coins", kind: "ctl", share: "move", fanout: "broadcast" }]),
+        node("a", [{ id: "i", label: "i", kind: "ctl" }], []),
+        node("b", [{ id: "i", label: "i", kind: "ctl" }], []),
+      ],
+      edges: [],
+    };
+    // the first edge is always fine
+    expect(guard(g)({ node: "src", port: "o" }, { node: "a", port: "i" })).toBe(true);
+    g.edges.push(wire("src", "o", "a", "i"));
+    // the second would duplicate a resource
+    expect(guard(g)({ node: "src", port: "o" }, { node: "b", port: "i" })).toBe(false);
+  });
+
+  test("a move port that declares route accepts many edges", () => {
+    const g: Graph = {
+      nodes: [
+        node("src", [], [port("o", "job", SIGNALS.work)]),
+        node("a", [{ id: "i", label: "i", kind: "ctl" }], []),
+        node("b", [{ id: "i", label: "i", kind: "ctl" }], []),
+      ],
+      edges: [wire("src", "o", "a", "i")],
+    };
+    expect(guard(g)({ node: "src", port: "o" }, { node: "b", port: "i" })).toBe(true);
+  });
+
+  test("everyday copy/clone fan-out is never blocked", () => {
+    for (const preset of [SIGNALS.transcript, SIGNALS.coord, SIGNALS.frame]) {
+      const g: Graph = {
+        nodes: [
+          node("src", [], [port("o", "o", preset)]),
+          node("a", [{ id: "i", label: "i", kind: preset.kind }], []),
+          node("b", [{ id: "i", label: "i", kind: preset.kind }], []),
+        ],
+        edges: [wire("src", "o", "a", "i")],
+      };
+      expect(guard(g)({ node: "src", port: "o" }, { node: "b", port: "i" })).toBe(true);
+    }
+  });
+
+  test("an unmarked port is never blocked (backward compatible)", () => {
+    const g: Graph = {
+      nodes: [
+        node("src", [], [{ id: "o", label: "o", kind: "text" }]),
+        node("a", [{ id: "i", label: "i", kind: "text" }], []),
+        node("b", [{ id: "i", label: "i", kind: "text" }], []),
+      ],
+      edges: [wire("src", "o", "a", "i")],
+    };
+    expect(guard(g)({ node: "src", port: "o" }, { node: "b", port: "i" })).toBe(true);
   });
 });

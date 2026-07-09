@@ -28,11 +28,15 @@
 - [x] pinning / panel primitive / 単一 block 化 / GraphNode.draw / corner resize
 - [x] auto-layout (layered + barycenter, viewer.autoLayout, pinned 除外)
 - [x] core unit tests (bun test, 12 pass)
-- [x] signal algebra (`core/signal`): port が `measure`(extensive/intensive) と
-      `fanout`(copy/split/route) を宣言。fan-in の `sum`/`concat` は extensive でのみ合法、
-      fan-out は copy=broadcast / split=保存分割(grain: continuous|atom) / route=丸ごと1本へ。
-      3 種の wire を描き分け、`checkSignals()` で配線を検証。`docs/signal.md` に根拠。
-      sflow は `lib/sflow` に submodule として参照のみ (core は依存ゼロを維持)。
+- [x] signal algebra (`core/signal`): 3 つの問いを 3 人の所有者に分離。
+      `measure`(extensive/intensive, port 所有) = `+` が意味を持つか。
+      `share`(copy/clone/move, **producer port** 所有・上書き不可) = 複製してよいか。
+      `fanout`(broadcast/split/route, **fan-out group** 所有 = `Graph.fanout` で上書き) = ここで何をするか。
+      `Edge.weight`(**edge** 所有) = split 内の取り分。
+      fan-in の `sum`/`concat` は extensive でのみ合法。`move` の broadcast は error。
+      3 種の wire を描き分け、`checkSignals()` / `signalConnectionGuard()` で検証。
+      `docs/signal.md` に根拠。sflow は `lib/sflow` に submodule として参照のみ
+      (core は依存ゼロを維持)。transport/配置は host の責務として意図的に扱わない。
 - [ ] sflow adapter (`@snomiao/rgui/sflow`): `SignalSpec` → `tees`/`distributeBys`/`merges`
       の TransformStream を組む optional entry point。peerDep + 別 build entry が要る。
 - [ ] WebGPU renderer (同一 interface の背後に)

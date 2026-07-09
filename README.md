@@ -197,16 +197,28 @@ Everything above zoom is governed by a small set of composable laws:
   card; the view stays strictly 2-D and all the laws above keep holding. The background
   field arrows lean with the rotation (180° shows the field pointing away: gold crosses).
 - **A wire says what it carries** — a port declares whether its signal *adds*
-  (`measure: "extensive" | "intensive"`) and whether it may be *duplicated*
-  (`fanout: "copy" | "split" | "route"`). Those are independent: an STT transcript is
-  additive yet broadcasts (a fact), a coin transfer is additive yet must not be copied
-  (a resource). rgui refuses `sum` on a state, and draws the three fan-outs as three
-  different wires — full, thinned-and-badged `1/n`, dotted. See
-  [docs/signal.md](docs/signal.md) and `signalGraph()`.
+  (`measure`), whether it may be *duplicated* (`share`), and what a fan-out *does*
+  with it (`fanout`). rgui refuses `sum` on a state and `broadcast` on a resource, and
+  draws the three fan-outs as three different wires — full, thinned-and-badged `1/n`,
+  dotted. See [docs/signal.md](docs/signal.md) and `signalGraph()`.
 
 ## The signal algebra
 
-|  | `fanout: "copy"` | `fanout: "split"` / `"route"` |
+Three questions, three owners:
+
+| question | field | owned by |
+|---|---|---|
+| is `+` meaningful across parallel sources? | `measure: "extensive" \| "intensive"` | the port |
+| **may** this value be duplicated? | `share: "copy" \| "clone" \| "move"` | the **producing port** |
+| is it duplicated **here**, or divided? | `fanout: "broadcast" \| "split" \| "route"` | the **fan-out group** |
+| what **share** does this wire take? | `Edge.weight` | the **edge** |
+
+`share` is Rust's `Copy` / `Clone` / move: a coordinate is free to copy, a 4K frame
+copies *at a cost*, a token budget or a MediaStream handle must **not** be copied at
+all. The one rule: **a `move` value may never `broadcast`.** Splitting a copyable
+value stays legal — that's load balancing, not a safety violation.
+
+|  | `share: "copy" \| "clone"` | `share: "move"` |
 |---|---|---|
 | **extensive** (`sum`/`concat` legal) | STT transcript segments, audio chunks, shard counters | token budget, money, work items |
 | **intensive** (`sum` forbidden) | coordinates, image frames, vision label sets | an exclusive lease, a GPU slot |
@@ -214,9 +226,13 @@ Everything above zoom is governed by a small set of composable laws:
 The tempting model is one axis — *change vs state* — but a cumulative counter is
 additive across shards yet must be **copied** on fan-out, and a coin transfer is
 additive yet must **never** be copied. Additivity and conservation are orthogonal
-(physics agrees: entropy is extensive and not conserved). So rgui declares them
-separately, and `sum` is refused exactly where it is undefined — adding two
-positions — while `mean` stays legal, because a centroid is an affine combination.
+(physics agrees: entropy is extensive and not conserved). So `sum` is refused exactly
+where it is undefined — adding two positions — while `mean` stays legal, because a
+centroid is an affine combination.
+
+`signalConnectionGuard()` plugs into `isValidConnection` and refuses the second wire
+off a broadcasting `move` port — and nothing else. Strictness lands where duplication
+is *unsafe*, not merely *expensive*.
 
 Full rationale, the `SIGNALS` presets, the diagnostics, and the mapping onto
 [sflow](https://github.com/snomiao/sflow)'s `tees` / `distributeBys` / `merges` /
@@ -250,10 +266,11 @@ is framework-agnostic pure functions and plain data.
   `computePortLayout`, `clampSize`, `snapConnections`
 - **Data merge** (`core/aggregate`): `aggregate`, `fieldSummarize`, `defaultSummarize`,
   `ordered`, `topK`, `quantile`, type `MergeRule`
-- **Signal algebra** (`core/signal`): `SIGNALS` presets, `checkSignals`, `forkValue`,
-  `resolveSignal`, `portMerge`, `splitQuantity`, `splitAtoms`, `routeIndex`, types
-  `Measure`, `Fanout`, `Grain`, `SignalSpec`, `Atomizer` — what a wire carries and what
-  happens when it forks or converges. See [docs/signal.md](docs/signal.md)
+- **Signal algebra** (`core/signal`): `SIGNALS` presets, `checkSignals`,
+  `signalConnectionGuard`, `forkValue`, `resolveSignal`, `groupFanout`, `groupWeights`,
+  `portMerge`, `splitQuantity`, `splitAtoms`, `routeIndex`, types `Measure`, `Share`,
+  `Fanout`, `Grain`, `SignalSpec`, `Atomizer` — what a wire carries and what happens
+  when it forks or converges. See [docs/signal.md](docs/signal.md)
 - **Layout** (`core/layout`): `layoutGraph`
 - **Renderers** (`render`): Canvas 2D layers, `createWebGPUGridRenderer` (grid underlay),
   panels (`panelLayout`/`drawPanels`), HTML overlays (`createOverlayManager`),
