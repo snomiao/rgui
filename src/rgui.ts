@@ -150,12 +150,12 @@ export interface RguiOptions {
    */
   onNodeResize?: (
     nodeId: string,
-    size: { w: number; h: number; scale: number },
+    size: { w: number; h: number; scale: number; x?: number; y?: number },
   ) => void;
   /** fires once when a corner-grip resize ends */
   onNodeResizeEnd?: (
     nodeId: string,
-    size: { w: number; h: number; scale: number },
+    size: { w: number; h: number; scale: number; x?: number; y?: number },
   ) => void;
   /**
    * screen-anchored palettes/panels drawn as canvas chrome — items support
@@ -233,6 +233,15 @@ export interface RguiOptions {
     from: PortRef,
     at: { screen: { x: number; y: number }; world: { x: number; y: number } },
   ) => void;
+  /** right-button drag from a node body: host resolves smart port matches */
+  onSmartLinkEnd?: (
+    fromNodeId: string,
+    at: {
+      screen: { x: number; y: number };
+      world: { x: number; y: number };
+      targetNodeId?: string;
+    },
+  ) => void;
 }
 
 /** reference to one port of one node */
@@ -272,6 +281,8 @@ export interface Rgui {
   setView(view: ViewTransform): void;
   /** fit all nodes into the viewport with the given screen-px padding */
   fitView(paddingPx?: number): void;
+  /** fit one node into the viewport with the given screen-px padding */
+  fitNode(nodeId: string, paddingPx?: number): void;
   /**
    * screen position of a port as currently laid out (flush-snap aware) —
    * null if the node/port is missing or collapsed into a pseudo-node.
@@ -284,6 +295,8 @@ export interface Rgui {
   ): { x: number; y: number; edge: Side; hidden: boolean } | null;
   /** replace the panel set (host mutates panels + calls this or invalidate) */
   setPanels(panels: Panel[]): void;
+  /** lightweight runtime debug snapshot for host/e2e inspection */
+  debugPanels(): { count: number; ids: string[]; rects: { id: string; x: number; y: number; w: number; h: number; items: number }[] };
   /**
    * attach/replace/remove a node-anchored HTML overlay at runtime
    * (declarative alternative: set GraphNode.overlay before rendering)
@@ -1020,6 +1033,15 @@ export function createRgui(
       }
     | { type: "wire"; from: PortHit; toSx: number; toSy: number }
     | {
+        type: "smartLink";
+        from: GraphNode;
+        toSx: number;
+        toSy: number;
+        downX: number;
+        downY: number;
+        moved: boolean;
+      }
+    | {
         type: "marquee";
         x0: number;
         y0: number;
@@ -1030,6 +1052,7 @@ export function createRgui(
     | {
         type: "resize";
         node: GraphNode;
+        corner: GripCorner;
         moved: boolean;
         /** which gesture the grip is currently performing — shift toggles it
          * mid-drag, without releasing the button */
@@ -1066,16 +1089,31 @@ export function createRgui(
     | null = null;
 
   function drawGhostWire(ctx: CanvasRenderingContext2D, t: ViewTransform) {
-    if (drag?.type !== "wire") return;
-    const [x0, y0] = worldToScreenXY(drag.from.wx, drag.from.wy);
-    const target = portAt(drag.toSx, drag.toSy);
-    const ok = target ? validConnection(drag.from, target) : false;
+    if (drag?.type !== "wire" && drag?.type !== "smartLink") return;
     ctx.save();
-    ctx.strokeStyle = target
-      ? ok
-        ? kindColor(drag.from.port.kind)
-        : theme.danger // invalid target
-      : kindColor(drag.from.port.kind);
+    let x0: number;
+    let y0: number;
+    let nx = 1;
+    let ny = 0;
+    if (drag.type === "smartLink") {
+      [x0, y0] = worldToScreenXY(
+        drag.from.x + drag.from.w / 2,
+        drag.from.y + nodeHeight(drag.from) / 2,
+      );
+      const target = hitAt(drag.toSx, drag.toSy);
+      const ok = !!target && target.type === "node" && target.node.id !== drag.from.id;
+      ctx.strokeStyle = ok ? theme.accent : "#8b949e";
+    } else {
+      [x0, y0] = worldToScreenXY(drag.from.wx, drag.from.wy);
+      const target = portAt(drag.toSx, drag.toSy);
+      const ok = target ? validConnection(drag.from, target) : false;
+      ctx.strokeStyle = target
+        ? ok
+          ? kindColor(drag.from.port.kind)
+          : theme.danger // invalid target
+        : kindColor(drag.from.port.kind);
+      [nx, ny] = edgeNormal(drag.from.edge);
+    }
     ctx.globalAlpha = 0.9;
     ctx.lineWidth = 2;
     ctx.setLineDash([7, 5]);
@@ -1085,7 +1123,6 @@ export function createRgui(
     );
     // leave the source port along its edge normal; enter the cursor from the
     // mirrored direction, so the ghost reads the same as the finished wire
-    const [nx, ny] = edgeNormal(drag.from.edge);
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.bezierCurveTo(
@@ -1149,13 +1186,30 @@ export function createRgui(
     return from.port.kind === to.port.kind;
   }
 
-  /** resize-grip hit-test: bottom-right corner, ~10px screen radius */
-  function gripHitAt(sx: number, sy: number): GraphNode | null {
+  type GripCorner = "nw" | "ne" | "se" | "sw";
+  type GripHit = { node: GraphNode; corner: GripCorner };
+  const GRIP_PRIORITY: GripCorner[] = ["se", "sw", "ne", "nw"];
+
+  function gripCornerXY(n: GraphNode, corner: GripCorner): [number, number] {
+    const h = nodeHeight(n);
+    if (corner === "nw") return [n.x, n.y];
+    if (corner === "ne") return [n.x + n.w, n.y];
+    if (corner === "sw") return [n.x, n.y + h];
+    return [n.x + n.w, n.y + h];
+  }
+
+  /** resize-grip hit-test: all four corners, ~10px screen radius */
+  function gripHitAt(sx: number, sy: number): GripHit | null {
+    const hits: GripHit[] = [];
     for (const n of lastRg?.nodes ?? dGraph.nodes) {
-      const [px, py] = worldToScreenXY(n.x + n.w, n.y + nodeHeight(n));
-      if (Math.hypot(px - sx, py - sy) <= 10) return n;
+      for (const corner of GRIP_PRIORITY) {
+        const [wx, wy] = gripCornerXY(n, corner);
+        const [px, py] = worldToScreenXY(wx, wy);
+        if (Math.hypot(px - sx, py - sy) <= 10) hits.push({ node: n, corner });
+      }
     }
-    return null;
+    hits.sort((a, b) => GRIP_PRIORITY.indexOf(a.corner) - GRIP_PRIORITY.indexOf(b.corner));
+    return hits[0] ?? null;
   }
 
   /**
@@ -1174,7 +1228,8 @@ export function createRgui(
     const n = d.node;
     d.mode = mode;
     d.base = gripBase(n);
-    d.grab = { dx: wx - (n.x + d.base.w), dy: wy - (n.y + d.base.h) };
+    const [cx, cy] = gripCornerXY(n, d.corner);
+    d.grab = { dx: wx - cx, dy: wy - cy };
   }
 
   /** shift toggled mid-drag: rebase against the pointer where it now is */
@@ -1184,6 +1239,42 @@ export function createRgui(
     if (mode === drag.mode) return;
     const [wx, wy] = screenToWorld(view, pointer.sx, pointer.sy);
     rebaseGrip(drag, mode, wx, wy);
+  }
+
+  function gripSizeFromCorner(
+    n: GraphNode,
+    corner: GripCorner,
+    mode: "resize" | "rescale",
+    base: { w: number; h: number; scale: number },
+    cx: number,
+    cy: number,
+    others: GraphNode[],
+  ): { x: number; y: number; w: number; h: number; scale: number } {
+    const step = gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step;
+    const [sx, sy] = nodeSnapStep(step, n);
+    const scx = snap(cx, sx);
+    const scy = snap(cy, sy);
+    const h0 = nodeHeight(n);
+    const right = n.x + n.w;
+    const bottom = n.y + h0;
+    const anchorX = corner === "nw" || corner === "sw" ? scx : n.x;
+    const anchorY = corner === "nw" || corner === "ne" ? scy : n.y;
+    const cornerX = corner === "nw" || corner === "sw" ? right : scx;
+    const cornerY = corner === "nw" || corner === "ne" ? bottom : scy;
+    const temp: GraphNode = { ...n, x: anchorX, y: anchorY };
+    const next =
+      mode === "rescale"
+        ? gripRescale(temp, base, cornerX, cornerY, others, rule.radix, rule.sizeLaw)
+        : gripResize(temp, cornerX, cornerY, others, rule.radix, rule.sizeLaw);
+    const x0 = corner === "nw" || corner === "sw" ? snap(right - next.w, sx) : n.x;
+    const y0 = corner === "nw" || corner === "ne" ? snap(bottom - next.h, sy) : n.y;
+    return {
+      x: x0,
+      y: y0,
+      w: corner === "nw" || corner === "sw" ? Math.max(nodeMinWidth(n), right - x0) : next.w,
+      h: corner === "nw" || corner === "ne" ? Math.max(nodeMinHeight(n), bottom - y0) : next.h,
+      scale: next.scale,
+    };
   }
 
   /**
@@ -1328,13 +1419,14 @@ export function createRgui(
       panTo(ind.cx, ind.cy);
       return;
     }
-    // bottom-right grip starts a resize
+    // any corner grip starts a resize
     const gripHit = gripHitAt(vx0, vy0);
-    const gripNode = gripHit && baseOf(gripHit);
+    const gripNode = gripHit && baseOf(gripHit.node);
     if (gripNode && !gripNode.pinned) {
       drag = {
         type: "resize",
         node: gripNode,
+        corner: gripHit.corner,
         moved: false,
         mode: "resize",
         base: { w: 0, h: 0, scale: 1 },
@@ -1384,6 +1476,19 @@ export function createRgui(
     }
     const [wx, wy] = screenToWorld(view, vx0, vy0);
     if (hit.type === "node" && selection.has(hit.node.id) && selection.size > 1) {
+      if (ev.button === 2) {
+        drag = {
+          type: "smartLink",
+          from: baseOf(hit.node),
+          toSx: vx0,
+          toSy: vy0,
+          downX: ev.offsetX,
+          downY: ev.offsetY,
+          moved: false,
+        };
+        capturePointer(ev);
+        return;
+      }
       // dragging a member of a multi-selection moves the whole selection —
       // selected containers bring their contents along
       const ids = new Set(selection);
@@ -1397,6 +1502,19 @@ export function createRgui(
       return;
     }
     if (hit.type === "node") {
+      if (ev.button === 2) {
+        drag = {
+          type: "smartLink",
+          from: baseOf(hit.node),
+          toSx: vx0,
+          toSy: vy0,
+          downX: ev.offsetX,
+          downY: ev.offsetY,
+          moved: false,
+        };
+        capturePointer(ev);
+        return;
+      }
       const disp = hit.node; // display-space geometry
       const n = baseOf(disp);
       const { related } = containmentOf(graph.nodes);
@@ -1441,7 +1559,8 @@ export function createRgui(
     const [vx0, vy0] = toView(ev.offsetX, ev.offsetY);
     pointer = { sx: vx0, sy: vy0 };
     if (!drag) {
-      canvas.style.cursor = gripHitAt(vx0, vy0) ? "nwse-resize" : "grab";
+      const gh = gripHitAt(vx0, vy0);
+      canvas.style.cursor = gh ? (gh.corner === "nw" || gh.corner === "se" ? "nwse-resize" : "nesw-resize") : "grab";
     }
     if (drag) {
       const [wx, wy] = screenToWorld(view, vx0, vy0);
@@ -1462,20 +1581,24 @@ export function createRgui(
         // the corner tracks the cursor at the offset it was grabbed with
         const cx = wx - drag.grab.dx;
         const cy = wy - drag.grab.dy;
-        const next =
-          drag.mode === "rescale"
-            ? gripRescale(n, drag.base, cx, cy, others, rule.radix, rule.sizeLaw)
-            : gripResize(n, cx, cy, others, rule.radix, rule.sizeLaw);
+        const next = gripSizeFromCorner(n, drag.corner, drag.mode, drag.base, cx, cy, others);
         if (
+          next.x !== n.x ||
+          next.y !== n.y ||
           next.w !== n.w ||
           next.h !== nodeHeight(n) ||
           next.scale !== contentScale(n)
         ) {
+          n.x = next.x;
+          n.y = next.y;
           n.w = next.w;
           n.h = next.h;
           n.scale = next.scale;
           drag.moved = true;
+          options.onNodeMove?.(n.id, { x: n.x, y: n.y });
           options.onNodeResize?.(n.id, {
+            x: n.x,
+            y: n.y,
             w: n.w,
             h: nodeHeight(n),
             scale: next.scale,
@@ -1515,6 +1638,11 @@ export function createRgui(
       } else if (drag.type === "wire") {
         drag.toSx = vx0;
         drag.toSy = vy0;
+      } else if (drag.type === "smartLink") {
+        drag.toSx = vx0;
+        drag.toSy = vy0;
+        if (Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4)
+          drag.moved = true;
       } else if (drag.type === "node") {
         if (drag.node.pinned) return; // pinned nodes do not move
         // SNAP ON THE RENDERED PLANE: grid-align the target in display
@@ -1609,6 +1737,8 @@ export function createRgui(
     if (drag.type === "resize") {
       if (drag.moved)
         options.onNodeResizeEnd?.(drag.node.id, {
+          x: drag.node.x,
+          y: drag.node.y,
           w: drag.node.w,
           h: nodeHeight(drag.node),
           scale: contentScale(drag.node),
@@ -1700,6 +1830,22 @@ export function createRgui(
         options.onConnectEnd?.(drag.from.ref, {
           screen: { x: ev.offsetX, y: ev.offsetY },
           world: { x: wx, y: wy },
+        });
+      }
+    } else if (drag.type === "smartLink") {
+      if (drag.moved) {
+        rightDragMoved = true;
+        const [vux, vuy] = toView(ev.offsetX, ev.offsetY);
+        const target = hitAt(vux, vuy);
+        const [wx, wy] = screenToWorld(view, vux, vuy);
+        const targetNodeId =
+          target?.type === "node" && target.node.id !== drag.from.id
+            ? target.node.id
+            : undefined;
+        options.onSmartLinkEnd?.(drag.from.id, {
+          screen: { x: ev.offsetX, y: ev.offsetY },
+          world: { x: wx, y: wy },
+          targetNodeId,
         });
       }
     } else if (drag.type === "node") {
@@ -2269,6 +2415,20 @@ export function createRgui(
       panels = next;
       invalidate();
     },
+    debugPanels() {
+      return {
+        count: panels.length,
+        ids: panels.map((p) => p.id),
+        rects: lastPanelRects.map((r) => ({
+          id: r.panel.id,
+          x: r.x,
+          y: r.y,
+          w: r.w,
+          h: r.h,
+          items: r.panel.items.length,
+        })),
+      };
+    },
     setNodeOverlay(
       nodeId: string,
       overlay: HTMLElement | NodeHtmlOverlay | null,
@@ -2443,6 +2603,27 @@ export function createRgui(
       const k = Math.min(
         (W - 2 * paddingPx) / (x1 - x0),
         (H - 2 * paddingPx) / (y1 - y0),
+        1e6,
+      );
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity.translate(W / 2 - cx * k, H / 2 - cy * k).scale(k),
+      );
+    },
+    fitNode(nodeId: string, paddingPx = 16) {
+      const n = graph.nodes.find((x) => x.id === nodeId);
+      if (!n) return;
+      const x0 = n.x;
+      const y0 = n.y;
+      const x1 = n.x + n.w;
+      const y1 = n.y + nodeHeight(n);
+      const W = canvas.clientWidth;
+      const H = canvas.clientHeight;
+      const k = Math.min(
+        (W - 2 * paddingPx) / Math.max(1, x1 - x0),
+        (H - 2 * paddingPx) / Math.max(1, y1 - y0),
         1e6,
       );
       const cx = (x0 + x1) / 2;

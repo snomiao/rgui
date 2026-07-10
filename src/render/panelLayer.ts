@@ -201,6 +201,14 @@ export function drawPanels(
   if (theme) T = theme;
   const cov = panelCoverage(rects);
   ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.filter = "none";
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.setLineDash([]);
   ctx.textBaseline = "middle";
   for (const r of rects) {
     const c: SideCoverage = cov.get(r.panel.id) ?? {
