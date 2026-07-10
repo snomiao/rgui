@@ -169,6 +169,31 @@ export {
   type GripBase,
   type GripSize,
 } from "./core/grip.js";
+export {
+  FEDERATED_GRAPH_KIND,
+  FEDERATED_GRAPH_SCHEMA,
+  FEDERATED_DEMO_CHAIN_IDS,
+  clampFederatedGraph,
+  federatedDemoChain,
+  federatedDemoChainGraph,
+  federatedGraphToRgui,
+  federatedEmbedUrl,
+  federatedNodeId,
+  federatedOriginOf,
+  federatedTerminalPreview,
+  isFederatedGraphEnvelope,
+  type FederatedEdge,
+  type FederatedGraphEnvelope,
+  type FederatedNode,
+  type FederatedPort,
+  type FederatedProducer,
+  type FederationClampOptions,
+} from "./core/federation.js";
+export {
+  terminalPreviewDraw,
+  TERMINAL_STATUS_COLOR,
+  type TerminalPreview,
+} from "./render/terminalPreview.js";
 
 // renderers (Canvas 2D first impl)
 export {

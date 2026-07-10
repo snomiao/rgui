@@ -528,7 +528,7 @@ function drawNode(
     drawNodeBorder(ctx, n, h, [tl, tr, br, bl], cov);
     drawNodePin(ctx, n);
     drawNodePorts(ctx, n, k, rule, layout);
-    drawResizeGrip(ctx, n, h);
+    drawResizeGrips(ctx, n, h);
     return;
   }
 
@@ -602,7 +602,7 @@ function drawNode(
   }
 
   drawNodePorts(ctx, n, k, rule, layout);
-  drawResizeGrip(ctx, n, h);
+  drawResizeGrips(ctx, n, h);
 }
 
 /**
@@ -653,24 +653,30 @@ function drawContainerFrame(
 
   drawNodePin(ctx, n);
   drawNodePorts(ctx, n, k, rule, layout);
-  drawResizeGrip(ctx, n, h);
+  drawResizeGrips(ctx, n, h);
 }
 
-/** diagonal grip lines at the bottom-right corner (resize affordance) */
-function drawResizeGrip(ctx: CanvasRenderingContext2D, n: GraphNode, h: number) {
+/** diagonal grip lines at every corner (resize affordance) */
+function drawResizeGrips(ctx: CanvasRenderingContext2D, n: GraphNode, h: number) {
   const s = contentScale(n);
-  const x = n.x + n.w;
-  const y = n.y + h;
+  const corners = [
+    { x: n.x, y: n.y, sx: 1, sy: 1 },
+    { x: n.x + n.w, y: n.y, sx: -1, sy: 1 },
+    { x: n.x + n.w, y: n.y + h, sx: -1, sy: -1 },
+    { x: n.x, y: n.y + h, sx: 1, sy: -1 },
+  ];
   ctx.save();
   ctx.strokeStyle = T.textMuted;
   ctx.globalAlpha = 0.35;
   ctx.lineWidth = 1.2 * s;
-  ctx.beginPath();
-  ctx.moveTo(x - 9 * s, y - 3 * s);
-  ctx.lineTo(x - 3 * s, y - 9 * s);
-  ctx.moveTo(x - 5.5 * s, y - 3 * s);
-  ctx.lineTo(x - 3 * s, y - 5.5 * s);
-  ctx.stroke();
+  for (const c of corners) {
+    ctx.beginPath();
+    ctx.moveTo(c.x + c.sx * 9 * s, c.y + c.sy * 3 * s);
+    ctx.lineTo(c.x + c.sx * 3 * s, c.y + c.sy * 9 * s);
+    ctx.moveTo(c.x + c.sx * 5.5 * s, c.y + c.sy * 3 * s);
+    ctx.lineTo(c.x + c.sx * 3 * s, c.y + c.sy * 5.5 * s);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 function drawNodeBorder(
@@ -680,6 +686,10 @@ function drawNodeBorder(
   radii: [number, number, number, number],
   cov: SideCoverage,
 ) {
+  const busy = typeof n.busy === "function" ? n.busy() : !!n.busy;
+  const remote = typeof n.remote === "function" ? n.remote() : !!n.remote;
+  const shared = typeof n.shared === "function" ? n.shared() : !!n.shared;
+  const pulse = busy ? 0.55 + 0.45 * Math.sin(performance.now() / 130) : 0;
   const [tl, tr, br, bl] = radii;
   ctx.lineWidth = 1.5 * contentScale(n);
   ctx.strokeStyle = T.ink;
@@ -717,6 +727,40 @@ function drawNodeBorder(
   if (br) ctx.moveTo(n.x + n.w, n.y + h - br), ctx.arc(n.x + n.w - br, n.y + h - br, br, 0, 0.5 * Math.PI);
   if (bl) ctx.moveTo(n.x + bl, n.y + h), ctx.arc(n.x + bl, n.y + h - bl, bl, 0.5 * Math.PI, Math.PI);
   ctx.stroke();
+  if (remote) {
+    ctx.save();
+    ctx.lineWidth = 2.2 * contentScale(n);
+    ctx.strokeStyle = withAlpha("#facc15", 0.9);
+    ctx.shadowColor = withAlpha("#facc15", 0.28);
+    ctx.shadowBlur = 5 * contentScale(n);
+    ctx.beginPath();
+    ctx.roundRect(n.x, n.y, n.w, h, radii);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (shared) {
+    // outbound twin of the remote halo: THIS node is published to others
+    ctx.save();
+    ctx.lineWidth = 2.2 * contentScale(n);
+    ctx.strokeStyle = withAlpha("#3fb950", 0.9);
+    ctx.shadowColor = withAlpha("#3fb950", 0.28);
+    ctx.shadowBlur = 5 * contentScale(n);
+    ctx.beginPath();
+    ctx.roundRect(n.x, n.y, n.w, h, radii);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (busy) {
+    ctx.save();
+    ctx.lineWidth = (2.2 + pulse * 1.8) * contentScale(n);
+    ctx.strokeStyle = withAlpha("#fb923c", 0.5 + pulse * 0.45);
+    ctx.shadowColor = withAlpha("#fb923c", 0.35 + pulse * 0.35);
+    ctx.shadowBlur = 7 * contentScale(n);
+    ctx.beginPath();
+    ctx.roundRect(n.x, n.y, n.w, h, radii);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function drawNodePin(ctx: CanvasRenderingContext2D, n: GraphNode) {
@@ -989,12 +1033,16 @@ function drawPort(
   if (dir === 0) {
     ctx.arc(x, y, r, 0, Math.PI * 2);
   } else {
-    // ">" chevron arrowhead with a back notch
+    // rounded isosceles right triangle: vertical hypotenuse (2r tall) on the
+    // back, 90° apex pointing along the flow
     const d = dir;
-    ctx.moveTo(x - 2.5 * s * d, y - r);
-    ctx.lineTo(x + (r - 0.5 * s) * d, y);
-    ctx.lineTo(x - 2.5 * s * d, y + r);
-    ctx.lineTo(x - 0.5 * s * d, y);
+    const ax = x + 0.5 * r * d; // apex
+    const bx = x - 0.5 * r * d; // back (hypotenuse) edge
+    const cr = Math.min(1.5 * s, r * 0.4);
+    ctx.moveTo(x, y + r / 2); // midpoint of the lower leg
+    ctx.arcTo(ax, y, bx, y - r, cr);
+    ctx.arcTo(bx, y - r, bx, y + r, cr);
+    ctx.arcTo(bx, y + r, ax, y, cr);
     ctx.closePath();
   }
   ctx.fillStyle = color;

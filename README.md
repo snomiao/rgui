@@ -277,6 +277,13 @@ is framework-agnostic pure functions and plain data.
   `isDuplicable`, `isAliasable`, `portMerge`, `splitQuantity`, `splitAtoms`, `routeIndex`,
   types `Measure`, `Ownership`, `Fanout`, `Grain`, `SignalSpec`, `Atomizer` — what a wire
   carries and what happens when it forks or converges. See [docs/signal.md](docs/signal.md)
+- **Federation** (`core/federation`): `FEDERATED_GRAPH_SCHEMA`,
+  `FEDERATED_DEMO_CHAIN_IDS`, `clampFederatedGraph`, `federatedGraphToRgui`,
+  `federatedDemoChain`, `federatedDemoChainGraph`, `federatedNodeId`,
+  types `FederatedGraphEnvelope`, `FederatedNode`, `FederatedEdge` — a read-only
+  semantic graph envelope for showing
+  agent-yes, otoji, and other systems in one canvas without moving transport/execution
+  policy into rgui. See [docs/federation.md](docs/federation.md)
 - **Layout** (`core/layout`): `layoutGraph`
 - **Renderers** (`render`): Canvas 2D layers, `createWebGPUGridRenderer` (grid underlay),
   panels (`panelLayout`/`drawPanels`), HTML overlays (`createOverlayManager`),

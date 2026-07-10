@@ -145,6 +145,16 @@ export interface GraphNode {
   /** custom block background fill (default #2b3036) */
   bg?: string;
   /**
+   * Host-owned visual state. `remote` marks a read-only mirror from a
+   * federated source; `shared` marks a LOCAL node the host is publishing
+   * outward (the inverse of remote); `busy` lets live runtimes pulse a node
+   * without changing the graph topology. All may be functions so hosts can
+   * reflect live state.
+   */
+  remote?: boolean | (() => boolean);
+  shared?: boolean | (() => boolean);
+  busy?: boolean | (() => boolean);
+  /**
    * annotation / sticky-card node: renders as a plain card frame (no header
    * band, ports, or field rows) whose rich content is the HTML `overlay` (or a
    * `draw` callback). It still lives in world space and drags/snaps/selects
