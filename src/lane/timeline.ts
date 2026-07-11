@@ -722,6 +722,7 @@ export function createTimelineSource(
     const botW = screenToWorldY(view, H);
     foldLabelRects = []; // repopulated by whichever event path draws labels
     foldHeaderAxes.length = 0; // pseudo-x-axes queued by folding tracks
+    heatCells.clear(); // per-cell densities, repopulated by folding tracks
 
     maybeFetch(view); // lazily pull real commits when zoomed to their scale
     drawEras(ctx, view, theme, H);
@@ -769,11 +770,11 @@ export function createTimelineSource(
     // (skipping the zone the track's own name occupies)
     ctx.font = "9px ui-monospace, Menlo, monospace";
     for (const ax of foldHeaderAxes) {
-      for (let m2 = 0; m2 < ax.fv.slots; m2 += ax.every) {
-        const x = ax.x0 + (m2 / ax.fv.slots) * ax.contentW + 2;
+      for (let m2 = 0; m2 < ax.div.slots; m2 += ax.every) {
+        const x = ax.x0 + (m2 / ax.div.slots) * ax.contentW + 2;
         if (x < ax.x0 + 68) continue; // leave room for the track name
         ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
-        ctx.fillText(tr(ax.fv.slotLabel(m2)), x, HEADER_H / 2);
+        ctx.fillText(tr(ax.div.slotLabel(m2)), x, HEADER_H / 2);
       }
     }
 
@@ -909,7 +910,8 @@ export function createTimelineSource(
     if (!Number.isFinite(tCenter) || !Number.isFinite(new Date(tCenter).getTime())) return;
     for (const lf of LADDER_FINE_FIRST) {
       const fv = FOLD_VIEWS[lf];
-      if (contentW / fv.slots < rem) continue;
+      const div = chooseDivision(fv, contentW, rem);
+      if (!div) continue;
       const p = fv.projector.project(tCenter);
       if (!p) continue;
       const start = foldRowStartMs(lf, p.rowIndex);
@@ -921,15 +923,55 @@ export function createTimelineSource(
 
       const gx = (phase: number) => x0 + 7 + phase * contentW;
 
+      // aggregate cell counts for this track at THIS level, then paint heat
+      // cells under the grid: the track's hue, lightness ramp by log2 bucket
+      const cells = new Map<number, number>();
+      heatCells.set(cat, { level: lf, cells });
+      const list = byCat.get(cat) ?? [];
+      for (const e of list) {
+        const t2 = tMsOfEv(e);
+        if (t2 == null) continue;
+        const pe = fv.projector.project(t2);
+        if (!pe) continue;
+        const slot = Math.floor(Math.min(0.999999, pe.phase0) * div.slots);
+        const key = pe.rowIndex * 64 + slot;
+        cells.set(key, (cells.get(key) ?? 0) + 1);
+      }
+      const darkTheme = srgbToOklch(theme.background as string).L < 0.5;
+      const slotWpx = contentW / div.slots;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const [key, n] of cells) {
+        const row = Math.floor(key / 64);
+        const slot = key % 64;
+        const ms0 = foldRowStartMs(lf, row);
+        const ms1 = foldRowStartMs(lf, row + 1);
+        if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+        const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
+        const cy1 = Math.min(Math.max(ya, yb), H);
+        if (cy1 <= cy0) continue;
+        ctx.fillStyle = heatCellColor(cat, n, darkTheme);
+        ctx.fillRect(gx(slot / div.slots), cy0, slotWpx, cy1 - cy0);
+        // selective direct label: the count, only when the cell affords it
+        if (n > HEAT_DOT_MAX && slotWpx >= 2 * rem && cy1 - cy0 >= 1.1 * rem) {
+          ctx.fillStyle = darkTheme ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.7)";
+          ctx.font = "9px ui-monospace, Menlo, monospace";
+          ctx.fillText(String(n), gx(slot / div.slots) + slotWpx / 2, (cy0 + cy1) / 2);
+        }
+      }
+      ctx.textAlign = "left";
+
       // vertical slot columns — every column gets a crisp 1px border (the
       // slot-width gate guarantees ≥1rem cells, so full grids stay readable);
       // identical x in every band (max-slot phases), so identical wall times
       // align down the whole track
       ctx.lineWidth = 1;
-      for (let m2 = 1; m2 < fv.slots; m2++) {
-        const major = m2 % fv.labelEvery === 0;
+      for (let m2 = 1; m2 < div.slots; m2++) {
+        const major = m2 % div.labelEvery === 0;
         ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.42 : 0.28);
-        const x = gx(m2 / fv.slots);
+        const x = gx(m2 / div.slots);
         ctx.beginPath();
         ctx.moveTo(Math.round(x) + 0.5, HEADER_H);
         ctx.lineTo(Math.round(x) + 0.5, H);
@@ -938,9 +980,9 @@ export function createTimelineSource(
 
       // pseudo-x-axis: slot labels live in the sticky header strip (drawn
       // last, above everything) — queue this track's axis for that pass
-      let every = fv.labelEvery;
-      while ((contentW / fv.slots) * every < 30 && every < fv.slots) every *= 2;
-      foldHeaderAxes.push({ x0: x0 + 7, contentW, fv, every });
+      let every = div.labelEvery;
+      while ((contentW / div.slots) * every < 30 && every < div.slots) every *= 2;
+      foldHeaderAxes.push({ x0: x0 + 7, contentW, div, every });
 
       // horizontal cycle-band separators + month ghost placeholders
       const drawRow = (row: number): number | null => {
@@ -1024,6 +1066,13 @@ export function createTimelineSource(
       // to the band and takes its phase-x — same helper the hit-test uses
       const fp = trackFoldPos(e, view, x0, w);
       if (fp) {
+        // dense cells are represented by their heat shade + count label —
+        // individual dots would just overplot (hover still resolves them)
+        const hc = heatCells.get(e.cat);
+        if (hc && hc.level === fp.level && (hc.cells.get(fp.row * 64 + fp.slot) ?? 0) > HEAT_DOT_MAX) {
+          glide.delete(e); // no stale glide origin while represented by the cell
+          continue;
+        }
         const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
         if (g.moving) anyGliding = true;
         ctx.beginPath();
@@ -1283,18 +1332,65 @@ export function createTimelineSource(
   };
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const WDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const DAYPARTS = ["Night", "Morning", "Afternoon", "Evening"];
   const p2 = (n: number) => String(n).padStart(2, "0");
-  /** per-fold view config: projector + phase-slot chrome. `labelEvery` puts a
-   *  header label (and a brighter gridline) on every Nth slot boundary. */
-  const FOLD_VIEWS = {
-    year: { projector: foldYearProjector, slots: 12, slotLabel: (i: number) => MONTHS[i]!, labelEvery: 1 },
-    month: { projector: foldMonthProjector, slots: 31, slotLabel: (i: number) => String(i + 1), labelEvery: 5 },
+  /** a slot division of a fold row: how the phase axis subdivides. Rows can
+   *  offer several, fine→coarse — the finest whose columns stay ≥1rem wide
+   *  wins (taku: year shows quarters when 12 months don't fit; month shows
+   *  W1..W5 weeks until a super-wide track affords 31 day columns; day shows
+   *  the TODO's four dayparts when 24 hour columns don't fit). Event x comes
+   *  from the continuous phase, so the division changes only the chrome and
+   *  the heat-cell aggregation, never positions. */
+  interface FoldDivision {
+    slots: number;
+    slotLabel: (i: number) => string;
+    labelEvery: number;
+  }
+  const FOLD_VIEWS: Record<
+    Exclude<TimelineFold, "none">,
+    { projector: (typeof foldYearProjector); divisions: FoldDivision[] }
+  > = {
+    year: {
+      projector: foldYearProjector,
+      divisions: [
+        { slots: 12, slotLabel: (i) => MONTHS[i]!, labelEvery: 1 },
+        { slots: 4, slotLabel: (i) => `Q${i + 1}`, labelEvery: 1 },
+      ],
+    },
+    month: {
+      projector: foldMonthProjector,
+      divisions: [
+        { slots: 31, slotLabel: (i) => String(i + 1), labelEvery: 5 },
+        // 7-day week slots over the 31-day measure: W5 is the short tail
+        { slots: 31 / 7, slotLabel: (i) => `W${i + 1}`, labelEvery: 1 },
+      ],
+    },
     // single-letter weekday initials read at any slot width (Monday-start;
     // weekStartsOn config is a TODO — Sunday-start would read SMTWTFS)
-    week: { projector: foldWeekProjector, slots: 7, slotLabel: (i: number) => WDAYS[i]![0]!, labelEvery: 1 },
-    day: { projector: foldDayProjector, slots: 24, slotLabel: (i: number) => `${p2(i)}h`, labelEvery: 3 },
-    hour: { projector: foldHourProjector, slots: 60, slotLabel: (i: number) => `:${p2(i)}`, labelEvery: 5 },
-  } as const;
+    week: {
+      projector: foldWeekProjector,
+      divisions: [{ slots: 7, slotLabel: (i) => WDAYS[i]![0]!, labelEvery: 1 }],
+    },
+    day: {
+      projector: foldDayProjector,
+      divisions: [
+        { slots: 24, slotLabel: (i) => `${p2(i)}h`, labelEvery: 3 },
+        { slots: 4, slotLabel: (i) => DAYPARTS[i]!, labelEvery: 1 },
+      ],
+    },
+    hour: {
+      projector: foldHourProjector,
+      divisions: [
+        { slots: 60, slotLabel: (i) => `:${p2(i)}`, labelEvery: 5 },
+        { slots: 4, slotLabel: (i) => `:${p2(i * 15)}`, labelEvery: 1 },
+      ],
+    },
+  };
+  /** finest division whose columns stay ≥1rem within the content measure */
+  const chooseDivision = (fv: (typeof FOLD_VIEWS)[Exclude<TimelineFold, "none">], contentW: number, rem: number): FoldDivision | null => {
+    for (const d of fv.divisions) if (contentW / d.slots >= rem) return d;
+    return null;
+  };
   const foldView = () => FOLD_VIEWS[fold as Exclude<TimelineFold, "none">];
   /** label for any fold row, including empty ones (via the row's start instant) */
   const foldRowLabel = (rowIndex: number) => {
@@ -1326,8 +1422,49 @@ export function createTimelineSource(
   /** label rects placed by the last folded draw — labels are hover targets
    *  too, not just their dots (codex review) */
   let foldLabelRects: { x0: number; x1: number; y: number; e: Ev }[] = [];
+  // ── OKLCH heat-cells: per-cell event density in the fold grid ─────────────
+  // The track already spends HUE on identity, so within a track density is
+  // pure magnitude: the track's hue with an OKLCH lightness ramp (sequential,
+  // one hue, light→dark — CVD-safe because magnitude never rides on hue).
+  // Counts bucket on a fixed log2 ladder (1,2,4,8,16+) so scrolling never
+  // re-normalizes colors. Sparse cells (≤3) keep their dots; dense cells
+  // suppress dots and label the count when the cell affords it.
+  const srgbToOklch = (() => {
+    const cache = new Map<string, { L: number; C: number; H: number }>();
+    return (hex: string) => {
+      let v = cache.get(hex);
+      if (v) return v;
+      const n = parseInt(hex.slice(1), 16);
+      const lin = (u: number) => (u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4));
+      const r = lin(((n >> 16) & 255) / 255);
+      const g = lin(((n >> 8) & 255) / 255);
+      const b = lin((n & 255) / 255);
+      const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+      const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+      const s2 = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+      const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s2;
+      const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s2;
+      const bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s2;
+      v = { L, C: Math.hypot(a, bb), H: ((Math.atan2(bb, a) * 180) / Math.PI + 360) % 360 };
+      cache.set(hex, v);
+      return v;
+    };
+  })();
+  /** cell fill for `count` events in a category cell, per theme surface */
+  const heatCellColor = (cat: Cat, count: number, darkTheme: boolean): string => {
+    const { C, H } = srgbToOklch(CAT_COLOR[cat]);
+    const step = Math.min(4, Math.log2(1 + count)); // 1,2,4,8,16+ buckets
+    const L = darkTheme ? 0.3 + 0.115 * step : 0.93 - 0.1 * step;
+    const c = Math.min(0.11, C) * (0.55 + 0.11 * step);
+    return `oklch(${L.toFixed(3)} ${c.toFixed(3)} ${H.toFixed(1)})`;
+  };
+  /** per-frame cell counts per track (cat → rowIndex*64+slot → n), shared by
+   *  the grid pass (fills + labels) and the event pass (dot suppression) */
+  const heatCells = new Map<Cat, { level: string; cells: Map<number, number> }>();
+  const HEAT_DOT_MAX = 3; // cells with more events than this drop their dots
+
   /** pseudo-x-axis specs queued by folding tracks for the sticky header */
-  const foldHeaderAxes: { x0: number; contentW: number; fv: (typeof FOLD_VIEWS)[keyof typeof FOLD_VIEWS]; every: number }[] = [];
+  const foldHeaderAxes: { x0: number; contentW: number; div: FoldDivision; every: number }[] = [];
 
   // ── fold-switch morph-lite ────────────────────────────────────────────────
   // On a fold change, every event glyph glides from its OLD screen position to
@@ -1413,7 +1550,8 @@ export function createTimelineSource(
     const contentW = trackContentW(w, rem);
     for (const lf of LADDER_FINE_FIRST) {
       const fv = FOLD_VIEWS[lf];
-      if (contentW / fv.slots < rem) continue; // columns unreadable → coarser
+      const div = chooseDivision(fv, contentW, rem);
+      if (!div) continue; // no division's columns readable → coarser level
       const p = fv.projector.project(t);
       if (!p) continue;
       const start = foldRowStartMs(lf, p.rowIndex);
@@ -1427,6 +1565,8 @@ export function createTimelineSource(
         y: (yTop + yBot) / 2,
         level: lf,
         bandPx: Math.abs(yBot - yTop),
+        row: p.rowIndex,
+        slot: Math.floor(Math.min(0.999999, p.phase0) * div.slots),
       };
     }
     return null;
@@ -1451,7 +1591,8 @@ export function createTimelineSource(
     const H = view.height;
     const usableW = Math.max(40, W - FOLD_X0 - 8);
     const rowH = view.zoomY; // one row = 1.0 world unit = one fold period
-    const fv = foldView();
+    const fv0 = foldView();
+    const fv = { ...fv0, ...fv0.divisions[0]! }; // legacy path: finest division
     const yearTop = Math.floor(screenToWorldY(view, 0) + 0.5);
     const yearBot = Math.ceil(screenToWorldY(view, H) + 0.5);
     const phaseX = (p: number) => FOLD_X0 + p * usableW;
