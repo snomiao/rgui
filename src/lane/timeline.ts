@@ -772,7 +772,7 @@ export function createTimelineSource(
     for (const ax of foldHeaderAxes) {
       for (let m2 = 0; m2 < ax.div.slots; m2 += ax.every) {
         const x = ax.x0 + (m2 / ax.div.slots) * ax.contentW + 2;
-        if (x < ax.x0 + 68) continue; // leave room for the track name
+        if (x < ax.x0 + 62) continue; // leave room for the track name
         ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
         ctx.fillText(tr(ax.div.slotLabel(m2)), x, HEADER_H / 2);
       }
@@ -921,7 +921,7 @@ export function createTimelineSource(
       const yBot0 = worldToScreenY(view, worldOf(ybpOfTMs(end)));
       if (Math.abs(yBot0 - yTop0) < rem) continue;
 
-      const gx = (phase: number) => x0 + 7 + phase * contentW;
+      const gx = (phase: number) => trackContentX0(x0, rem) + phase * contentW;
 
       // aggregate cell counts for this track at THIS level, then paint heat
       // cells under the grid: the track's hue, lightness ramp by log2 bucket
@@ -982,9 +982,9 @@ export function createTimelineSource(
       // last, above everything) — queue this track's axis for that pass
       let every = div.labelEvery;
       while ((contentW / div.slots) * every < 30 && every < div.slots) every *= 2;
-      foldHeaderAxes.push({ x0: x0 + 7, contentW, div, every });
+      foldHeaderAxes.push({ x0: trackContentX0(x0, rem), contentW, div, every });
 
-      // horizontal cycle-band separators + month ghost placeholders
+      // horizontal cycle-band separators + y-axis row labels + month ghosts
       const drawRow = (row: number): number | null => {
         const ms = foldRowStartMs(lf, row);
         if (!Number.isFinite(ms)) return null;
@@ -995,6 +995,25 @@ export function createTimelineSource(
           ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
           ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
           ctx.stroke();
+        }
+        // y axis: which cycle this band IS — labeled at the band's top-left
+        {
+          const nextMs = foldRowStartMs(lf, row + 1);
+          if (Number.isFinite(nextMs)) {
+            const y1 = worldToScreenY(view, worldOf(ybpOfTMs(nextMs)));
+            const top = Math.min(y, y1);
+            const bandPx = Math.abs(y1 - y);
+            if (bandPx >= 13 && top + 8 >= HEADER_H && top <= H) {
+              const label = fv.projector.project(ms)?.rowLabel;
+              if (label) {
+                ctx.font = "9px ui-monospace, Menlo, monospace";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
+                ctx.fillText(label, x0 + 4, top + Math.min(bandPx / 2, 9));
+              }
+            }
+          }
         }
         // ghost slots: a 28..30-day month leaves its 29..31 columns blank —
         // dim the placeholder region so alignment reads as intentional
@@ -1536,8 +1555,12 @@ export function createTimelineSource(
       ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
       : 16;
   const LADDER_FINE_FIRST = ["hour", "day", "week", "month", "year"] as const;
+  /** slim y-axis gutter inside a folding track: row labels live here,
+   *  uncovered by phase-0 events */
+  const Y_GUTTER_REM = 2.6;
+  const trackContentX0 = (x0: number, rem: number) => x0 + Y_GUTTER_REM * rem;
   const trackContentW = (w: number, rem: number) =>
-    Math.min(w - 14, TRACK_FOLD_MAX_CONTENT_REM * rem);
+    Math.min(w - Y_GUTTER_REM * rem - 8, TRACK_FOLD_MAX_CONTENT_REM * rem);
   /** folded position of a dated event inside its track, or null (classic rail).
    *  Picks the FINEST fold level whose local cycle band is ≥1rem tall and
    *  whose phase slots are ≥1rem wide within the track's content measure. */
@@ -1561,7 +1584,7 @@ export function createTimelineSource(
       const yBot = worldToScreenY(view, worldOf(ybpOfTMs(end)));
       if (Math.abs(yBot - yTop) < rem) continue; // band unreadable → coarser
       return {
-        x: x0 + 7 + p.phase0 * contentW,
+        x: trackContentX0(x0, rem) + p.phase0 * contentW,
         y: (yTop + yBot) / 2,
         level: lf,
         bandPx: Math.abs(yBot - yTop),
