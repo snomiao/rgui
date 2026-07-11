@@ -13,7 +13,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: root + "index.html",
-        lane: root + "lane.html",
+        lane: root + "lane/index.html",
       },
     },
   },
