@@ -77,6 +77,39 @@
       #debug .dim { color: var(--text-muted); }
       #debug .hi { color: var(--accent); }
 
+      .demo-switch {
+        position: fixed;
+        top: 10px;
+        left: 12px;
+        z-index: 40;
+        display: inline-flex;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--panel);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .demo-switch a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 32px;
+        padding: 0 13px;
+        color: var(--text-dim);
+        text-decoration: none;
+        font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        transition: color 120ms, background 120ms;
+      }
+      .demo-switch a + a {
+        border-left: 1px solid var(--border);
+      }
+      .demo-switch a:hover {
+        color: var(--accent);
+      }
+      .demo-switch a[aria-current="page"] {
+        color: var(--bg);
+        background: var(--accent);
+      }
+
       /* ── Hero overlay ─────────────────────────────────────────────
          Sits on top of the live rgui canvas without stealing pointer
          events, so the graph underneath stays pannable/zoomable.
@@ -278,6 +311,11 @@
   <body>
     <canvas id="viewer"></canvas>
     <div id="debug"></div>
+
+    <nav class="demo-switch" aria-label="rgui demo switch">
+      <a href="./index.html" aria-current="page">Graph</a>
+      <a href="./lane.html">Lane</a>
+    </nav>
 
     <div id="radix">
       <div class="row" role="group" aria-label="grid radix">
