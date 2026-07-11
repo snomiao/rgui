@@ -148,6 +148,9 @@ describe("evTimestampMs", () => {
 import { describe as describe2, expect as expect2, test as test2 } from "bun:test";
 import {
   foldMonthProjector,
+  foldDecadeProjector,
+  foldCenturyProjector,
+  foldMillenniumProjector,
   foldWeekProjector,
   foldDayProjector,
   foldHourProjector,
@@ -210,9 +213,79 @@ describe2("finer fold projectors", () => {
   });
 
   test2("FOLD_PERIOD_MS descends through the ladder", () => {
-    const order = ["year", "month", "week", "day", "hour"];
+    const order = ["millennium", "century", "decade", "year", "month", "week", "day", "hour"];
     for (let i = 1; i < order.length; i++) {
       expect2(FOLD_PERIOD_MS[order[i]!]!).toBeLessThan(FOLD_PERIOD_MS[order[i - 1]!]!);
+    }
+  });
+});
+
+describe2("decimal year fold projectors", () => {
+  test2("flips rows at decimal boundaries", () => {
+    const y1999 = foldDecadeProjector.project(utcDateMs(1999, 11, 31))!;
+    const y2000 = foldDecadeProjector.project(utcDateMs(2000))!;
+    expect2(y1999.rowIndex).toBe(199);
+    expect2(y1999.rowKey).toBe("1990s");
+    expect2(y2000.rowIndex).toBe(200);
+    expect2(y2000.rowKey).toBe("2000s");
+    expect2(y2000.phase0).toBe(0);
+
+    expect2(foldCenturyProjector.project(utcDateMs(1999))!.rowKey).toBe("1900s");
+    expect2(foldCenturyProjector.project(utcDateMs(2000))!.rowKey).toBe("2000s");
+    expect2(foldMillenniumProjector.project(utcDateMs(999, 11, 31))!.rowKey).toBe("0s");
+    expect2(foldMillenniumProjector.project(utcDateMs(1000))!.rowKey).toBe("1000s");
+  });
+
+  test2("uses floor semantics for zero and negative years", () => {
+    const zero = foldDecadeProjector.project(utcDateMs(0))!;
+    const nine = foldDecadeProjector.project(utcDateMs(9, 11, 31))!;
+    const minusOne = foldDecadeProjector.project(utcDateMs(-1))!;
+    const minusTen = foldDecadeProjector.project(utcDateMs(-10))!;
+    expect2({ row: zero.rowIndex, phase: zero.phase0, key: zero.rowKey }).toEqual({
+      row: 0, phase: 0, key: "0s",
+    });
+    expect2(nine.rowIndex).toBe(0);
+    expect2(nine.phase0).toBeGreaterThan(0.9);
+    expect2(minusOne.rowIndex).toBe(-1);
+    expect2(minusOne.rowKey).toBe("-10s");
+    expect2(minusOne.phase0).toBe(0.9);
+    expect2(minusTen.rowIndex).toBe(-1);
+    expect2(minusTen.phase0).toBe(0);
+  });
+
+  test2("aligns the same wall date at the same phase within decimal slots", () => {
+    const a = foldDecadeProjector.project(utcDateMs(1991, 6, 11))!;
+    const b = foldDecadeProjector.project(utcDateMs(2001, 6, 11))!;
+    expect2(a.phase0).toBeCloseTo(b.phase0, 14);
+
+    const c = foldCenturyProjector.project(utcDateMs(1924, 1, 29,))!;
+    const d = foldCenturyProjector.project(utcDateMs(2024, 1, 29))!;
+    expect2(c.phase0).toBeCloseTo(d.phase0, 14);
+  });
+
+  test2("foldRowStartMs inverts decimal rows including negative rows", () => {
+    for (const projector of [foldDecadeProjector, foldCenturyProjector, foldMillenniumProjector]) {
+      for (const rowIndex of [-2, -1, 0, 1, 19]) {
+        const start = foldRowStartMs(projector.id, rowIndex);
+        const projected = projector.project(start)!;
+        expect2(projected.rowIndex).toBe(rowIndex);
+        expect2(projected.phase0).toBe(0);
+        expect2(projector.project(start - 1)!.rowIndex).toBe(rowIndex - 1);
+      }
+    }
+  });
+
+  test2("rejects TimeClip edge rows or preserves a total inverse", () => {
+    for (const projector of [foldDecadeProjector, foldCenturyProjector, foldMillenniumProjector]) {
+      for (const t of [-8.64e15, 8.64e15, -8.64e15 + 1, 8.64e15 - 1]) {
+        const projected = projector.project(t);
+        if (!projected) continue;
+        const start = foldRowStartMs(projector.id, projected.rowIndex);
+        const end = foldRowStartMs(projector.id, projected.rowIndex + 1);
+        expect2(Number.isFinite(new Date(start).getTime())).toBe(true);
+        expect2(Number.isFinite(new Date(end).getTime())).toBe(true);
+        expect2(projector.project(start)!.rowIndex).toBe(projected.rowIndex);
+      }
     }
   });
 });

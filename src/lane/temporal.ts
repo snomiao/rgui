@@ -45,7 +45,15 @@ export type FoldWindowFragment = {
   full: boolean;
 };
 
-export type FoldId = "year" | "month" | "week" | "day" | "hour";
+export type FoldId =
+  | "millennium"
+  | "century"
+  | "decade"
+  | "year"
+  | "month"
+  | "week"
+  | "day"
+  | "hour";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MONTH_DAY_SLOTS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
@@ -132,6 +140,37 @@ export const foldYearProjector: TemporalProjector = {
   id: "year",
   project: projectFoldYear,
 };
+
+function decimalYearProjector(
+  id: "decade" | "century" | "millennium",
+  yearsPerRow: 10 | 100 | 1000,
+): TemporalProjector {
+  return {
+    id,
+    project(tMs) {
+      const yearProjection = projectFoldYear(tMs);
+      if (!yearProjection) return null;
+      const rowIndex = Math.floor(yearProjection.rowIndex / yearsPerRow);
+      if (!rowRepresentable(id, rowIndex)) return null;
+      const yearOffset = yearProjection.rowIndex - rowIndex * yearsPerRow;
+      const phase = (yearOffset + yearProjection.phase0) / yearsPerRow;
+      if (!(phase >= 0 && phase < 1)) return null;
+      const rowKey = `${rowIndex * yearsPerRow}s`;
+      return {
+        rowKey,
+        rowIndex,
+        rowLabel: rowKey,
+        phase0: phase,
+        phase1: phase,
+      };
+    },
+  };
+}
+
+/** Decimal year folds; rows contain 10 years, 10 decades, or 10 centuries. */
+export const foldDecadeProjector = decimalYearProjector("decade", 10);
+export const foldCenturyProjector = decimalYearProjector("century", 100);
+export const foldMillenniumProjector = decimalYearProjector("millennium", 1000);
 
 // ── finer folds — same contract, same max-slot equal-width principle ────────
 // rowIndex is always a context-free integer (stable across ingest); phase
@@ -232,6 +271,9 @@ export const foldHourProjector: TemporalProjector = {
 
 function projectorForFold(foldId: FoldId): TemporalProjector {
   switch (foldId) {
+    case "millennium": return foldMillenniumProjector;
+    case "century": return foldCenturyProjector;
+    case "decade": return foldDecadeProjector;
     case "year": return foldYearProjector;
     case "month": return foldMonthProjector;
     case "week": return foldWeekProjector;
@@ -303,12 +345,14 @@ function fracOfDayUTC(d: Date): number {
 /** the start instant of a fold row — inverse of project()'s rowIndex */
 export function foldRowStartMs(foldId: string, rowIndex: number): number {
   switch (foldId) {
+    case "millennium":
+      return utcYearStartMs(rowIndex * 1000);
+    case "century":
+      return utcYearStartMs(rowIndex * 100);
+    case "decade":
+      return utcYearStartMs(rowIndex * 10);
     case "year": {
-      // Date.UTC remaps years 0..99 to 1900..1999; setUTCFullYear does not
-      const d = new Date(0);
-      d.setUTCFullYear(rowIndex, 0, 1);
-      d.setUTCHours(0, 0, 0, 0);
-      return d.getTime();
+      return utcYearStartMs(rowIndex);
     }
     case "month": {
       const d = new Date(0);
@@ -327,8 +371,19 @@ export function foldRowStartMs(foldId: string, rowIndex: number): number {
   }
 }
 
+/** Date.UTC remaps years 0..99 to 1900..1999; setUTCFullYear does not. */
+function utcYearStartMs(year: number): number {
+  const d = new Date(0);
+  d.setUTCFullYear(year, 0, 1);
+  d.setUTCHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 /** nominal period length of a fold row (ms) — for scale-continuous mapping */
 export const FOLD_PERIOD_MS: Record<string, number> = {
+  millennium: 1000 * 365.2425 * DAY_MS,
+  century: 100 * 365.2425 * DAY_MS,
+  decade: 10 * 365.2425 * DAY_MS,
   year: 365.2425 * DAY_MS,
   month: (365.2425 / 12) * DAY_MS,
   week: WEEK_MS,
