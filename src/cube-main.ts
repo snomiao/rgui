@@ -24,6 +24,7 @@ import {
   preferredTargetLanguage,
   type NativeTextTranslator,
 } from "./i18n/browserTranslator.js";
+import { stereoPanelCameras, updateStereoCameras } from "./stereo/rig.js";
 
 type Theme = "dark" | "light";
 type ThemeChoice = Theme | "auto";
@@ -1257,7 +1258,7 @@ function render() {
   }
   scene.updateMatrixWorld();
   camera.updateMatrixWorld();
-  stereoCamera.update(camera);
+  updateStereoCameras(stereoCamera, camera);
 
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
@@ -1269,10 +1270,7 @@ function render() {
   renderer.clear();
   renderer.setScissorTest(true);
 
-  const leftPanelCamera =
-    stereoMode === "parallel" ? stereoCamera.cameraL : stereoCamera.cameraR;
-  const rightPanelCamera =
-    stereoMode === "parallel" ? stereoCamera.cameraR : stereoCamera.cameraL;
+  const [leftPanelCamera, rightPanelCamera] = stereoPanelCameras(stereoCamera, stereoMode);
 
   renderer.setScissor(0, 0, leftWidth, height);
   renderer.setViewport(0, 0, leftWidth, height);
@@ -1300,13 +1298,11 @@ function pickedCell(clientX: number, clientY: number): number | undefined {
   );
 
   updateCamera();
-  stereoCamera.update(camera);
+  updateStereoCameras(stereoCamera, camera);
   const eyeCamera =
     leftEye === (stereoMode === "parallel")
       ? stereoCamera.cameraL
       : stereoCamera.cameraR;
-  eyeCamera.projectionMatrixInverse.copy(eyeCamera.projectionMatrix).invert();
-  eyeCamera.updateMatrixWorld(true);
   raycaster.setFromCamera(pointerNdc, eyeCamera);
   const hits = raycaster.intersectObjects(raycastMeshes, false);
   for (const hit of hits) {

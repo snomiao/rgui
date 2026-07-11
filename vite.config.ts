@@ -14,6 +14,7 @@ export default defineConfig({
         main: root + "index.html",
         lane: root + "lane/index.html",
         cube: root + "cube/index.html",
+        world: root + "world/index.html",
       },
     },
   },

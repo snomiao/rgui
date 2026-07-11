@@ -1,0 +1,28 @@
+:root { color-scheme: dark; --bg:#080b0c; --line:#435057; --text:#eff4f2; --accent:#ffd447; }
+* { box-sizing:border-box; }
+html,body,#world-app { width:100%; height:100%; margin:0; overflow:hidden; background:var(--bg); color:var(--text); font-family:ui-monospace,monospace; }
+#world-canvas { width:100%; height:100%; display:block; outline:none; cursor:none; }
+.world-divider { position:absolute; inset:0 auto 0 50%; width:1px; background:var(--line); pointer-events:none; }
+.world-hud,.world-help { position:absolute; width:50%; display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:#0b0f10d9; border-color:var(--line); font-size:11px; letter-spacing:0; pointer-events:none; }
+.world-hud { top:0; border-bottom:1px solid var(--line); }
+.world-help { bottom:0; border-top:1px solid var(--line); color:#aeb8bc; }
+.world-hud-left,.world-help-left { left:0; }
+.world-hud-right,.world-help-right { left:50%; }
+.world-hud a { color:var(--accent); font-weight:800; text-decoration:none; pointer-events:auto; }
+.world-cursors { position:absolute; inset:0; pointer-events:none; }
+.world-cursors i { position:absolute; top:0; left:0; width:18px; height:18px; border:1px solid var(--accent); border-radius:50%; transform:translate(-50%,-50%); will-change:left,top; }
+.world-cursors i::before,.world-cursors i::after { content:""; position:absolute; background:var(--accent); }
+.world-cursors i::before { left:3px; right:3px; top:8px; height:1px; }
+.world-cursors i::after { top:3px; bottom:3px; left:8px; width:1px; }
+.world-tools { position:absolute; bottom:36px; width:50%; display:flex; justify-content:center; gap:14px; align-items:center; pointer-events:none; font-size:10px; color:#b8c2c5; }
+.world-tools-left { left:0; } .world-tools-right { left:50%; }
+.world-tools .mode { color:var(--accent); font-weight:800; }
+.world-tools .slots { color:#83d7cd; }
+@media (max-width:720px) {
+  .world-hud { padding:8px 7px; font-size:9px; }
+  .world-hud .position,.world-hud .target { display:none; }
+  .world-help { padding:8px 6px; overflow:hidden; font-size:8px; white-space:nowrap; }
+  .world-tools { bottom:32px; gap:5px; font-size:8px; }
+  .world-tools .mass { display:none; }
+  .world-tools .slots { overflow:hidden; white-space:nowrap; }
+}

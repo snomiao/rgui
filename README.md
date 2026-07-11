@@ -46,6 +46,9 @@ Run `bun run dev`, then open one of the multi-page demo routes:
 - `/lane/` — the 1D semantic-zoom lane
 - `/cube/` — a 4x4x4 parallel- or cross-eye stereo number puzzle with a live
   RG merge lab and switchable matched/shared/split binocular wire labels
+- `/world/` — a walkable stereoscopic voxel-room prototype with focus-depth
+  navigation, object manipulation, view-only octree refinement, quick material
+  slots, and exactly conserved dyadic mining and placement
 
 The 3D experiment, its whole-interface stereo rendering, viewport-depth wheel
 focus, and implemented volumetric RG merge rules are documented in

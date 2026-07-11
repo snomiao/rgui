@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>rgui · world</title>
+    <link rel="icon" href="/assets/rgui-icon-32.png" />
+  </head>
+  <body>
+    <main id="world-app">
+      <canvas id="world-canvas" tabindex="0" aria-label="Stereoscopic RGUI world"></canvas>
+      <div class="world-divider" aria-hidden="true"></div>
+      <div class="world-cursors" aria-hidden="true"><i></i><i></i></div>
+      <header class="world-hud world-hud-left"><a href="/">RGUI WORLD</a><span class="position">0 1.6 5</span><span class="target">TARGET AIR</span><span class="focus">FOCUS 4.0m</span></header>
+      <header class="world-hud world-hud-right"><a href="/">RGUI WORLD</a><span class="position">0 1.6 5</span><span class="target">TARGET AIR</span><span class="focus">FOCUS 4.0m</span></header>
+      <footer class="world-help world-help-left">WASD MOVE · HJKL LOOK · U/I DEPTH · ENTER GRAB · ⌫ MINE · P PLACE</footer>
+      <footer class="world-help world-help-right">WASD MOVE · HJKL LOOK · U/I DEPTH · ENTER GRAB · ⌫ MINE · P PLACE</footer>
+      <section class="world-tools world-tools-left"><span class="mode">ENV</span><span class="mass">MASS 4.000m³</span><span class="slots"></span></section>
+      <section class="world-tools world-tools-right"><span class="mode">ENV</span><span class="mass">MASS 4.000m³</span><span class="slots"></span></section>
+    </main>
+    <script type="module" src="/src/world-main.ts"></script>
+  </body>
+</html>
