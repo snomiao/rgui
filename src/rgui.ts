@@ -277,8 +277,11 @@ export interface Rgui {
   /** selected node ids (click to select, shift+drag to box-select) */
   readonly selection: string[];
   setSelection(nodeIds: string[]): void;
-  /** programmatic viewport control (syncs d3-zoom state) */
-  setView(view: ViewTransform): void;
+  /** programmatic viewport control (syncs d3-zoom state). `animate` glides
+   * to the target (easeInOut pan + log-space zoom) instead of hard-switching —
+   * use it for focus/goto jumps so the user keeps spatial context. Any user
+   * zoom/pan gesture mid-flight cancels the glide. */
+  setView(view: ViewTransform, opts?: { animate?: boolean; durationMs?: number }): void;
   /** fit all nodes into the viewport with the given screen-px padding */
   fitView(paddingPx?: number): void;
   /** fit one node into the viewport with the given screen-px padding */
@@ -571,6 +574,42 @@ export function createRgui(
     return { nodes, edges: graph.edges };
   }
   let dGraph: Graph = graph;
+
+  // one glide at a time; a user gesture (zoomBehavior event with a sourceEvent)
+  // cancels it so the animation never fights the wheel/drag
+  let flyRaf = 0;
+  function cancelFly() {
+    if (flyRaf) cancelAnimationFrame(flyRaf);
+    flyRaf = 0;
+  }
+  /** glide the viewport to a target transform: easeInOut on pan, log-space on
+   * zoom (equal zoom RATIOS per frame read as constant speed) */
+  function flyTo(to: ViewTransform, durationMs = 320) {
+    cancelFly();
+    const from = { x: view.x, y: view.y, k: view.k };
+    const lk0 = Math.log(from.k);
+    const lk1 = Math.log(to.k);
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const u = Math.min(1, (now - t0) / durationMs);
+      const e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2; // easeInOut
+      const k = Math.exp(lk0 + (lk1 - lk0) * e);
+      // interpolate the world point under screen-center, not raw x/y — raw
+      // translate lerp combined with changing k makes the camera swerve
+      const W = canvas.clientWidth;
+      const H = canvas.clientHeight;
+      const c0 = { x: (W / 2 - from.x) / from.k, y: (H / 2 - from.y) / from.k };
+      const c1 = { x: (W / 2 - to.x) / to.k, y: (H / 2 - to.y) / to.k };
+      const cx = c0.x + (c1.x - c0.x) * e;
+      const cy = c0.y + (c1.y - c0.y) * e;
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity.translate(W / 2 - cx * k, H / 2 - cy * k).scale(k),
+      );
+      flyRaf = u < 1 ? requestAnimationFrame(step) : 0;
+    };
+    flyRaf = requestAnimationFrame(step);
+  }
 
   /** smooth-pan the viewport so the given world point lands center-screen */
   function panTo(cx: number, cy: number, durationMs = 280) {
@@ -2289,6 +2328,9 @@ export function createRgui(
       return !hitAt(fvx, fvy);
     })
     .on("zoom", (ev: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
+      // a USER gesture (wheel/drag → sourceEvent set) cancels any glide so the
+      // animation never fights the hand; programmatic frames have no sourceEvent
+      if (ev.sourceEvent) cancelFly();
       view = { x: ev.transform.x, y: ev.transform.y, k: ev.transform.k };
       invalidate();
     });
@@ -2586,7 +2628,12 @@ export function createRgui(
       );
       return { x: mx, y: my };
     },
-    setView(v: ViewTransform) {
+    setView(v: ViewTransform, opts?: { animate?: boolean; durationMs?: number }) {
+      if (opts?.animate) {
+        flyTo(v, opts.durationMs);
+        return;
+      }
+      cancelFly();
       sel.call(
         zoomBehavior.transform,
         zoomIdentity.translate(v.x, v.y).scale(v.k),
