@@ -327,10 +327,9 @@ function refreshChrome() {
   }
   if (foldBtn) {
     foldBtn.style.display = current === "time" ? "" : "none";
-    const f = timeSource.getFold();
-    foldBtn.textContent =
-      foldMode === "auto" ? `fold: auto (${f === "none" ? "off" : f})` : f === "none" ? "fold: off" : `fold: ${f}`;
-    foldBtn.setAttribute("aria-pressed", String(f !== "none"));
+    const on = timeSource.isTrackFold();
+    foldBtn.textContent = on ? "fold: auto" : "fold: off";
+    foldBtn.setAttribute("aria-pressed", String(on));
   }
   filters.style.display = current === "time" ? "flex" : "none";
   searchWrap.style.display = current === "time" ? "" : "none";
@@ -426,64 +425,21 @@ function applyFold(next: TimelineFold, spanMs: number) {
 }
 
 foldBtn?.addEventListener("click", () => {
-  // toggle auto ⇄ off (auto is the default; specific levels come from zoom)
-  foldMode = foldMode === "auto" ? "none" : "auto";
-  if (foldMode === "none" && timeSource.getFold() !== "none") {
-    const f = timeSource.getFold() as FoldLevel;
-    applyFold("none", (lane.view.height / lane.view.zoomY) * FOLD_PERIOD_MS[f]!);
-  }
+  // per-track folding on/off (on by default — folds whenever space allows)
+  timeSource.setTrackFold(!timeSource.isTrackFold());
   refreshChrome();
 });
 
 // auto-fold watcher: acts only once the view SETTLES (a few unchanged
 // frames) — firing mid zoom-gesture or mid focus-animation would re-anchor
 // on a transient center and land the fold somewhere the user wasn't going
-// The auto ladder evaluates EVERY frame — fold switches happen mid-gesture
-// (the rg flow: zoom IS the fold operation). Two guards only: lane focus()
-// animations finish first (they'd re-anchor on a transient center), and a
-// short min-interval between switches lets each morph read before the next.
-const SWITCH_MIN_GAP_MS = 140;
-let lastSwitchAt = 0;
-function autoFoldTick() {
-  requestAnimationFrame(autoFoldTick);
-  if (current !== "time" || foldMode !== "auto") return;
-  if (lane.isAnimating()) return;
-  if (performance.now() - lastSwitchAt < SWITCH_MIN_GAP_MS) return;
-  const v = lane.view;
-  const fold = timeSource.getFold();
-  if (fold === "none") {
-    const tTop = timeSource.tMsForWorld(v.scrollY);
-    const tBot = timeSource.tMsForWorld(v.scrollY + v.height / v.zoomY);
-    if (tTop == null || tBot == null) return; // deep-time: no calendar here
-    const spanMs = Math.abs(tBot - tTop);
-    const level = foldLevelFor(spanMs);
-    if (!level) return; // rows unreadable at every level → stay continuous
-    // only fold when the window actually INTERSECTS the dataset's year range
-    // (foldRowRange reports year rows while unfolded) — a center-year test
-    // rejected wide windows whose edge overlapped the data (codex review)
-    const yr = timeSource.foldRowRange();
-    const winMin = new Date(Math.min(tTop, tBot)).getUTCFullYear();
-    const winMax = new Date(Math.max(tTop, tBot)).getUTCFullYear();
-    if (winMax < yr.min - 10 || winMin > yr.max + 10) return;
-    lastSwitchAt = performance.now();
-    applyFold(level, spanMs);
-  } else {
-    const f = fold as FoldLevel;
-    const spanMs = (v.height / v.zoomY) * FOLD_PERIOD_MS[f]!;
-    // re-pick from readability with hysteresis for the current level; a fast
-    // zoom can fly several rungs at once, so this may jump levels or leave
-    // the ladder entirely (null → continuous, both ends). The min-zoom clamp
-    // needs no special case: parked at a small fold's extent the rows stay
-    // readable (stable no-op); zoomed out further they shrink below 1rem and
-    // the rule climbs coarser by itself.
-    const target = foldLevelFor(spanMs, f);
-    if (target !== f) {
-      lastSwitchAt = performance.now();
-      applyFold(target ?? "none", Math.max(spanMs, 60_000));
-    }
-  }
-}
-requestAnimationFrame(autoFoldTick);
+// The GLOBAL fold ladder is retired: per-track folding (timeline.ts
+// trackFoldPos) folds each track independently whenever ITS space allows —
+// the rg rule applied per element, with no global mode switch at all. The
+// global fold machinery (applyFold/foldLevelFor/setFold) stays for the
+// manual API and tests but no watcher drives it.
+void applyFold; // referenced: kept for manual/global fold paths
+void foldLevelFor;
 seg.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-src]");
   if (!btn) return;

@@ -481,6 +481,9 @@ export interface TimelineSource extends LaneSource {
   setPulse(hit: SearchHit): void;
   /** the calendar-year row range fold-year would cover (dated events + now) */
   foldRowRange(): { min: number; max: number };
+  /** per-track folding: fold events inside each track whenever space allows */
+  isTrackFold(): boolean;
+  setTrackFold(on: boolean): void;
   /** world-y of an instant under the CURRENT projection */
   worldForTMs(tMs: number): number;
   /** the event under a screen point (for hover cards), or null */
@@ -717,6 +720,7 @@ export function createTimelineSource(
     const H = view.height;
     const topW = screenToWorldY(view, 0);
     const botW = screenToWorldY(view, H);
+    foldLabelRects = []; // repopulated by whichever event path draws labels
 
     maybeFetch(view); // lazily pull real commits when zoomed to their scale
     drawEras(ctx, view, theme, H);
@@ -739,7 +743,10 @@ export function createTimelineSource(
     for (const t of tracks) {
       if (t.meta.cat === "periodic")
         drawPeriodic(ctx, view, theme, t.x0, t.w, H, topW, botW);
-      else drawTrackEvents(ctx, view, theme, t.x0, t.w, H, topW, botW, t.meta.cat);
+      else {
+        drawTrackFoldBands(ctx, view, theme, t.x0, t.w, H);
+        drawTrackEvents(ctx, view, theme, t.x0, t.w, H, topW, botW, t.meta.cat);
+      }
     }
 
     // sticky header strip on top of everything
@@ -869,6 +876,69 @@ export function createTimelineSource(
     ctx.fillText(`now · ${PRESENT_YEAR}`, W - 6, sy - 2);
   }
 
+  /** cycle-band separators inside a folding track: the finest level whose
+   *  band at the viewport center is readable draws its row boundaries */
+  function drawTrackFoldBands(
+    ctx: CanvasRenderingContext2D,
+    view: LaneView,
+    theme: RgTheme,
+    x0: number,
+    w: number,
+    H: number,
+  ) {
+    if (!trackFold || fold !== "none") return;
+    const rem = remPx();
+    if (w < TRACK_FOLD_MIN_W_REM * rem) return;
+    const contentW = trackContentW(w, rem);
+    const tCenter = tMsOfYbp(yBPof(screenToWorldY(view, H / 2)));
+    if (!Number.isFinite(tCenter) || !Number.isFinite(new Date(tCenter).getTime())) return;
+    for (const lf of LADDER_FINE_FIRST) {
+      const fv = FOLD_VIEWS[lf];
+      if (contentW / fv.slots < rem) continue;
+      const p = fv.projector.project(tCenter);
+      if (!p) continue;
+      const start = foldRowStartMs(lf, p.rowIndex);
+      const end = foldRowStartMs(lf, p.rowIndex + 1);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      const yTop = worldToScreenY(view, worldOf(ybpOfTMs(start)));
+      const yBot = worldToScreenY(view, worldOf(ybpOfTMs(end)));
+      const bandPx = Math.abs(yBot - yTop);
+      if (bandPx < rem) continue;
+      // walk visible cycle boundaries of this level (bounded)
+      ctx.strokeStyle = withAlpha(theme.textFaint, 0.26);
+      let row = p.rowIndex;
+      // up from the center row
+      for (let i = 0; i < 120; i++) {
+        const ms = foldRowStartMs(lf, row);
+        if (!Number.isFinite(ms)) break;
+        const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
+        if (y < HEADER_H - 2) break;
+        if (y <= H + 2) {
+          ctx.beginPath();
+          ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
+          ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
+          ctx.stroke();
+        }
+        row -= 1;
+      }
+      row = p.rowIndex + 1;
+      for (let i = 0; i < 120; i++) {
+        const ms = foldRowStartMs(lf, row);
+        if (!Number.isFinite(ms)) break;
+        const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
+        if (y > H + 2) break;
+        if (y >= HEADER_H - 2) {
+          ctx.beginPath();
+          ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
+          ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
+          ctx.stroke();
+        }
+        row += 1;
+      }
+      return; // finest readable level only
+    }
+  }
+
   function drawTrackEvents(
     ctx: CanvasRenderingContext2D,
     view: LaneView,
@@ -891,6 +961,7 @@ export function createTimelineSource(
     }
     vis.sort((a, b) => b.e.imp - a.e.imp);
     const placed: number[] = [];
+    const placedRects: { x0: number; x1: number; y: number }[] = [];
     const cx = x0 + 7;
     const vspan = view.height / view.zoomY; // visible time-span (world years)
     ctx.textBaseline = "middle";
@@ -900,6 +971,38 @@ export function createTimelineSource(
       if (vspan > infl * influenceDots()) continue; // out of influence → hidden
       const future = e.cat === "future";
       const inScale = vspan <= infl; // zoomed in enough to earn a label
+
+      // per-track fold: a dated event whose cycle band is readable quantizes
+      // to the band and takes its phase-x — same helper the hit-test uses
+      const fp = trackFoldPos(e, view, x0, w);
+      if (fp) {
+        ctx.beginPath();
+        ctx.arc(fp.x, fp.y, 3, 0, Math.PI * 2);
+        if (future) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        } else {
+          ctx.fillStyle = color;
+          ctx.fill();
+        }
+        if (inScale) {
+          ctx.font = "12px ui-monospace, Menlo, monospace";
+          ctx.textAlign = "left";
+          const text = fit(ctx, tr(e.label), x0 + w - fp.x - 12);
+          const lx0 = fp.x + 6;
+          const lx1 = lx0 + ctx.measureText(text).width + 6;
+          if (!placedRects.some((p) => Math.abs(p.y - fp.y) < 12 && lx0 < p.x1 && lx1 > p.x0)) {
+            placedRects.push({ x0: lx0, x1: lx1, y: fp.y });
+            foldLabelRects.push({ x0: lx0, x1: lx1, y: fp.y, e });
+            ctx.fillStyle = future ? theme.textDim : theme.text;
+            ctx.fillText(text, lx0, fp.y);
+          }
+        }
+        continue;
+      }
+
       const labeled =
         inScale && !placed.some((p) => Math.abs(p - sy) < LABEL_GAP);
       if (!labeled) {
@@ -1187,6 +1290,53 @@ export function createTimelineSource(
     if (!tr2) return null;
     return { x: tr2.x0 + tr2.w / 2, y: worldToScreenY(view, worldOf(e.y)) };
   };
+  // ── per-track folding: fold whenever space allows (rg principle) ──────────
+  // Inside a track, an event's cycle already occupies a y-band on the axis.
+  // When that band renders ≥1rem tall AND the track is wide enough, the event
+  // quantizes to the band's center and spreads by phase in x — no coordinate
+  // switch, no global mode. On the symlog axis the fold level varies ALONG
+  // the axis: recent (tall) bands fold fine, deep-time (thin) bands stay dots.
+  let trackFold = true;
+  const TRACK_FOLD_MIN_W_REM = 20; // a track folds only when at least this wide
+  const TRACK_FOLD_MAX_CONTENT_REM = 45; // content measure capped like a text column
+  const remPx = () =>
+    typeof document !== "undefined"
+      ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      : 16;
+  const LADDER_FINE_FIRST = ["hour", "day", "week", "month", "year"] as const;
+  const trackContentW = (w: number, rem: number) =>
+    Math.min(w - 14, TRACK_FOLD_MAX_CONTENT_REM * rem);
+  /** folded position of a dated event inside its track, or null (classic rail).
+   *  Picks the FINEST fold level whose local cycle band is ≥1rem tall and
+   *  whose phase slots are ≥1rem wide within the track's content measure. */
+  const trackFoldPos = (e: Ev, view: LaneView, x0: number, w: number) => {
+    if (!trackFold || fold !== "none") return null;
+    const rem = remPx();
+    if (w < TRACK_FOLD_MIN_W_REM * rem) return null;
+    const t = tMsOfEv(e);
+    if (t == null) return null;
+    const contentW = trackContentW(w, rem);
+    for (const lf of LADDER_FINE_FIRST) {
+      const fv = FOLD_VIEWS[lf];
+      if (contentW / fv.slots < rem) continue; // columns unreadable → coarser
+      const p = fv.projector.project(t);
+      if (!p) continue;
+      const start = foldRowStartMs(lf, p.rowIndex);
+      const end = foldRowStartMs(lf, p.rowIndex + 1);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      const yTop = worldToScreenY(view, worldOf(ybpOfTMs(start)));
+      const yBot = worldToScreenY(view, worldOf(ybpOfTMs(end)));
+      if (Math.abs(yBot - yTop) < rem) continue; // band unreadable → coarser
+      return {
+        x: x0 + 7 + p.phase0 * contentW,
+        y: (yTop + yBot) / 2,
+        level: lf,
+        bandPx: Math.abs(yBot - yTop),
+      };
+    }
+    return null;
+  };
+
   const captureGlyphs = (view: LaneView) => {
     const from = new Map<Ev, { x: number; y: number }>();
     let n = 0;
@@ -1398,14 +1548,14 @@ export function createTimelineSource(
       onUpdate();
     },
     eventAt(sx, sy, view) {
-      if (fold !== "none") {
-        // a visible label is a hover target for its event
-        for (const l of foldLabelRects) {
-          if (sx >= l.x0 && sx <= l.x1 && Math.abs(sy - l.y) <= 7) {
-            const title = l.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
-            return { title, detail: l.e.detail, cat: l.e.cat };
-          }
+      // a visible label is a hover target for its event (either mode)
+      for (const l of foldLabelRects) {
+        if (sx >= l.x0 && sx <= l.x1 && Math.abs(sy - l.y) <= 7) {
+          const title = l.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+          return { title, detail: l.e.detail, cat: l.e.cat };
         }
+      }
+      if (fold !== "none") {
         let best: Ev | null = null;
         let bestD = 9;
         for (const e of points) {
@@ -1422,7 +1572,8 @@ export function createTimelineSource(
         const title = best.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
         return { title, detail: best.detail, cat: best.cat };
       }
-      // the event in the hovered track whose y is nearest the cursor
+      // the event in the hovered track nearest the cursor — folded events sit
+      // at trackFoldPos (the same helper the draw uses), rail events on the y
       const tracks = activeTracks(view);
       const track = tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
       if (!track || track.meta.cat === "periodic") return null;
@@ -1430,8 +1581,10 @@ export function createTimelineSource(
       let bestDy = 11;
       for (const e of points) {
         if (e.cat !== track.meta.cat) continue;
-        const ey = worldToScreenY(view, worldOf(e.y));
-        const dy = Math.abs(ey - sy);
+        const fp = trackFoldPos(e, view, track.x0, track.w);
+        const dy = fp
+          ? Math.hypot(fp.x - sx, fp.y - sy)
+          : Math.abs(worldToScreenY(view, worldOf(e.y)) - sy);
         if (dy < bestDy) {
           bestDy = dy;
           best = e;
@@ -1601,6 +1754,11 @@ export function createTimelineSource(
       return worldOf(ybpOfTMs(clipped));
     },
     foldRowRange: () => foldRows(),
+    isTrackFold: () => trackFold,
+    setTrackFold(on) {
+      trackFold = on;
+      onUpdate();
+    },
     setPulse(hit) {
       if (fold === "none" || hit.phase === undefined) return;
       pulse = { world: hit.center, phase: hit.phase, until: performance.now() + PULSE_MS };
