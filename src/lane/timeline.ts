@@ -470,6 +470,8 @@ export interface TimelineSource extends LaneSource {
   tMsForWorld(worldY: number): number | null;
   /** folded mode: flash a transient ring at a search hit's (row, phase) */
   setPulse(hit: SearchHit): void;
+  /** the calendar-year row range fold-year would cover (dated events + now) */
+  foldRowRange(): { min: number; max: number };
   /** world-y of an instant under the CURRENT projection */
   worldForTMs(tMs: number): number;
   /** the event under a screen point (for hover cards), or null */
@@ -1195,6 +1197,7 @@ export function createTimelineSource(
     // events — LOD ladder by row height: dots → micro-lane dots → labels;
     // positions come from foldGlyphPos, the SAME helper eventAt hit-tests
     ctx.textAlign = "left";
+    const labelCandidates: { e: Ev; x: number; y: number; r: number }[] = [];
     for (const e of points) {
       if (!enabled.has(e.cat)) continue;
       const g = foldGlyphPos(e, view);
@@ -1211,10 +1214,22 @@ export function createTimelineSource(
       ctx.beginPath();
       ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
       ctx.fill();
-      if (g.laneH >= 11) {
-        ctx.fillStyle = withAlpha(theme.text, 0.92);
-        ctx.fillText(fit(ctx, tr(e.label), W - 8 - g.x - 6), g.x + r + 3, g.y);
-      }
+      if (g.laneH >= 11) labelCandidates.push({ e, x: g.x, y: g.y, r });
+    }
+    // greedy label declutter: important events label first; later (lesser)
+    // labels are dropped when they'd overlap an already-placed one on the
+    // same text line — dense ingest clusters degrade to dots, not soup
+    labelCandidates.sort((a, b) => b.e.imp - a.e.imp);
+    const placed: { x0: number; x1: number; y: number }[] = [];
+    for (const c of labelCandidates) {
+      const text = fit(ctx, tr(c.e.label), W - 8 - c.x - 6);
+      if (!text) continue;
+      const x0 = c.x + c.r + 3;
+      const x1 = x0 + ctx.measureText(text).width + 6;
+      if (placed.some((p) => Math.abs(p.y - c.y) < 11 && x0 < p.x1 && x1 > p.x0)) continue;
+      placed.push({ x0, x1, y: c.y });
+      ctx.fillStyle = withAlpha(theme.text, 0.92);
+      ctx.fillText(text, x0, c.y);
     }
 
     // search pulse: expanding ring at the found (row, phase)
@@ -1485,6 +1500,7 @@ export function createTimelineSource(
       }
       return worldOf(ybpOfTMs(clipped));
     },
+    foldRowRange: () => foldRows(),
     setPulse(hit) {
       if (fold === "none" || hit.phase === undefined) return;
       pulse = { world: hit.center, phase: hit.phase, until: performance.now() + PULSE_MS };

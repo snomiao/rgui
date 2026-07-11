@@ -327,7 +327,8 @@ function refreshChrome() {
   if (foldBtn) {
     foldBtn.style.display = current === "time" ? "" : "none";
     const f = timeSource.getFold();
-    foldBtn.textContent = f === "none" ? "fold: off" : `fold: ${f}`;
+    foldBtn.textContent =
+      foldMode === "auto" ? `fold: auto (${f === "none" ? "off" : f})` : f === "none" ? "fold: off" : `fold: ${f}`;
     foldBtn.setAttribute("aria-pressed", String(f !== "none"));
   }
   filters.style.display = current === "time" ? "flex" : "none";
@@ -343,25 +344,96 @@ axisBtn?.addEventListener("click", () => {
   lane.fit(); // re-frame the biased fit in the new axis
   refreshChrome();
 });
-// the continuous-axis zoom is stashed across a fold round-trip so unfolding
-// returns to the same magnification, not the whole-extent fit
-let unfoldedZoom: number | null = null;
-foldBtn?.addEventListener("click", () => {
-  // orientation-preserving HARD switch (TODO.md: no morph in v1): re-project
-  // the instant at the viewport center and jump there with setView — a focus
-  // animation would interpolate across two unrelated coordinate systems
-  const centerWorld = lane.view.scrollY + lane.view.height / 2 / lane.view.zoomY;
-  const tMs = timeSource.tMsForWorld(centerWorld);
-  const next = timeSource.getFold() === "none" ? "year" : "none";
-  if (next === "year") unfoldedZoom = lane.view.zoomY;
+// ── temporal fold: manual + zoom-driven auto mode ─────────────────────────
+// "auto" folds/unfolds by VIEWING SCALE: zooming into a modern window of
+// ≤ FOLD_IN_YEARS folds it into year rows; zooming a folded view out past
+// FOLD_OUT_ROWS visible rows unfolds back to the continuous axis. The wide
+// gap between the two thresholds is the hysteresis band (TODO.md) — a zoom
+// that just crossed one threshold is far from the other, so no flapping.
+const YEAR_MS = 365.2425 * 24 * 3600 * 1000;
+const FOLD_IN_YEARS = 45; // fold when a settled continuous view spans ≤ this
+const FOLD_MIN_YEARS = 2; // …but not below this: sub-year detail stays continuous
+const FOLD_OUT_ROWS = 85; // unfold when zoomed out past this many rows
+const FOLD_UNDER_ROWS = 1.2; // unfold when zoomed INTO a single row (sub-year)
+let foldMode: "auto" | "year" | "none" = "auto";
+
+// orientation-preserving HARD switch (TODO.md: no morph in v1): re-project
+// the instant at the viewport center and jump there with setView — a focus
+// animation would interpolate across two unrelated coordinate systems.
+// `rows` = how many year-equivalents the new viewport should span; both
+// directions map scale continuously (1 year ≈ 1 row), so auto switches feel
+// like the same zoom continuing in a new coordinate system.
+function applyFold(next: "year" | "none", rows: number) {
+  const v = lane.view;
+  const centerWorld = v.scrollY + v.height / 2 / v.zoomY;
+  const tMs = timeSource.tMsForWorld(centerWorld) ?? Date.now();
   timeSource.setFold(next);
-  // frame ~14 year rows when folding; restore the stashed zoom when unfolding
-  const zoomY = next === "year" ? Math.max(lane.view.height / 14, 8) : (unfoldedZoom ?? lane.view.zoomY);
-  // no calendar instant at the old center (deep-time framing)? land on now
-  const center = timeSource.worldForTMs(tMs ?? Date.now());
-  lane.setView({ zoomY, scrollY: center - lane.view.height / (2 * zoomY) });
+  const center = timeSource.worldForTMs(tMs);
+  let zoomY: number;
+  if (next === "year") {
+    zoomY = Math.max(v.height / rows, 4);
+  } else {
+    // world-span of ±rows/2 years around the center instant, in the
+    // continuous axis's own units (exact on linear, symlog-aware on log)
+    const w1 = timeSource.worldForTMs(tMs - (rows / 2) * YEAR_MS);
+    const w2 = timeSource.worldForTMs(tMs + (rows / 2) * YEAR_MS);
+    zoomY = v.height / Math.max(Math.abs(w2 - w1), 1e-9);
+  }
+  lane.setView({ zoomY, scrollY: center - v.height / (2 * zoomY) });
+  refreshChrome();
+}
+
+foldBtn?.addEventListener("click", () => {
+  // cycle auto → year → off → auto; forcing a state applies it immediately
+  foldMode = foldMode === "auto" ? "year" : foldMode === "year" ? "none" : "auto";
+  const rows = lane.view.height / lane.view.zoomY;
+  if (foldMode === "year" && timeSource.getFold() === "none") applyFold("year", 14);
+  else if (foldMode === "none" && timeSource.getFold() !== "none") applyFold("none", Math.min(rows, FOLD_OUT_ROWS));
   refreshChrome();
 });
+
+// auto-fold watcher: acts only once the view SETTLES (a few unchanged
+// frames) — firing mid zoom-gesture or mid focus-animation would re-anchor
+// on a transient center and land the fold somewhere the user wasn't going
+const STABLE_FRAMES = 8;
+let lastAuto = { zoomY: 0, scrollY: 0 };
+let stableFrames = 0;
+function autoFoldTick() {
+  requestAnimationFrame(autoFoldTick);
+  if (current !== "time" || foldMode !== "auto") return;
+  const v = lane.view;
+  if (v.zoomY === lastAuto.zoomY && v.scrollY === lastAuto.scrollY) {
+    stableFrames++;
+  } else {
+    stableFrames = 0;
+    lastAuto = { zoomY: v.zoomY, scrollY: v.scrollY };
+  }
+  if (stableFrames !== STABLE_FRAMES) return; // fire exactly once per settle
+  if (timeSource.getFold() === "none") {
+    const tTop = timeSource.tMsForWorld(v.scrollY);
+    const tBot = timeSource.tMsForWorld(v.scrollY + v.height / v.zoomY);
+    if (tTop == null || tBot == null) return; // deep-time: no calendar here
+    const years = Math.abs(tBot - tTop) / YEAR_MS;
+    // the year fold serves the "tens of years" band; sub-year windows keep
+    // the continuous axis (day/hour folds are later TODO stages)
+    if (years > FOLD_IN_YEARS || years < FOLD_MIN_YEARS) return;
+    // only fold when the window actually overlaps the foldable year range
+    const centerYear = new Date((tTop + tBot) / 2).getUTCFullYear();
+    const r = timeSource.foldRowRange();
+    if (centerYear < r.min - 10 || centerYear > r.max + 10) return;
+    applyFold("year", Math.min(Math.max(years, 6), FOLD_OUT_ROWS - 10));
+  } else {
+    const rows = v.height / v.zoomY;
+    // the lane's min-zoom clamps at the fold extent, so a fixed row count can
+    // be unreachable when the dataset covers few years — unfold once the user
+    // zooms out to (most of) the whole fold, whichever limit comes first
+    const r = timeSource.foldRowRange();
+    const outAt = Math.min(FOLD_OUT_ROWS, (r.max - r.min + 1) * 0.85);
+    if (rows >= outAt) applyFold("none", Math.max(rows, FOLD_IN_YEARS * 2)); // zoomed out: overview
+    else if (rows <= FOLD_UNDER_ROWS) applyFold("none", Math.max(rows, 0.05)); // zoomed in: sub-year detail
+  }
+}
+requestAnimationFrame(autoFoldTick);
 seg.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-src]");
   if (!btn) return;
