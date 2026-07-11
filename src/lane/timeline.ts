@@ -24,7 +24,10 @@ import { withAlpha, type RgTheme } from "../core/theme.js";
 import type { LaneEnv, LaneSource } from "./lane.js";
 import {
   evTimestampMs,
+  foldCenturyProjector,
   foldDayProjector,
+  foldDecadeProjector,
+  foldMillenniumProjector,
   precisionWindow,
   projectWindow,
   foldHourProjector,
@@ -461,7 +464,16 @@ export interface SearchHit {
   phase?: number;
 }
 
-export type TimelineFold = "none" | "year" | "month" | "week" | "day" | "hour";
+export type TimelineFold =
+  | "none"
+  | "year"
+  | "month"
+  | "week"
+  | "day"
+  | "hour"
+  | "decade"
+  | "century"
+  | "millennium";
 
 export interface TimelineSource extends LaneSource {
   readonly categories: readonly CatMeta[];
@@ -1082,8 +1094,8 @@ export function createTimelineSource(
         const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
         if (y >= HEADER_H - 2 && y <= H + 2) {
           const strength = boundaryStrength(ms);
-          ctx.strokeStyle = withAlpha(theme.textFaint, strength);
-          ctx.lineWidth = strength >= 0.85 ? 1.6 : 1;
+          ctx.strokeStyle = withAlpha(theme.textFaint, Math.min(strength, 0.95));
+          ctx.lineWidth = strength >= 0.95 ? 2 : strength >= 0.85 ? 1.6 : 1;
           ctx.beginPath();
           ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
           ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
@@ -1550,6 +1562,19 @@ export function createTimelineSource(
         { slots: 4, slotLabel: (i) => `:${p2(i * 15)}`, labelEvery: 1 },
       ],
     },
+    // decimal upper folds: the calendar turns base-10 above the year
+    decade: {
+      projector: foldDecadeProjector,
+      divisions: [{ slots: 10, slotLabel: (i) => `'${i}`, labelEvery: 1 }],
+    },
+    century: {
+      projector: foldCenturyProjector,
+      divisions: [{ slots: 10, slotLabel: (i) => `${i * 10}s`, labelEvery: 1 }],
+    },
+    millennium: {
+      projector: foldMillenniumProjector,
+      divisions: [{ slots: 10, slotLabel: (i) => `${i * 100}s`, labelEvery: 1 }],
+    },
   };
   /** boundary prominence at an instant: the coarsest calendar unit that
    *  rolls over exactly there decides the separator weight (year > month >
@@ -1559,7 +1584,13 @@ export function createTimelineSource(
     const a = new Date(ms - 1);
     const b = new Date(ms);
     if (!Number.isFinite(a.getTime()) || !Number.isFinite(b.getTime())) return 0.42;
-    if (a.getUTCFullYear() !== b.getUTCFullYear()) return 0.85;
+    if (a.getUTCFullYear() !== b.getUTCFullYear()) {
+      const y = b.getUTCFullYear();
+      if (y % 1000 === 0) return 1.0; // millennium boundary, 更醒目の最上段
+      if (y % 100 === 0) return 0.95;
+      if (y % 10 === 0) return 0.9;
+      return 0.85;
+    }
     if (a.getUTCMonth() !== b.getUTCMonth()) return 0.62;
     if (a.getUTCDate() !== b.getUTCDate()) return 0.5;
     return 0.34;
@@ -1770,7 +1801,7 @@ export function createTimelineSource(
     typeof document !== "undefined"
       ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
       : 16;
-  const LADDER_FINE_FIRST = ["hour", "day", "week", "month", "year"] as const;
+  const LADDER_FINE_FIRST = ["hour", "day", "week", "month", "year", "decade", "century", "millennium"] as const;
   /** slim y-axis gutter inside a folding track: row labels live here,
    *  uncovered by phase-0 events */
   const Y_GUTTER_REM = 2.6;
