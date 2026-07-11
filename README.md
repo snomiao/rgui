@@ -38,6 +38,31 @@ Rendering is currently Canvas 2D, but the renderer is swappable behind a single 
 with a WebGPU implementation planned next. It mounts on any `<canvas>` and exposes the same
 API to React, Vue, Svelte, or plain DOM.
 
+## Live demos
+
+Run `bun run dev`, then open one of the multi-page demo routes:
+
+- `/` — the 2D readable-grid node graph
+- `/lane/` — the 1D semantic-zoom lane
+- `/cube/` — a 4x4x4 parallel- or cross-eye stereo number puzzle with a live
+  RG merge lab and switchable matched/shared/split binocular wire labels
+
+The 3D experiment, its whole-interface stereo rendering, viewport-depth wheel
+focus, and implemented volumetric RG merge rules are documented in
+[docs/cube.md](docs/cube.md).
+
+## Language and i18n
+
+English is the canonical language for source code, UI copy, and project
+documentation. The demos do not ship parallel translation catalogs. Optional
+runtime translation is a progressive enhancement built on the browser-provided
+[`Translator` API](https://developer.chrome.com/docs/ai/translator-api): feature
+detect it, check the requested BCP 47 language pair with `availability()`, and
+create a translator only after an explicit user action. Unsupported browsers,
+mobile implementations without the API, unavailable language packs, and
+translation failures retain the original English copy. No cloud translation
+service or application-level translation polyfill is required.
+
 ## Scope — a graph-GUI library, no I/O
 
 rgui is scoped to **graph GUI + plain data, never transport**. The library renders and

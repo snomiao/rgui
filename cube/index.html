@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>rgui · cube — parallel-eye 3D</title>
+    <link rel="icon" type="image/gif" href="/assets/rgui-icon-32.gif" />
+    <link rel="alternate icon" type="image/png" href="/assets/rgui-icon-32.png" />
+    <meta
+      name="description"
+      content="A 4×4×4 stereoscopic number cube. Fuse the left and right views with parallel vision to read and find each two-digit target."
+    />
+    <script>
+      document.documentElement.dataset.theme =
+        localStorage.getItem("rgui-theme") ??
+        (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    </script>
+  </head>
+  <body>
+    <main id="cube-app">
+      <canvas
+        id="stereo-canvas"
+        tabindex="0"
+        aria-label="Interactive parallel-eye stereoscopic 4 by 4 by 4 number cube"
+      ></canvas>
+
+      <div class="eye-divider" aria-hidden="true"></div>
+      <div class="stereo-cursors" aria-hidden="true">
+        <span class="stereo-cursor stereo-cursor-left"></span>
+        <span class="stereo-cursor stereo-cursor-right"></span>
+      </div>
+      <div class="fusion-guides" aria-hidden="true">
+        <div><span></span></div>
+        <div><span></span></div>
+      </div>
+      <div class="eye-label eye-label-left eye-label-tens" id="left-eye-label" aria-hidden="true">
+        <b>L</b><span data-i18n>TENS</span>
+      </div>
+      <div class="eye-label eye-label-right eye-label-ones" id="right-eye-label" aria-hidden="true">
+        <b>R</b><span data-i18n>ONES</span>
+      </div>
+
+      <header class="topbar">
+        <div class="demo-nav">
+          <select id="demo-nav" aria-label="rgui demo switch">
+            <option value="/">2D Graph</option>
+            <option value="/lane/">1D Lane</option>
+            <option value="/cube/" selected>3D Cube</option>
+          </select>
+        </div>
+
+        <a class="wordmark" href="/">RGUI<span> · cube</span></a>
+
+        <div class="mission" aria-live="polite">
+          <span class="mission-label" data-i18n>PARALLEL · FIND</span>
+          <strong id="target-number">--</strong>
+          <span id="progress">0/8</span>
+        </div>
+
+        <div class="top-actions">
+          <button class="icon-button translate-button" id="translate-toggle" type="button" title="Translate with the browser" aria-label="Translate with the browser" aria-pressed="false" hidden>文</button>
+          <button class="icon-button" id="help-toggle" type="button" title="Open help" aria-label="Open help">?</button>
+          <button class="icon-button" id="peek" type="button" title="Click to lock both digits; hold for a temporary reveal" aria-label="Click to lock both digits; hold for a temporary reveal" aria-pressed="false">◉</button>
+          <button class="icon-button" id="new-puzzle" type="button" title="New number cube" aria-label="New number cube">↻</button>
+          <button class="icon-button" id="theme-toggle" type="button" title="Change theme" aria-label="Change theme">◐</button>
+        </div>
+      </header>
+
+      <section class="rgbar" aria-label="Renormalization merge laboratory">
+        <strong class="rgbar-title">RG MERGE LAB</strong>
+
+        <label class="select-control" for="label-encoding">
+          <span>LABEL</span>
+          <select id="label-encoding">
+            <option value="matched">MATCHED</option>
+            <option value="shared">SHARED</option>
+            <option value="split">SPLIT · LEGACY</option>
+          </select>
+        </label>
+
+        <label class="select-control" for="merge-method">
+          <span>SUPPORT</span>
+          <select id="merge-method">
+            <option value="block">BLOCK 2×2×2</option>
+            <option value="gaussian">GAUSSIAN 3³</option>
+            <option value="graph">GRAPH 6-N</option>
+          </select>
+        </label>
+
+        <label class="select-control" for="value-reducer">
+          <span>VALUE</span>
+          <select id="value-reducer">
+            <option value="mean">MEAN</option>
+            <option value="sum">SUM · FOLD 2D</option>
+            <option value="median">MEDIAN</option>
+          </select>
+        </label>
+
+        <div class="rg-level-control">
+          <label for="rg-level">RG LEVEL</label>
+          <input id="rg-level" type="range" min="0" max="2" step="1" value="0" />
+          <output id="rg-level-output" for="rg-level">4³</output>
+        </div>
+
+        <output class="rg-readout" id="rg-readout">MICRO · 64 exact cells</output>
+      </section>
+
+      <div class="result-toast" id="result-toast" role="status" aria-live="polite"></div>
+
+      <section class="controlbar" aria-label="Cube controls">
+        <div class="mode-switch" role="group" aria-label="Stereo viewing method">
+          <button type="button" data-stereo-mode="parallel" aria-pressed="true" title="Parallel-eye view">PARALLEL</button>
+          <button type="button" data-stereo-mode="cross" aria-pressed="false" title="Cross-eye view">CROSS</button>
+        </div>
+
+        <div class="control-group layer-control">
+          <label for="layer-range" data-i18n>FOCUS Z</label>
+          <input id="layer-range" type="range" min="0" max="101" step="1" value="0" />
+          <output id="layer-output" for="layer-range">ALL</output>
+        </div>
+
+        <div class="control-group">
+          <label for="stereo-range" data-i18n>PARALLAX</label>
+          <input id="stereo-range" type="range" min="0" max="100" step="1" value="34" />
+          <output id="stereo-output" for="stereo-range">34</output>
+        </div>
+
+        <div class="control-group">
+          <label for="opacity-range" data-i18n>GHOST</label>
+          <input id="opacity-range" type="range" min="8" max="38" step="1" value="18" />
+          <output id="opacity-output" for="opacity-range">18%</output>
+        </div>
+
+        <button class="reset-view" id="reset-view" type="button" title="Reset cube view">
+          <span aria-hidden="true">⌖</span><span data-i18n>RESET VIEW</span>
+        </button>
+      </section>
+
+      <dialog class="help-dialog" id="help-dialog" aria-labelledby="help-title" tabindex="-1">
+        <div class="help-panel stereo-left">
+          <header class="help-header">
+            <div>
+              <span class="help-kicker">3D RGUI · 4×4×4</span>
+              <h2 id="help-title" data-i18n>Fuse the number cube</h2>
+            </div>
+            <button class="dialog-close" id="help-close" type="button" title="Close help" aria-label="Close help">×</button>
+          </header>
+
+          <div class="help-content">
+            <p class="help-lead" data-i18n>
+              MATCHED gives both eyes the same wire-number structure while emphasizing a different digit in each eye. Fuse both views, read the target, then select its cell.
+            </p>
+
+          <div class="view-methods">
+            <section>
+              <h3>PARALLEL</h3>
+              <div class="eye-map parallel-map" aria-hidden="true">
+                <span>L · VIEW</span><span>R · VIEW</span>
+              </div>
+              <p data-i18n>Look through the screen. The left eye uses the left panel and the right eye uses the right panel.</p>
+            </section>
+            <section>
+              <h3>CROSS</h3>
+              <div class="eye-map cross-map" aria-hidden="true">
+                <span>R · VIEW</span><span>L · VIEW</span>
+              </div>
+              <p data-i18n>Cross your gaze in front of the screen. Each eye uses the opposite panel.</p>
+            </section>
+          </div>
+
+          <dl class="help-controls">
+            <div><dt data-i18n>Drag</dt><dd data-i18n>Orbit the cube</dd></div>
+            <div><dt data-i18n>Wheel</dt><dd data-i18n>Move the focus plane near or far</dd></div>
+            <div><dt data-i18n>Ctrl/⌘ wheel · pinch</dt><dd data-i18n>Zoom through RG levels</dd></div>
+            <div><dt data-i18n>Select</dt><dd data-i18n>Test a fused number</dd></div>
+            <div><dt>FOCUS Z</dt><dd data-i18n>Set the viewport-depth focus plane</dd></div>
+            <div><dt>PARALLAX</dt><dd data-i18n>Adjust stereo separation</dd></div>
+            <div><dt>◉</dt><dd data-i18n>Click to lock; hold for a temporary reveal</dd></div>
+          </dl>
+
+          <section class="merge-help label-help">
+            <h3>BINOCULAR LABELS</h3>
+            <p data-i18n>Matching contours give the eyes stable correspondence before contrast carries any complementary information.</p>
+            <div>
+              <p><b>MATCHED</b><span data-i18n>Both eyes see both digits; tens leads in the left eye and ones leads in the right.</span></p>
+              <p><b>SHARED</b><span data-i18n>Both eyes receive the same complete high-contrast label.</span></p>
+              <p><b>SPLIT · LEGACY</b><span data-i18n>Each eye receives one exclusive digit, which may cause binocular rivalry.</span></p>
+            </div>
+          </section>
+
+          <section class="merge-help">
+            <h3>RG MERGE LAB</h3>
+            <p data-i18n>SUPPORT decides which neighboring cells become one parent. VALUE independently decides how their numbers become one observable.</p>
+            <div>
+              <p><b>BLOCK 2×2×2</b><span data-i18n>A stable hard partition for identity-bearing UI objects.</span></p>
+              <p><b>GAUSSIAN 3³</b><span data-i18n>An overlapping low-pass support for continuous fields; not unique ownership.</span></p>
+              <p><b>GRAPH 6-N</b><span data-i18n>Connected hard groups selected by value similarity along face-neighbor paths.</span></p>
+            </div>
+          </section>
+
+          <p class="comfort-note" data-i18n>
+            Free-viewing should feel relaxed. Stop and rest your eyes if the image feels uncomfortable.
+          </p>
+          </div>
+
+          <footer class="help-footer">
+            <button id="help-start" type="button" data-i18n>START PUZZLE</button>
+          </footer>
+        </div>
+      </dialog>
+    </main>
+
+    <script type="module" src="/src/cube-main.ts"></script>
+    <script>
+      document.querySelector("#demo-nav")?.addEventListener("change", (event) => {
+        location.href = event.target.value;
+      });
+    </script>
+  </body>
+</html>
