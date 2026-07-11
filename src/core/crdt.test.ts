@@ -149,6 +149,82 @@ describe("GraphCrdt", () => {
     expect(view(total1)).toBe(view(total3));
   });
 
+  test("join-typed fields reject mistyped writes (associativity guard)", () => {
+    const s = newGraphCrdt({ score: "max", ok: "all" });
+    crdtAddNode(s, "a", "n1");
+    expect(() => crdtSetFields(s, "a", "n1", { score: "oops" as never })).toThrow(/finite number/);
+    expect(() => crdtSetFields(s, "a", "n1", { score: NaN })).toThrow(/finite number/);
+    expect(() => crdtSetFields(s, "a", "n1", { ok: 1 as never })).toThrow(/boolean/);
+    // corrupt imported state (mistyped join value smuggled past the API)
+    const rb = clone(s);
+    crdtSetFields(s, "a", "n1", { score: 5 });
+    rb.nodes.n1!.fields.score = { value: "corrupt", dot: { actor: "z", seq: 99 } };
+    expect(() => mergeGraphCrdt(s, rb)).toThrow(/mistyped/);
+  });
+
+  test("non-JSON values are rejected at write time", () => {
+    const s = newGraphCrdt();
+    crdtAddNode(s, "a", "n1");
+    expect(() => crdtSetFields(s, "a", "n1", { bad: undefined as never })).toThrow(/non-JSON/);
+    expect(() => crdtSetFields(s, "a", "n1", { bad: (() => 1) as never })).toThrow(/non-JSON/);
+    expect(() => crdtSetFields(s, "a", "n1", { bad: Infinity })).toThrow(/non-finite/);
+    expect(() => crdtSetFields(s, "a", "n1", { bad: { nested: [1, NaN] } })).toThrow(/non-finite/);
+    // failed writes must not partially apply
+    expect(crdtToGraph(s).nodes[0]!.fields.bad).toBeUndefined();
+  });
+
+  test("edge ids stay injective for hostile node/port strings", () => {
+    const s = newGraphCrdt();
+    for (const id of ["n", "r", "m", "p->m:q"]) crdtAddNode(s, "a", id);
+    const e1 = crdtAddEdge(s, "a", { node: "n", port: "p->m:q" }, { node: "r", port: "s" });
+    const e2 = crdtAddEdge(s, "a", { node: "n", port: "p" }, { node: "m", port: "q->r:s" });
+    expect(e1).not.toBe(e2);
+    expect(crdtToGraph(s).edges).toHaveLength(2);
+    const round = crdtToGraph(s).edges.find((e) => e.id === e1)!;
+    expect(round.from).toEqual({ node: "n", port: "p->m:q" });
+  });
+
+  test("setFields on a removed node is a lost update (documented policy)", () => {
+    const base = newGraphCrdt();
+    crdtAddNode(base, "a", "n1", { title: "v1" });
+    const ra = clone(base);
+    const rb = clone(base);
+    crdtRemoveNode(ra, "n1");
+    crdtSetFields(ra, "a", "n1", { title: "after-remove" }); // no-op: dead locally
+    crdtAddNode(rb, "b", "n1"); // concurrent revive
+    const m = mergeGraphCrdt(ra, rb);
+    expect(crdtToGraph(m).nodes[0]!.fields.title).toBe("v1"); // write was lost
+  });
+
+  test("covered dot does not resurrect via a third replica after record drop", () => {
+    const ra = newGraphCrdt();
+    crdtAddNode(ra, "a", "n1"); // no fields → removal can drop the record entirely
+    const rb = mergeGraphCrdt(newGraphCrdt(), ra);
+    crdtRemoveNode(rb, "n1");
+    const rbCompact = mergeGraphCrdt(rb, newGraphCrdt()); // record dropped, clock kept
+    expect(rbCompact.nodes.n1).toBeUndefined();
+    const rc = mergeGraphCrdt(newGraphCrdt(), rbCompact); // third replica, late joiner
+    expect(nodeIds(mergeGraphCrdt(ra, rc))).toEqual([]); // covered dot stays dead
+    expect(nodeIds(mergeGraphCrdt(rc, ra))).toEqual([]);
+  });
+
+  test("join associativity with missing registers, all four rules", () => {
+    const joins = { hi: "max", lo: "min", any: "any", all: "all" } as const;
+    const base = newGraphCrdt(joins);
+    crdtAddNode(base, "a", "n1", { hi: 5, lo: 5, any: false, all: true });
+    const reps = [clone(base), clone(base), clone(base)];
+    crdtSetFields(reps[0]!, "a", "n1", { hi: 9, lo: 2 });
+    crdtSetFields(reps[1]!, "b", "n1", { any: true });
+    crdtSetFields(reps[2]!, "c", "n1", { hi: 7, all: false, lo: 8 });
+    const m1 = mergeGraphCrdt(mergeGraphCrdt(reps[0]!, reps[1]!), reps[2]!);
+    const m2 = mergeGraphCrdt(reps[0]!, mergeGraphCrdt(reps[1]!, reps[2]!));
+    const m3 = mergeGraphCrdt(mergeGraphCrdt(reps[2]!, reps[0]!), reps[1]!);
+    expect(view(m1)).toBe(view(m2));
+    expect(view(m1)).toBe(view(m3));
+    const f = crdtToGraph(m1).nodes[0]!.fields;
+    expect(f).toEqual({ all: false, any: true, hi: 9, lo: 2 });
+  });
+
   test("JSON round-trip preserves state (encoding is plain JSON)", () => {
     const s = newGraphCrdt({ progress: "max" });
     crdtAddNode(s, "a", "n1", { progress: 5 });

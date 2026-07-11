@@ -82,9 +82,47 @@ export function newGraphCrdt(joins: Record<string, JoinRule> = {}): GraphCrdtSta
   return { joins: { ...joins }, clock: {}, nodes: {}, edges: {} };
 }
 
-/** deterministic endpoint-derived edge id (no parallel edges by design) */
+/**
+ * Deterministic endpoint-derived edge id (no parallel edges by design).
+ * JSON-array encoded so it stays injective for ARBITRARY node/port strings —
+ * a plain `a:b->c:d` template would collide when ids contain the delimiters.
+ */
 export function crdtEdgeId(from: CrdtEdgeEnd, to: CrdtEdgeEnd): string {
-  return `${from.node}:${from.port}->${to.node}:${to.port}`;
+  return JSON.stringify([from.node, from.port, to.node, to.port]);
+}
+
+/** deep-validate a field value: plain JSON only, and join-typed keys typed */
+function assertValue(key: string, value: unknown, joins: Record<string, JoinRule>): void {
+  const rule = joins[key];
+  if (rule === "max" || rule === "min") {
+    if (typeof value !== "number" || !Number.isFinite(value))
+      throw new Error(`GraphCrdt: field "${key}" (join ${rule}) requires a finite number`);
+    return;
+  }
+  if (rule === "any" || rule === "all") {
+    if (typeof value !== "boolean")
+      throw new Error(`GraphCrdt: field "${key}" (join ${rule}) requires a boolean`);
+    return;
+  }
+  assertJsonSafe(key, value);
+}
+
+function assertJsonSafe(key: string, value: unknown): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`GraphCrdt: field "${key}" holds a non-finite number`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) assertJsonSafe(key, v);
+    return;
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const v of Object.values(value)) assertJsonSafe(key, v);
+    return;
+  }
+  // undefined / function / symbol / bigint — silently mangled by JSON, reject
+  throw new Error(`GraphCrdt: field "${key}" holds a non-JSON value (${typeof value})`);
 }
 
 function nextDot(state: GraphCrdtState, actor: string): Dot {
@@ -117,6 +155,8 @@ function setFieldsOn(
   actor: string,
   fields: Record<string, CrdtValue>,
 ): void {
+  // validate everything BEFORE writing anything (no partial writes on throw)
+  for (const [key, value] of Object.entries(fields)) assertValue(key, value, state.joins);
   for (const [key, value] of Object.entries(fields)) {
     el.fields[key] = { value, dot: nextDot(state, actor) };
   }
@@ -172,14 +212,9 @@ export function crdtAddEdge(
   to: CrdtEdgeEnd,
   fields?: Record<string, CrdtValue>,
 ): string {
+  // endpoints live in the (injective) id itself — no mutable endpoint state
   const id = crdtEdgeId(from, to);
-  addElement(state.edges, state, actor, id, {
-    ...fields,
-    _from_node: from.node,
-    _from_port: from.port,
-    _to_node: to.node,
-    _to_port: to.port,
-  });
+  addElement(state.edges, state, actor, id, fields);
   return id;
 }
 
@@ -187,16 +222,18 @@ export function crdtRemoveEdge(state: GraphCrdtState, from: CrdtEdgeEnd, to: Crd
   removeElement(state.edges, crdtEdgeId(from, to));
 }
 
-/** join two registers under the shared schema — deterministic + commutative */
+/** join two registers under the shared schema — deterministic + commutative.
+ * Join-typed keys are validated at write time; a mismatched runtime type here
+ * means a corrupt/hand-crafted imported state, and falling back to LWW would
+ * break merge associativity (grouping-dependent winners) — so throw instead. */
 function mergeRegister(key: string, a: CrdtRegister, b: CrdtRegister, joins: Record<string, JoinRule>): CrdtRegister {
   const rule = joins[key];
   if (rule) {
     const joined = joinValues(rule, a.value, b.value);
-    if (joined !== undefined) {
-      // keep the greater dot so causality keeps advancing under the join
-      return { value: joined, dot: lwwWins(a.dot, b.dot) ? a.dot : b.dot };
-    }
-    // type mismatch for the rule — fall through to LWW (still deterministic)
+    if (joined === undefined)
+      throw new Error(`GraphCrdt: field "${key}" (join ${rule}) holds a mistyped value — corrupt state`);
+    // keep the greater dot so causality keeps advancing under the join
+    return { value: joined, dot: lwwWins(a.dot, b.dot) ? a.dot : b.dot };
   }
   return lwwWins(a.dot, b.dot) ? a : b;
 }
@@ -288,10 +325,10 @@ export function crdtToGraph(state: GraphCrdtState): CrdtGraph {
   const edges = Object.entries(state.edges)
     .filter(([, el]) => liveElement(el))
     .sort(([x], [y]) => (x < y ? -1 : 1))
-    .flatMap(([id, el]) => {
-      const f = fieldValues(el);
-      const from = { node: String(f._from_node ?? ""), port: String(f._from_port ?? "") };
-      const to = { node: String(f._to_node ?? ""), port: String(f._to_port ?? "") };
+    .flatMap(([id]) => {
+      const ends = parseEdgeId(id);
+      if (!ends) return [];
+      const [from, to] = ends;
       if (!liveNodeIds.has(from.node) || !liveNodeIds.has(to.node)) return [];
       return [{ id, from, to }];
     });
@@ -302,4 +339,15 @@ function fieldValues(el: CrdtElement): Record<string, CrdtValue> {
   const out: Record<string, CrdtValue> = {};
   for (const k of Object.keys(el.fields).sort()) out[k] = el.fields[k]!.value;
   return out;
+}
+
+function parseEdgeId(id: string): [CrdtEdgeEnd, CrdtEdgeEnd] | null {
+  try {
+    const arr: unknown = JSON.parse(id);
+    if (!Array.isArray(arr) || arr.length !== 4 || arr.some((s) => typeof s !== "string")) return null;
+    const [fn, fp, tn, tp] = arr as string[];
+    return [{ node: fn!, port: fp! }, { node: tn!, port: tp! }];
+  } catch {
+    return null;
+  }
 }
