@@ -2546,7 +2546,9 @@ export function createRgui(
         ? layoutDenseGraph(graph, {
             ...opts,
             gridStep:
-              opts.gridStep ?? gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step,
+              // Dense workflows use the next-finer readable lattice: branch
+              // gaps remain exactly one grid cell without becoming node-sized.
+              opts.gridStep ?? gridLevels(view.k, rule.minGridPx, rule.radix)[1]!.step,
           }).nodes
         : new Map(
             [...layoutGraph(graph, opts)].map(([id, p]) => {
