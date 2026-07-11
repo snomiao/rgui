@@ -144,3 +144,73 @@ describe("evTimestampMs", () => {
     expect(evTimestampMs({ tMs: -10.9 })).toBe(-10);
   });
 });
+
+import { describe as describe2, expect as expect2, test as test2 } from "bun:test";
+import {
+  foldMonthProjector,
+  foldWeekProjector,
+  foldDayProjector,
+  foldHourProjector,
+  foldRowStartMs,
+  FOLD_PERIOD_MS,
+} from "./temporal.js";
+
+describe2("finer fold projectors", () => {
+  test2("month fold: max-day slots align wall days across months", () => {
+    const jul11 = foldMonthProjector.project(Date.UTC(2026, 6, 11, 12))!;
+    const feb11 = foldMonthProjector.project(Date.UTC(2026, 1, 11, 12))!;
+    expect2(jul11.phase0).toBeCloseTo(feb11.phase0, 12); // same day-of-month → same phase
+    expect2(jul11.rowKey).toBe("2026-07");
+    expect2(jul11.rowIndex).toBe(2026 * 12 + 6);
+    // Feb 28 in a common month leaves ghost slots 29..31 unreachable
+    const feb28 = foldMonthProjector.project(Date.UTC(2026, 1, 28, 23, 59, 59))!;
+    expect2(feb28.phase0).toBeLessThan(28 / 31);
+  });
+
+  test2("week fold: Monday-start rows, weekday slots, stable keys", () => {
+    const mon = foldWeekProjector.project(Date.UTC(2026, 6, 6))!; // 2026-07-06 is a Monday
+    expect2(mon.phase0).toBe(0);
+    expect2(mon.rowKey).toBe("2026-07-06");
+    const sun = foldWeekProjector.project(Date.UTC(2026, 6, 12, 23, 59))!;
+    expect2(sun.rowIndex).toBe(mon.rowIndex); // same week row
+    expect2(sun.phase0).toBeGreaterThan(6 / 7);
+    const nextMon = foldWeekProjector.project(Date.UTC(2026, 6, 13))!;
+    expect2(nextMon.rowIndex).toBe(mon.rowIndex + 1); // half-open boundary
+    expect2(nextMon.phase0).toBe(0);
+  });
+
+  test2("day fold: 24 hour slots, half-open midnight", () => {
+    const noon = foldDayProjector.project(Date.UTC(2026, 6, 11, 12))!;
+    expect2(noon.phase0).toBeCloseTo(0.5, 12);
+    expect2(noon.rowKey).toBe("2026-07-11");
+    const midnight = foldDayProjector.project(Date.UTC(2026, 6, 12))!;
+    expect2(midnight.phase0).toBe(0);
+    expect2(midnight.rowIndex).toBe(noon.rowIndex + 1);
+  });
+
+  test2("hour fold: 60 minute slots", () => {
+    const p = foldHourProjector.project(Date.UTC(2026, 6, 11, 14, 30))!;
+    expect2(p.phase0).toBeCloseTo(0.5, 12);
+    expect2(p.rowKey).toBe("07-11 14:00");
+  });
+
+  test2("foldRowStartMs inverts rowIndex for every fold", () => {
+    const t = Date.UTC(2026, 6, 11, 14, 30, 15);
+    for (const proj of [foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector]) {
+      const p = proj.project(t)!;
+      const start = foldRowStartMs(proj.id, p.rowIndex);
+      expect2(proj.project(start)!.rowIndex).toBe(p.rowIndex);
+      expect2(proj.project(start)!.phase0).toBe(0);
+      expect2(proj.project(start - 1)!.rowIndex).toBe(p.rowIndex - 1);
+    }
+    // year uses the setUTCFullYear guard: year 42 stays year 42
+    expect2(new Date(foldRowStartMs("year", 42)).getUTCFullYear()).toBe(42);
+  });
+
+  test2("FOLD_PERIOD_MS descends through the ladder", () => {
+    const order = ["year", "month", "week", "day", "hour"];
+    for (let i = 1; i < order.length; i++) {
+      expect2(FOLD_PERIOD_MS[order[i]!]!).toBeLessThan(FOLD_PERIOD_MS[order[i - 1]!]!);
+    }
+  });
+});

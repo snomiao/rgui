@@ -22,7 +22,16 @@
  */
 import { withAlpha, type RgTheme } from "../core/theme.js";
 import type { LaneEnv, LaneSource } from "./lane.js";
-import { evTimestampMs, foldYearProjector } from "./temporal.js";
+import {
+  evTimestampMs,
+  foldDayProjector,
+  foldHourProjector,
+  foldMonthProjector,
+  foldRowStartMs,
+  foldWeekProjector,
+  foldYearProjector,
+  FOLD_PERIOD_MS,
+} from "./temporal.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
 /** "now" — present reference (Unix seconds, ~2026-07). */
@@ -439,7 +448,7 @@ export interface SearchHit {
   phase?: number;
 }
 
-export type TimelineFold = "none" | "year";
+export type TimelineFold = "none" | "year" | "month" | "week" | "day" | "hour";
 
 export interface TimelineSource extends LaneSource {
   readonly categories: readonly CatMeta[];
@@ -1095,30 +1104,50 @@ export function createTimelineSource(
     e.cat === "periodic" ? null : evTimestampMs(e);
   const tMsOfYbp = (yBP: number) => (PRESENT_EPOCH - yBP * SPY) * 1000;
   const ybpOfTMs = (tMs: number) => (PRESENT_EPOCH - tMs / 1000) / SPY;
-  /** folded row range: the UTC years covered by foldable events */
+  /** folded row range: the fold rows covered by foldable events (+ now).
+   *  When unfolded this reports YEAR rows (hosts gate auto-fold with it). */
   const foldRows = () => {
+    const proj = (fold === "none" ? FOLD_VIEWS.year : foldView()).projector;
+    const nowRow = proj.project(PRESENT_EPOCH * 1000)?.rowIndex ?? 0;
     let min = Infinity;
     let max = -Infinity;
     for (const e of points) {
       const t = tMsOfEv(e);
       if (t == null) continue;
-      const p = foldYearProjector.project(t);
+      const p = proj.project(t);
       if (!p) continue;
       if (p.rowIndex < min) min = p.rowIndex;
       if (p.rowIndex > max) max = p.rowIndex;
     }
-    if (min > max) return { min: PRESENT_YEAR - 10, max: PRESENT_YEAR };
+    if (min > max) return { min: nowRow - 10, max: nowRow };
     // the now-marker row and "today" orientation must always be in extent
-    return { min: Math.min(min, PRESENT_YEAR), max: Math.max(max, PRESENT_YEAR) };
+    return { min: Math.min(min, nowRow), max: Math.max(max, nowRow) };
   };
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const WDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  /** per-fold view config: projector + phase-slot chrome. `labelEvery` puts a
+   *  header label (and a brighter gridline) on every Nth slot boundary. */
+  const FOLD_VIEWS = {
+    year: { projector: foldYearProjector, slots: 12, slotLabel: (i: number) => MONTHS[i]!, labelEvery: 1 },
+    month: { projector: foldMonthProjector, slots: 31, slotLabel: (i: number) => String(i + 1), labelEvery: 5 },
+    week: { projector: foldWeekProjector, slots: 7, slotLabel: (i: number) => WDAYS[i]!, labelEvery: 1 },
+    day: { projector: foldDayProjector, slots: 24, slotLabel: (i: number) => `${p2(i)}h`, labelEvery: 3 },
+    hour: { projector: foldHourProjector, slots: 60, slotLabel: (i: number) => `:${p2(i)}`, labelEvery: 5 },
+  } as const;
+  const foldView = () => FOLD_VIEWS[fold as Exclude<TimelineFold, "none">];
+  /** label for any fold row, including empty ones (via the row's start instant) */
+  const foldRowLabel = (rowIndex: number) => {
+    const v = foldView();
+    return v.projector.project(foldRowStartMs(fold, rowIndex))?.rowLabel ?? String(rowIndex);
+  };
   /** folded glyph layout, shared by drawFolded and eventAt so hover matches
    *  pixels exactly: micro-lanes appear once rows are tall enough, else the
    *  row centerline. Returns null for unfoldable events. */
   const foldGlyphPos = (e: Ev, view: LaneView) => {
     const t = tMsOfEv(e);
     if (t == null) return null;
-    const p = foldYearProjector.project(t);
+    const p = foldView().projector.project(t);
     if (!p) return null;
     const usableW = Math.max(40, view.width - FOLD_X0 - 8);
     const rowH = view.zoomY;
@@ -1140,7 +1169,8 @@ export function createTimelineSource(
     const W = view.width;
     const H = view.height;
     const usableW = Math.max(40, W - FOLD_X0 - 8);
-    const rowH = view.zoomY; // one row = 1.0 world unit = one calendar year
+    const rowH = view.zoomY; // one row = 1.0 world unit = one fold period
+    const fv = foldView();
     const yearTop = Math.floor(screenToWorldY(view, 0) + 0.5);
     const yearBot = Math.ceil(screenToWorldY(view, H) + 0.5);
     const phaseX = (p: number) => FOLD_X0 + p * usableW;
@@ -1160,28 +1190,30 @@ export function createTimelineSource(
       ctx.moveTo(FOLD_X0, y0 + 0.5);
       ctx.lineTo(W - 8, y0 + 0.5);
       ctx.stroke();
-      // year label in the left ruler, readable even for thin rows
+      // row label in the left ruler, readable even for thin rows
       if (rowH >= 9) {
         ctx.fillStyle = theme.textFaint;
         ctx.textAlign = "right";
-        ctx.fillText(String(year), RULER_W - 2, y0 + rowH / 2);
+        ctx.fillText(foldRowLabel(year), RULER_W - 2, y0 + rowH / 2);
       }
     }
 
-    // equal-width month grid: boundaries sit at exactly m/12 in EVERY row
-    // (the projector's phase is (monthIndex + fracInMonth)/12), so the guides
-    // are single full-height lines — same wall-date alignment across years
-    ctx.strokeStyle = withAlpha(theme.textFaint, 0.12);
-    for (let m = 1; m < 12; m++) {
-      const x = phaseX(m / 12);
+    // equal-width slot grid: boundaries sit at exactly i/slots in EVERY row
+    // (max-slot phases), so the guides are single full-height lines — the
+    // same wall time aligns across rows at every fold level
+    for (let m = 1; m < fv.slots; m++) {
+      const major = m % fv.labelEvery === 0;
+      if (!major && fv.slots > 32) continue; // 60-slot folds: majors only
+      ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.12 : 0.06);
+      const x = phaseX(m / fv.slots);
       ctx.beginPath();
       ctx.moveTo(x + 0.5, 0);
       ctx.lineTo(x + 0.5, H);
       ctx.stroke();
     }
 
-    // "now" marker: a tick at today's phase in the current year's row
-    const nowP = foldYearProjector.project(PRESENT_EPOCH * 1000);
+    // "now" marker: a tick at today's phase in the current row
+    const nowP = fv.projector.project(PRESENT_EPOCH * 1000);
     if (nowP && nowP.rowIndex >= yearTop && nowP.rowIndex <= yearBot) {
       const x = phaseX(nowP.phase0);
       const y0 = rowTopY(nowP.rowIndex);
@@ -1262,14 +1294,14 @@ export function createTimelineSource(
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     ctx.font = "10px ui-monospace, Menlo, monospace";
-    for (let m = 0; m < 12; m++) {
-      const x = phaseX(m / 12);
+    for (let m = 0; m < fv.slots; m += fv.labelEvery) {
+      const x = phaseX(m / fv.slots);
       ctx.fillStyle = theme.textFaint;
-      ctx.fillText(tr(MONTHS[m]!), x + 3, HEADER_H / 2);
+      ctx.fillText(tr(fv.slotLabel(m)), x + 3, HEADER_H / 2);
     }
     ctx.fillStyle = theme.textFaint;
     ctx.textAlign = "right";
-    ctx.fillText(tr("year"), RULER_W - 2, HEADER_H / 2);
+    ctx.fillText(tr(fold), RULER_W - 2, HEADER_H / 2);
     ctx.textAlign = "left";
   }
 
@@ -1362,7 +1394,7 @@ export function createTimelineSource(
         return hits
           .flatMap(({ e }) => {
             const t = tMsOfEv(e);
-            const p = t == null ? null : foldYearProjector.project(t);
+            const p = t == null ? null : foldView().projector.project(t);
             if (!p) return [];
             return [{
               label: e.label,
@@ -1474,17 +1506,11 @@ export function createTimelineSource(
       onUpdate();
     },
     tMsForWorld(worldY) {
-      let t: number;
-      if (fold !== "none") {
-        // mid-year representative instant. Date.UTC remaps years 0..99 to
-        // 1900..1999; setUTCFullYear does not (same guard as temporal.ts).
-        const d = new Date(0);
-        d.setUTCFullYear(Math.round(worldY), 6, 1);
-        d.setUTCHours(0, 0, 0, 0);
-        t = d.getTime();
-      } else {
-        t = tMsOfYbp(yBPof(worldY));
-      }
+      const t =
+        fold !== "none"
+          ? // mid-row representative instant (row start + half the period)
+            foldRowStartMs(fold, Math.round(worldY)) + FOLD_PERIOD_MS[fold]! / 2
+          : tMsOfYbp(yBPof(worldY));
       // TimeClip: deep-time worlds (Big Bang framing) exceed Date range —
       // report "no calendar instant here" instead of a poisoned number
       return Number.isFinite(t) && Number.isFinite(new Date(t).getTime()) ? t : null;
@@ -1492,11 +1518,15 @@ export function createTimelineSource(
     worldForTMs(tMs) {
       // TimeClip at entry: garbage in must not poison scrollY with NaN
       const clipped = Number.isFinite(tMs) ? new Date(tMs).getTime() : NaN;
-      if (!Number.isFinite(clipped)) return fold !== "none" ? PRESENT_YEAR : worldOf(0);
+      if (!Number.isFinite(clipped))
+        return fold !== "none"
+          ? (foldView().projector.project(PRESENT_EPOCH * 1000)?.rowIndex ?? 0)
+          : worldOf(0);
       if (fold !== "none") {
-        const p = foldYearProjector.project(clipped);
+        const proj = foldView().projector;
+        const p = proj.project(clipped);
         // out-of-fold instant: land on the present row, never NaN
-        return p ? p.rowIndex : PRESENT_YEAR;
+        return p?.rowIndex ?? proj.project(PRESENT_EPOCH * 1000)?.rowIndex ?? 0;
       }
       return worldOf(ybpOfTMs(clipped));
     },
@@ -1508,8 +1538,8 @@ export function createTimelineSource(
     },
     hudLine: (view) => {
       if (fold !== "none") {
-        const year = Math.round(screenToWorldY(view, view.height / 2));
-        return `fold: year · ${year}`;
+        const row = Math.round(screenToWorldY(view, view.height / 2));
+        return `fold: ${fold} · ${foldRowLabel(row)}`;
       }
       const yBP = yBPof(screenToWorldY(view, view.height / 2));
       if (yBP > BIG_BANG) return "before time";

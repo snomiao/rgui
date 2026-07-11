@@ -5,7 +5,8 @@
  */
 import { createLane, type LaneSource } from "./lane/lane.js";
 import { createTimelineSource } from "./lane/timeline.js";
-import type { TimelineSource } from "./lane/timeline.js";
+import type { TimelineFold, TimelineSource } from "./lane/timeline.js";
+import { FOLD_PERIOD_MS } from "./lane/temporal.js";
 import { createSeriesSource } from "./lane/timeseries.js";
 import { createTreeSource, type FileNode } from "./lane/tree.js";
 
@@ -344,18 +345,32 @@ axisBtn?.addEventListener("click", () => {
   lane.fit(); // re-frame the biased fit in the new axis
   refreshChrome();
 });
-// ── temporal fold: manual + zoom-driven auto mode ─────────────────────────
-// "auto" folds/unfolds by VIEWING SCALE: zooming into a modern window of
-// ≤ FOLD_IN_YEARS folds it into year rows; zooming a folded view out past
-// FOLD_OUT_ROWS visible rows unfolds back to the continuous axis. The wide
-// gap between the two thresholds is the hysteresis band (TODO.md) — a zoom
-// that just crossed one threshold is far from the other, so no flapping.
-const YEAR_MS = 365.2425 * 24 * 3600 * 1000;
-const FOLD_IN_YEARS = 45; // fold when a settled continuous view spans ≤ this
-const FOLD_MIN_YEARS = 2; // …but not below this: sub-year detail stays continuous
-const FOLD_OUT_ROWS = 85; // unfold when zoomed out past this many rows
-const FOLD_UNDER_ROWS = 1.2; // unfold when zoomed INTO a single row (sub-year)
-let foldMode: "auto" | "year" | "none" = "auto";
+// ── temporal fold: full auto ladder, every scale ───────────────────────────
+// "auto" (the default) picks the fold level from the VIEWING SCALE: a settled
+// view folds into whichever period keeps the row count readable —
+// continuous ⇄ year ⇄ month ⇄ week ⇄ day ⇄ hour ⇄ continuous(sub-hour).
+// Hysteresis: fold-in targets ≤ ROWS_MAX rows, climbing out needs ≥ ROWS_OUT,
+// drilling finer requires the finer level to land inside its own band;
+// adjacent periods differ ≥4×, so every transition settles well clear of the
+// opposite threshold — no flapping (TODO.md).
+const YEAR_MS = FOLD_PERIOD_MS.year!;
+const LADDER = ["year", "month", "week", "day", "hour"] as const;
+type FoldLevel = (typeof LADDER)[number];
+const ROWS_MAX = 45; // fold-in picks the finest level with ≤ this many rows
+const ROWS_OUT = 50; // a folded view zoomed out past this climbs coarser
+const OUT_EXTENT_FRAC = 0.85; // …or past this fraction of the fold's extent
+const ROWS_UNDER = 1.2; // the finest fold zoomed past this unfolds to continuous
+let foldMode: "auto" | "none" = "auto";
+
+/** finest ladder level whose row count for span S stays readable, or null */
+function foldLevelFor(spanMs: number): FoldLevel | null {
+  let pick: FoldLevel | null = null;
+  for (const f of LADDER) {
+    const rows = spanMs / FOLD_PERIOD_MS[f]!;
+    if (rows <= ROWS_MAX && rows >= ROWS_UNDER) pick = f;
+  }
+  return pick;
+}
 
 // orientation-preserving HARD switch (TODO.md: no morph in v1): re-project
 // the instant at the viewport center and jump there with setView — a focus
@@ -363,20 +378,21 @@ let foldMode: "auto" | "year" | "none" = "auto";
 // `rows` = how many year-equivalents the new viewport should span; both
 // directions map scale continuously (1 year ≈ 1 row), so auto switches feel
 // like the same zoom continuing in a new coordinate system.
-function applyFold(next: "year" | "none", rows: number) {
+function applyFold(next: TimelineFold, spanMs: number) {
   const v = lane.view;
   const centerWorld = v.scrollY + v.height / 2 / v.zoomY;
   const tMs = timeSource.tMsForWorld(centerWorld) ?? Date.now();
   timeSource.setFold(next);
   const center = timeSource.worldForTMs(tMs);
   let zoomY: number;
-  if (next === "year") {
-    zoomY = Math.max(v.height / rows, 4);
+  if (next !== "none") {
+    const rows = Math.min(Math.max(spanMs / FOLD_PERIOD_MS[next]!, 1.5), 75);
+    zoomY = v.height / rows;
   } else {
-    // world-span of ±rows/2 years around the center instant, in the
-    // continuous axis's own units (exact on linear, symlog-aware on log)
-    const w1 = timeSource.worldForTMs(tMs - (rows / 2) * YEAR_MS);
-    const w2 = timeSource.worldForTMs(tMs + (rows / 2) * YEAR_MS);
+    // world-span of the same window in the continuous axis's own units
+    // (exact on linear, symlog-aware on log)
+    const w1 = timeSource.worldForTMs(tMs - spanMs / 2);
+    const w2 = timeSource.worldForTMs(tMs + spanMs / 2);
     zoomY = v.height / Math.max(Math.abs(w2 - w1), 1e-9);
   }
   lane.setView({ zoomY, scrollY: center - v.height / (2 * zoomY) });
@@ -384,11 +400,12 @@ function applyFold(next: "year" | "none", rows: number) {
 }
 
 foldBtn?.addEventListener("click", () => {
-  // cycle auto → year → off → auto; forcing a state applies it immediately
-  foldMode = foldMode === "auto" ? "year" : foldMode === "year" ? "none" : "auto";
-  const rows = lane.view.height / lane.view.zoomY;
-  if (foldMode === "year" && timeSource.getFold() === "none") applyFold("year", 14);
-  else if (foldMode === "none" && timeSource.getFold() !== "none") applyFold("none", Math.min(rows, FOLD_OUT_ROWS));
+  // toggle auto ⇄ off (auto is the default; specific levels come from zoom)
+  foldMode = foldMode === "auto" ? "none" : "auto";
+  if (foldMode === "none" && timeSource.getFold() !== "none") {
+    const f = timeSource.getFold() as FoldLevel;
+    applyFold("none", (lane.view.height / lane.view.zoomY) * FOLD_PERIOD_MS[f]!);
+  }
   refreshChrome();
 });
 
@@ -409,28 +426,36 @@ function autoFoldTick() {
     lastAuto = { zoomY: v.zoomY, scrollY: v.scrollY };
   }
   if (stableFrames !== STABLE_FRAMES) return; // fire exactly once per settle
-  if (timeSource.getFold() === "none") {
+  const fold = timeSource.getFold();
+  if (fold === "none") {
     const tTop = timeSource.tMsForWorld(v.scrollY);
     const tBot = timeSource.tMsForWorld(v.scrollY + v.height / v.zoomY);
     if (tTop == null || tBot == null) return; // deep-time: no calendar here
-    const years = Math.abs(tBot - tTop) / YEAR_MS;
-    // the year fold serves the "tens of years" band; sub-year windows keep
-    // the continuous axis (day/hour folds are later TODO stages)
-    if (years > FOLD_IN_YEARS || years < FOLD_MIN_YEARS) return;
-    // only fold when the window actually overlaps the foldable year range
+    const spanMs = Math.abs(tBot - tTop);
+    const level = foldLevelFor(spanMs);
+    if (!level) return; // too wide for year rows / below sub-hour detail
+    // only fold when the window actually overlaps the dataset's year range
+    // (foldRowRange reports year rows while unfolded)
+    const yr = timeSource.foldRowRange();
     const centerYear = new Date((tTop + tBot) / 2).getUTCFullYear();
-    const r = timeSource.foldRowRange();
-    if (centerYear < r.min - 10 || centerYear > r.max + 10) return;
-    applyFold("year", Math.min(Math.max(years, 6), FOLD_OUT_ROWS - 10));
+    if (centerYear < yr.min - 10 || centerYear > yr.max + 10) return;
+    applyFold(level, spanMs);
   } else {
+    const f = fold as FoldLevel;
     const rows = v.height / v.zoomY;
-    // the lane's min-zoom clamps at the fold extent, so a fixed row count can
-    // be unreachable when the dataset covers few years — unfold once the user
-    // zooms out to (most of) the whole fold, whichever limit comes first
+    const spanMs = rows * FOLD_PERIOD_MS[f]!;
+    // climbing out: the lane's min-zoom clamps at the fold extent, so a fixed
+    // row count can be unreachable — also climb once the user has zoomed out
+    // to most of this fold's own extent
     const r = timeSource.foldRowRange();
-    const outAt = Math.min(FOLD_OUT_ROWS, (r.max - r.min + 1) * 0.85);
-    if (rows >= outAt) applyFold("none", Math.max(rows, FOLD_IN_YEARS * 2)); // zoomed out: overview
-    else if (rows <= FOLD_UNDER_ROWS) applyFold("none", Math.max(rows, 0.05)); // zoomed in: sub-year detail
+    const outAt = Math.min(ROWS_OUT, (r.max - r.min + 1) * OUT_EXTENT_FRAC);
+    // outside the readable band? re-pick the level for the CURRENT span —
+    // a fast zoom can fly several rungs in one settle, so this may jump
+    // levels or leave the ladder entirely (null → continuous, both ends)
+    if (rows >= outAt || rows < 3) {
+      const target = foldLevelFor(spanMs);
+      if (target !== f) applyFold(target ?? "none", Math.max(spanMs, 60_000));
+    }
   }
 }
 requestAnimationFrame(autoFoldTick);
