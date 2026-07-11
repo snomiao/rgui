@@ -21,28 +21,28 @@
     <style>
       /* page chrome palette — the canvas side lives in src/core/theme.ts */
       :root {
-        --bg: #1c2126;
-        --text: #e6e9ec;
-        --text-dim: #aeb6bf;
-        --text-muted: #8b949e;
-        --text-faint: #5c6570;
-        --border: #3a4048;
-        --panel: rgba(20, 22, 26, 0.85);
-        --panel-strong: rgba(20, 22, 26, 0.9);
-        --accent: #ffd60a;
+        --bg: #101a2d;
+        --text: #e7eef7;
+        --text-dim: #bfd0e4;
+        --text-muted: #91a9c7;
+        --text-faint: #5e7698;
+        --border: #345275;
+        --panel: rgba(12, 25, 44, 0.88);
+        --panel-strong: rgba(14, 29, 50, 0.94);
+        --accent: #ffd447;
         --hero-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
       }
       :root[data-theme="light"] {
-        --bg: #f3f1ea;
-        --text: #22262b;
-        --text-dim: #4c545c;
-        --text-muted: #69737d;
-        --text-faint: #98a1aa;
-        --border: #cfc9bc;
-        --panel: rgba(252, 251, 247, 0.88);
-        --panel-strong: rgba(252, 251, 247, 0.92);
-        --accent: #c8860a;
-        --hero-shadow: 0 1px 6px rgba(255, 255, 255, 0.65);
+        --bg: #f4ca79;
+        --text: #342715;
+        --text-dim: #5b4325;
+        --text-muted: #7f6034;
+        --text-faint: #a9844c;
+        --border: #c99b4b;
+        --panel: rgba(255, 239, 190, 0.9);
+        --panel-strong: rgba(255, 245, 211, 0.96);
+        --accent: #8b2fc9;
+        --hero-shadow: 0 1px 6px rgba(255, 248, 220, 0.7);
       }
       html,
       body {
@@ -77,37 +77,36 @@
       #debug .dim { color: var(--text-muted); }
       #debug .hi { color: var(--accent); }
 
-      .demo-switch {
+      .demo-nav {
         position: fixed;
         top: 10px;
         left: 12px;
         z-index: 40;
         display: inline-flex;
-        overflow: hidden;
+        align-items: center;
         border: 1px solid var(--border);
         border-radius: 7px;
         background: var(--panel);
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
-      .demo-switch a {
-        display: inline-flex;
-        align-items: center;
+      .demo-nav select {
         min-height: 32px;
-        padding: 0 13px;
-        color: var(--text-dim);
-        text-decoration: none;
-        font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-        transition: color 120ms, background 120ms;
+        padding: 0 34px 0 12px;
+        border: 0;
+        border-radius: 7px;
+        appearance: none;
+        background:
+          linear-gradient(45deg, transparent 50%, var(--text-dim) 50%) right 16px center / 5px 5px no-repeat,
+          linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) right 11px center / 5px 5px no-repeat,
+          transparent;
+        color: var(--text);
+        font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        cursor: pointer;
+        outline: none;
       }
-      .demo-switch a + a {
-        border-left: 1px solid var(--border);
-      }
-      .demo-switch a:hover {
-        color: var(--accent);
-      }
-      .demo-switch a[aria-current="page"] {
-        color: var(--bg);
-        background: var(--accent);
+      .demo-nav:focus-within,
+      .demo-nav:hover {
+        border-color: var(--accent);
       }
 
       /* ── Hero overlay ─────────────────────────────────────────────
@@ -312,10 +311,12 @@
     <canvas id="viewer"></canvas>
     <div id="debug"></div>
 
-    <nav class="demo-switch" aria-label="rgui demo switch">
-      <a href="/" aria-current="page">2D Graph</a>
-      <a href="/lane/">1D Lane</a>
-    </nav>
+    <div class="demo-nav">
+      <select id="demo-nav" aria-label="rgui demo switch">
+        <option value="/" selected>2D Graph</option>
+        <option value="/lane/">1D Lane</option>
+      </select>
+    </div>
 
     <div id="radix">
       <div class="row" role="group" aria-label="grid radix">
@@ -353,6 +354,11 @@
     <script type="module" src="/src/hero.ts"></script>
     <script type="module" src="/src/title.ts"></script>
     <script type="module" src="/src/cube.ts"></script>
+    <script>
+      document.querySelector("#demo-nav")?.addEventListener("change", (e) => {
+        location.href = e.target.value;
+      });
+    </script>
     <!-- entry script (not an import): package sideEffects:false would let
          the bundler drop a side-effect-only import of this module -->
     <script type="module" src="/src/gizmo.ts"></script>

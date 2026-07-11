@@ -18,26 +18,26 @@
     </script>
     <style>
       :root {
-        --bg: #1c2126;
-        --text: #e6e9ec;
-        --text-dim: #aeb6bf;
-        --text-muted: #8b949e;
-        --text-faint: #5c6570;
-        --border: #3a4048;
-        --panel: rgba(20, 22, 26, 0.85);
-        --panel-strong: rgba(20, 22, 26, 0.92);
-        --accent: #ffd60a;
+        --bg: #101a2d;
+        --text: #e7eef7;
+        --text-dim: #bfd0e4;
+        --text-muted: #91a9c7;
+        --text-faint: #5e7698;
+        --border: #345275;
+        --panel: rgba(12, 25, 44, 0.88);
+        --panel-strong: rgba(14, 29, 50, 0.94);
+        --accent: #ffd447;
       }
       :root[data-theme="light"] {
-        --bg: #f3f1ea;
-        --text: #22262b;
-        --text-dim: #4c545c;
-        --text-muted: #69737d;
-        --text-faint: #98a1aa;
-        --border: #cfc9bc;
-        --panel: rgba(252, 251, 247, 0.88);
-        --panel-strong: rgba(252, 251, 247, 0.94);
-        --accent: #c8860a;
+        --bg: #f4ca79;
+        --text: #342715;
+        --text-dim: #5b4325;
+        --text-muted: #7f6034;
+        --text-faint: #a9844c;
+        --border: #c99b4b;
+        --panel: rgba(255, 239, 190, 0.9);
+        --panel-strong: rgba(255, 245, 211, 0.96);
+        --accent: #8b2fc9;
       }
       html,
       body {
@@ -77,6 +77,32 @@
         border-radius: 7px;
         overflow: hidden;
         background: var(--panel);
+      }
+      .demo-nav {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+      .demo-nav select {
+        min-height: 32px;
+        padding: 0 34px 0 12px;
+        border: 0;
+        border-radius: 7px;
+        appearance: none;
+        background:
+          linear-gradient(45deg, transparent 50%, var(--text-dim) 50%) right 16px center / 5px 5px no-repeat,
+          linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) right 11px center / 5px 5px no-repeat,
+          transparent;
+        color: var(--text);
+        font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        cursor: pointer;
+        outline: none;
+      }
+      .demo-nav:focus-within,
+      .demo-nav:hover {
+        border-color: var(--accent);
       }
       .seg button {
         appearance: none;
@@ -387,6 +413,12 @@
     <canvas id="viewer"></canvas>
 
     <div id="bar">
+      <div class="demo-nav">
+        <select id="demo-nav" aria-label="rgui demo switch">
+          <option value="/">2D Graph</option>
+          <option value="/lane/" selected>1D Lane</option>
+        </select>
+      </div>
       <div class="seg" id="dataset" role="group" aria-label="dataset">
         <button data-src="tree" aria-pressed="true">📁 Folder tree</button>
         <button data-src="time" aria-pressed="false">🌌 Deep time</button>
@@ -401,10 +433,6 @@
       <button class="icon-btn" id="axis" title="Toggle log / linear time axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log axis</button>
       <button class="icon-btn" id="logscale" title="Toggle symlog value axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log</button>
       <div class="grow"></div>
-      <nav class="seg" aria-label="rgui demo switch">
-        <a href="/">2D Graph</a>
-        <a href="/lane/" aria-current="page">1D Lane</a>
-      </nav>
       <a id="wordmark" href="/">RGUI<span> · lane</span></a>
       <a class="icon-btn" id="home" href="/" title="2D graph mode">⊞</a>
       <button class="icon-btn" id="theme-toggle" title="Toggle light / dark">◐</button>
@@ -424,5 +452,10 @@
     </div>
 
     <script type="module" src="/src/lane-main.ts"></script>
+    <script>
+      document.querySelector("#demo-nav")?.addEventListener("change", (e) => {
+        location.href = e.target.value;
+      });
+    </script>
   </body>
 </html>
