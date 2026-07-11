@@ -963,14 +963,18 @@ export function createTimelineSource(
       }
       ctx.textAlign = "left";
 
-      // vertical slot columns — every column gets a crisp 1px border (the
-      // slot-width gate guarantees ≥1rem cells, so full grids stay readable);
-      // identical x in every band (max-slot phases), so identical wall times
-      // align down the whole track
+      // vertical slot columns — every column gets a crisp 1px border, and
+      // boundaries of the NEXT-COARSER division draw 更醒目: quarter lines
+      // among months, week lines among days, daypart lines among hours.
+      // Identical x in every band (max-slot phases), so identical wall times
+      // align down the whole track.
+      const divIdx = fv.divisions.indexOf(div);
+      const coarser = fv.divisions[divIdx + 1];
+      const majorEvery = coarser ? Math.max(1, Math.round(div.slots / coarser.slots)) : div.labelEvery;
       ctx.lineWidth = 1;
       for (let m2 = 1; m2 < div.slots; m2++) {
-        const major = m2 % div.labelEvery === 0;
-        ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.42 : 0.28);
+        const major = m2 % majorEvery === 0;
+        ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.55 : 0.26);
         const x = gx(m2 / div.slots);
         ctx.beginPath();
         ctx.moveTo(Math.round(x) + 0.5, HEADER_H);
@@ -990,11 +994,14 @@ export function createTimelineSource(
         if (!Number.isFinite(ms)) return null;
         const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
         if (y >= HEADER_H - 2 && y <= H + 2) {
-          ctx.strokeStyle = withAlpha(theme.textFaint, 0.42);
+          const strength = boundaryStrength(ms);
+          ctx.strokeStyle = withAlpha(theme.textFaint, strength);
+          ctx.lineWidth = strength >= 0.85 ? 1.6 : 1;
           ctx.beginPath();
           ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
           ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
           ctx.stroke();
+          ctx.lineWidth = 1;
         }
         // y axis: which cycle this band IS — labeled at the band's top-left
         {
@@ -1405,6 +1412,20 @@ export function createTimelineSource(
       ],
     },
   };
+  /** boundary prominence at an instant: the coarsest calendar unit that
+   *  rolls over exactly there decides the separator weight (year > month >
+   *  day > none) — so a month-fold grid shows 更醒目 lines between years,
+   *  a day-fold between months, etc. */
+  const boundaryStrength = (ms: number): number => {
+    const a = new Date(ms - 1);
+    const b = new Date(ms);
+    if (!Number.isFinite(a.getTime()) || !Number.isFinite(b.getTime())) return 0.42;
+    if (a.getUTCFullYear() !== b.getUTCFullYear()) return 0.85;
+    if (a.getUTCMonth() !== b.getUTCMonth()) return 0.62;
+    if (a.getUTCDate() !== b.getUTCDate()) return 0.5;
+    return 0.34;
+  };
+
   /** finest division whose columns stay ≥1rem within the content measure */
   const chooseDivision = (fv: (typeof FOLD_VIEWS)[Exclude<TimelineFold, "none">], contentW: number, rem: number): FoldDivision | null => {
     for (const d of fv.divisions) if (contentW / d.slots >= rem) return d;
