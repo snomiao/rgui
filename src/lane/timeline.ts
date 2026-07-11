@@ -744,7 +744,7 @@ export function createTimelineSource(
       if (t.meta.cat === "periodic")
         drawPeriodic(ctx, view, theme, t.x0, t.w, H, topW, botW);
       else {
-        drawTrackFoldBands(ctx, view, theme, t.x0, t.w, H);
+        drawTrackFoldBands(ctx, view, theme, t.x0, t.w, H, t.meta.cat);
         drawTrackEvents(ctx, view, theme, t.x0, t.w, H, topW, botW, t.meta.cat);
       }
     }
@@ -885,10 +885,11 @@ export function createTimelineSource(
     x0: number,
     w: number,
     H: number,
+    cat: Cat,
   ) {
     if (!trackFold || fold !== "none") return;
     const rem = remPx();
-    if (w < TRACK_FOLD_MIN_W_REM * rem) return;
+    if (!trackWideEnough(cat, w, rem)) return;
     const contentW = trackContentW(w, rem);
     const tCenter = tMsOfYbp(yBPof(screenToWorldY(view, H / 2)));
     if (!Number.isFinite(tCenter) || !Number.isFinite(new Date(tCenter).getTime())) return;
@@ -962,6 +963,7 @@ export function createTimelineSource(
     vis.sort((a, b) => b.e.imp - a.e.imp);
     const placed: number[] = [];
     const placedRects: { x0: number; x1: number; y: number }[] = [];
+    let anyGliding = false;
     const cx = x0 + 7;
     const vspan = view.height / view.zoomY; // visible time-span (world years)
     ctx.textBaseline = "middle";
@@ -976,8 +978,10 @@ export function createTimelineSource(
       // to the band and takes its phase-x — same helper the hit-test uses
       const fp = trackFoldPos(e, view, x0, w);
       if (fp) {
+        const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
+        if (g.moving) anyGliding = true;
         ctx.beginPath();
-        ctx.arc(fp.x, fp.y, 3, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, 3, 0, Math.PI * 2);
         if (future) {
           ctx.strokeStyle = color;
           ctx.lineWidth = 1.5;
@@ -987,7 +991,7 @@ export function createTimelineSource(
           ctx.fillStyle = color;
           ctx.fill();
         }
-        if (inScale) {
+        if (inScale && !g.moving) {
           ctx.font = "12px ui-monospace, Menlo, monospace";
           ctx.textAlign = "left";
           const text = fit(ctx, tr(e.label), x0 + w - fp.x - 12);
@@ -1007,8 +1011,10 @@ export function createTimelineSource(
         inScale && !placed.some((p) => Math.abs(p - sy) < LABEL_GAP);
       if (!labeled) {
         // presence hint: a small dim dot so hidden events aren't invisible
+        const g = glidePos(e, "rail", cx, sy);
+        if (g.moving) anyGliding = true;
         ctx.beginPath();
-        ctx.arc(cx, sy, 1.5, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, 1.5, 0, Math.PI * 2);
         ctx.fillStyle = withAlpha(color, 0.5);
         ctx.fill();
         continue;
@@ -1033,8 +1039,10 @@ export function createTimelineSource(
         ctx.lineTo(cx + 6, sy + 0.5);
         ctx.stroke();
       } else {
+        const g = glidePos(e, "rail", cx, sy); // registers the glide origin
+        if (g.moving) anyGliding = true;
         ctx.beginPath();
-        ctx.arc(cx, sy, 3, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, 3, 0, Math.PI * 2);
         if (future) {
           ctx.strokeStyle = color; // hollow dot marks a prediction
           ctx.lineWidth = 1.5;
@@ -1059,6 +1067,7 @@ export function createTimelineSource(
         }
       }
     }
+    if (anyGliding) onUpdate(); // pump frames until every glide lands
   }
 
   function drawPeriodic(
@@ -1298,6 +1307,42 @@ export function createTimelineSource(
   // the axis: recent (tall) bands fold fine, deep-time (thin) bands stay dots.
   let trackFold = true;
   const TRACK_FOLD_MIN_W_REM = 20; // a track folds only when at least this wide
+  const TRACK_FOLD_EXIT_W_REM = 17; // …and unfolds below this (width hysteresis)
+  /** per-category fold latch for the width hysteresis band */
+  const trackFoldLatch = new Map<Cat, boolean>();
+  const trackWideEnough = (cat: Cat, w: number, rem: number) => {
+    const was = trackFoldLatch.get(cat) ?? false;
+    const on = w >= (was ? TRACK_FOLD_EXIT_W_REM : TRACK_FOLD_MIN_W_REM) * rem;
+    trackFoldLatch.set(cat, on);
+    return on;
+  };
+  /** per-event glide: when an event's fold level (or rail↔fold) changes, it
+   *  glides from its last drawn position to the new one — taku's transition
+   *  animation, applied per element instead of per mode switch */
+  const GLIDE_MS = 280;
+  const glide = new Map<Ev, { x: number; y: number; key: string; from?: { x: number; y: number; t0: number } }>();
+  const glidePos = (e: Ev, key: string, tx: number, ty: number): { x: number; y: number; moving: boolean } => {
+    const prev = glide.get(e);
+    let from = prev?.from;
+    if (prev && prev.key !== key) from = { x: prev.x, y: prev.y, t0: performance.now() };
+    let x = tx;
+    let y = ty;
+    let moving = false;
+    if (from) {
+      const t = (performance.now() - from.t0) / GLIDE_MS;
+      if (t < 1) {
+        const k = easeOutBack(Math.max(0, t));
+        x = from.x + (tx - from.x) * k;
+        y = from.y + (ty - from.y) * k;
+        moving = true;
+      } else {
+        from = undefined;
+      }
+    }
+    glide.set(e, { x, y, key, from });
+    if (glide.size > 1200) glide.clear(); // safety valve
+    return { x, y, moving };
+  };
   const TRACK_FOLD_MAX_CONTENT_REM = 45; // content measure capped like a text column
   const remPx = () =>
     typeof document !== "undefined"
@@ -1312,7 +1357,7 @@ export function createTimelineSource(
   const trackFoldPos = (e: Ev, view: LaneView, x0: number, w: number) => {
     if (!trackFold || fold !== "none") return null;
     const rem = remPx();
-    if (w < TRACK_FOLD_MIN_W_REM * rem) return null;
+    if (!trackWideEnough(e.cat, w, rem)) return null;
     const t = tMsOfEv(e);
     if (t == null) return null;
     const contentW = trackContentW(w, rem);
