@@ -25,6 +25,8 @@ import type { LaneEnv, LaneSource } from "./lane.js";
 import {
   evTimestampMs,
   foldDayProjector,
+  precisionWindow,
+  projectWindow,
   foldHourProjector,
   foldMonthProjector,
   foldRowStartMs,
@@ -57,6 +59,7 @@ const ymd = (y: number, m: number, d: number) =>
 const dated = (y: number, m: number, d: number) => ({
   y: ymd(y, m, d),
   tMs: Date.UTC(y, m - 1, d),
+  precision: { kind: "calendar", unit: "day" } as const,
 });
 
 type Cat = "cosmic" | "bio" | "human" | "tech" | "repo" | "future" | "periodic";
@@ -106,6 +109,16 @@ interface Ev {
    * temporal folds; without it the event stays on the continuous axis only.
    */
   tMs?: number;
+  /**
+   * source time precision, captured at ingest BEFORE parsing (Date.parse
+   * normalizes absent fields and destroys it). calendar → the containing
+   * cycle of that unit is the event's window; uncertainty → epistemic ±
+   * bounds in years (deep time), which stays on the continuous fuzzy band
+   * and never enters calendar folds.
+   */
+  precision?:
+    | { kind: "calendar"; unit: "year" | "month" | "day" | "hour" | "minute" }
+    | { kind: "uncertainty"; beforeYears: number; afterYears: number };
 }
 
 /**
@@ -560,6 +573,7 @@ export function createTimelineSource(
           (c: { commit: { message: string; author: { date: string } } }) => ({
             y: (PRESENT_EPOCH - Date.parse(c.commit.author.date) / 1000) / SPY,
             tMs: Date.parse(c.commit.author.date),
+            precision: { kind: "calendar", unit: "minute" },
             label: (String(c.commit.message).split("\n")[0] ?? "").slice(0, 72),
             detail: "torvalds/linux",
             imp: 0.3,
@@ -586,6 +600,7 @@ export function createTimelineSource(
           .map((l) => ({
             y: (PRESENT_EPOCH - Date.parse(l.net!) / 1000) / SPY,
             tMs: Date.parse(l.net!),
+            precision: { kind: "calendar", unit: "minute" },
             label: (l.name ?? "launch").slice(0, 60),
             detail: "🚀 launch",
             imp: 0.32,
@@ -617,6 +632,7 @@ export function createTimelineSource(
       wdRows(data).map((r) => ({
         y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
         tMs: Date.parse(r.d.value),
+        precision: { kind: "calendar", unit: "day" },
         label: r.l.value.slice(0, 56),
         detail: "Wikidata",
         imp: 0.42,
@@ -923,27 +939,72 @@ export function createTimelineSource(
 
       const gx = (phase: number) => trackContentX0(x0, rem) + phase * contentW;
 
-      // aggregate cell counts for this track at THIS level, then paint heat
-      // cells under the grid: the track's hue, lightness ramp by log2 bucket
-      const cells = new Map<number, number>();
-      heatCells.set(cat, { level: lf, cells });
+      // aggregate the two heat channels for this track at THIS level:
+      // count = integer nominal events per cell (labels, dot suppression,
+      // lightness ramp); presence = mass-conserving float from TINT-state
+      // events whose precision window dwarfs the view (faint wash only —
+      // never rendered as a number). Interval-state events skip both: they
+      // are visible as row fragments instead.
+      const cells = new Map<string, number>();
+      const presence = new Map<string, number>();
+      heatCells.set(cat, { level: lf, cells, presence });
       const list = byCat.get(cat) ?? [];
+      const rowTopVisible = fv.projector.project(tCenter)!.rowIndex - Math.ceil(H / Math.max(1, Math.abs(yBot0 - yTop0))) - 2;
+      const rowBotVisible = fv.projector.project(tCenter)!.rowIndex + Math.ceil(H / Math.max(1, Math.abs(yBot0 - yTop0))) + 2;
       for (const e of list) {
         const t2 = tMsOfEv(e);
         if (t2 == null) continue;
         const pe = fv.projector.project(t2);
         if (!pe) continue;
-        const slot = Math.floor(Math.min(0.999999, pe.phase0) * div.slots);
-        const key = pe.rowIndex * 64 + slot;
-        cells.set(key, (cells.get(key) ?? 0) + 1);
+        const { lod, win } = classifyEv(e, lf, div.slots, Math.abs(yBot0 - yTop0), H);
+        if (lod === "point" || !win) {
+          const slot = Math.floor(Math.min(0.999999, pe.phase0) * div.slots);
+          const key = `${pe.rowIndex}:${slot}`;
+          cells.set(key, (cells.get(key) ?? 0) + 1);
+          continue;
+        }
+        if (lod !== "tint") continue; // interval renders as fragments
+        // presence: clip the window's rows to the visible range (caller-owned
+        // bounding per temporal.ts contract), spread overlap/window weight.
+        // Display phases approximate elapsed time here — acceptable for a wash.
+        const winRows = (win[1] - win[0]) / FOLD_PERIOD_MS[lf]!;
+        const r0 = Math.max(fv.projector.project(win[0])?.rowIndex ?? rowTopVisible, rowTopVisible);
+        const r1 = Math.min(fv.projector.project(win[1] - 1)?.rowIndex ?? rowBotVisible, rowBotVisible);
+        for (let row = r0; row <= r1 && row - r0 < 300; row++) {
+          const perRow = 1 / winRows; // this row's share of the whole window
+          const perSlot = perRow / div.slots;
+          for (let sl = 0; sl < div.slots; sl++) {
+            const key = `${row}:${sl}`;
+            presence.set(key, (presence.get(key) ?? 0) + perSlot);
+          }
+        }
       }
       const darkTheme = srgbToOklch(theme.background as string).L < 0.5;
       const slotWpx = contentW / div.slots;
+      // presence wash: bounded alpha, composed UNDER the count cells — the
+      // "an imprecise event exists somewhere here" channel, never a number
+      for (const [key, p] of presence) {
+        if (cells.has(key) || p < 0.015) continue;
+        const [rowS, slotS] = key.split(":");
+        const row = Number(rowS);
+        const slot = Number(slotS);
+        const ms0 = foldRowStartMs(lf, row);
+        const ms1 = foldRowStartMs(lf, row + 1);
+        if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+        const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
+        const cy1 = Math.min(Math.max(ya, yb), H);
+        if (cy1 <= cy0) continue;
+        ctx.fillStyle = withAlpha(CAT_COLOR[cat], 0.3 * (1 - Math.exp(-p)));
+        ctx.fillRect(gx(slot / div.slots), cy0, slotWpx, cy1 - cy0);
+      }
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       for (const [key, n] of cells) {
-        const row = Math.floor(key / 64);
-        const slot = key % 64;
+        const [rowS, slotS] = key.split(":");
+        const row = Number(rowS);
+        const slot = Number(slotS);
         const ms0 = foldRowStartMs(lf, row);
         const ms1 = foldRowStartMs(lf, row + 1);
         if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
@@ -1092,10 +1153,59 @@ export function createTimelineSource(
       // to the band and takes its phase-x — same helper the hit-test uses
       const fp = trackFoldPos(e, view, x0, w);
       if (fp) {
+        // precision-aware: interval-state events render as row fragments
+        // (their whole precision window, clipped), tint-state events left
+        // the glyph layer entirely (presence wash carries them)
+        const lodNow = evLodPrev.get(e) ?? "point";
+        if (lodNow === "tint") continue;
+        if (lodNow === "interval") {
+          const win = precisionWindow(e);
+          if (win) {
+            const rem2 = remPx();
+            const contentW2 = trackContentW(w, rem2);
+            const cx0 = trackContentX0(x0, rem2);
+            const topRow = fp.row - Math.ceil(H / Math.max(1, fp.bandPx)) - 2;
+            const botRow = fp.row + Math.ceil(H / Math.max(1, fp.bandPx)) + 2;
+            const frags = projectWindow(fp.level, win[0], win[1]).filter(
+              (fr) => fr.rowIndex >= topRow && fr.rowIndex <= botRow,
+            );
+            ctx.fillStyle = withAlpha(color, 0.28);
+            for (const fr of frags.slice(0, 200)) {
+              const ms0 = foldRowStartMs(fp.level, fr.rowIndex);
+              const ms1 = foldRowStartMs(fp.level, fr.rowIndex + 1);
+              if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+              const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+              const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+              const fy0 = Math.max(Math.min(ya, yb) + 1, HEADER_H);
+              const fy1 = Math.min(Math.max(ya, yb) - 1, H);
+              if (fy1 <= fy0) continue;
+              ctx.fillRect(cx0 + fr.phase0 * contentW2, fy0, Math.max(2, (fr.phase1 - fr.phase0) * contentW2), fy1 - fy0);
+            }
+            // nominal tick + label at the representative instant, for provenance
+            ctx.beginPath();
+            ctx.arc(fp.x, fp.y, 2, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            if (inScale) {
+              ctx.font = "12px ui-monospace, Menlo, monospace";
+              ctx.textAlign = "left";
+              const text = fit(ctx, tr(e.label), x0 + w - fp.x - 12);
+              const lx0 = fp.x + 6;
+              const lx1 = lx0 + ctx.measureText(text).width + 6;
+              if (!placedRects.some((p) => Math.abs(p.y - fp.y) < 12 && lx0 < p.x1 && lx1 > p.x0)) {
+                placedRects.push({ x0: lx0, x1: lx1, y: fp.y });
+                foldLabelRects.push({ x0: lx0, x1: lx1, y: fp.y, e });
+                ctx.fillStyle = future ? theme.textDim : theme.text;
+                ctx.fillText(text, lx0, fp.y);
+              }
+            }
+          }
+          continue;
+        }
         // dense cells are represented by their heat shade + count label —
         // individual dots would just overplot (hover still resolves them)
         const hc = heatCells.get(e.cat);
-        if (hc && hc.level === fp.level && (hc.cells.get(fp.row * 64 + fp.slot) ?? 0) > HEAT_DOT_MAX) {
+        if (hc && hc.level === fp.level && (hc.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX) {
           glide.delete(e); // no stale glide origin while represented by the cell
           continue;
         }
@@ -1498,9 +1608,34 @@ export function createTimelineSource(
     const c = Math.min(0.11, C) * (0.55 + 0.11 * step);
     return `oklch(${L.toFixed(3)} ${c.toFixed(3)} ${H.toFixed(1)})`;
   };
+  // ── precision-aware LOD: point → interval → tint ──────────────────────────
+  // An event whose precision window outgrows the view stops being a point:
+  // ~a cell wide → interval (row fragments); beyond the viewport → tint
+  // (no glyph; presence wash in the heat cells). Hysteresis 1.25/0.8 per
+  // boundary so zoom jitter doesn't flap states (joint codex×claude design).
+  type EvLod = "point" | "interval" | "tint";
+  const evLodPrev = new Map<Ev, EvLod>();
+  const classifyEv = (e: Ev, level: Exclude<TimelineFold, "none">, slots: number, bandPx: number, H: number): { lod: EvLod; win: readonly [number, number] | null } => {
+    const win = e.precision?.kind === "calendar" ? precisionWindow(e) : null;
+    if (!win) return { lod: "point", win: null }; // no window → today's behavior
+    const windowRows = (win[1] - win[0]) / FOLD_PERIOD_MS[level]!;
+    const slotFrac = windowRows * slots; // window width in slot units
+    const visibleRows = Math.max(1, H / Math.max(1, bandPx));
+    const prev = evLodPrev.get(e) ?? "point";
+    const up = 1.25;
+    const down = 0.8;
+    let lod: EvLod;
+    if (windowRows > visibleRows * (prev === "tint" ? down : up)) lod = "tint";
+    else if (slotFrac > (prev === "point" ? up : down)) lod = "interval";
+    else lod = "point";
+    evLodPrev.set(e, lod);
+    if (evLodPrev.size > 3000) evLodPrev.clear();
+    return { lod, win };
+  };
+
   /** per-frame cell counts per track (cat → rowIndex*64+slot → n), shared by
    *  the grid pass (fills + labels) and the event pass (dot suppression) */
-  const heatCells = new Map<Cat, { level: string; cells: Map<number, number> }>();
+  const heatCells = new Map<Cat, { level: string; cells: Map<string, number>; presence: Map<string, number> }>();
   const HEAT_DOT_MAX = 3; // cells with more events than this drop their dots
 
   /** pseudo-x-axis specs queued by folding tracks for the sticky header */

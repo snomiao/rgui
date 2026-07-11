@@ -445,6 +445,34 @@ ghost slot の test fixture だけ pending として置く。
 7. `fold-hour`: quarter-hour / minute / 広東語 `個字` ruler と landmark alias を足す。
 8. 最後に fold switch morph と engine-level pointer API の要否を判断する。
 
+### 精度対応 rendering (joint: codex × claude, 2026-07-12)
+
+event には固有の時間精度がある(Wikipedia ≈ 日、git commit ≈ 分〜秒、天文・地質は各種)。
+view がその精度を超えて zoom した時、点として描くのは偽の精度になる。
+
+- **データモデル**: `precision` は ingest 時に捕捉する discriminated union —
+  `{kind:"calendar", unit:"year"|"month"|"day"|"hour"|"minute"}` または
+  `{kind:"uncertainty", beforeYears, afterYears}`。`Date.parse` は欠損 field を正規化して
+  源精度を破壊するので、parse 前に捕捉する。「1994」の window は calendar-1994
+  `[1994-01-01T00Z, 1995-01-01T00Z)` であり、7月±0.5年ではない。
+- **深時間・不確実性 event は fold に入れない**: yBP 座標は PRESENT_EPOCH + Julian 年換算で
+  Gregorian の暦時刻を復元できず、JS Date の範囲も超える。連続軸の fuzzy band に残す。
+  精度対応 rendering の目的は偽精度の除去であり、製造ではない。
+- **3状態 LOD**(投影 pixel 幾何で判定、scale 数勘定ではない):
+  `windowPx ≤ max(glyphPx, cellPx)` → point / `windowPx ≤ K·viewportPx (K=1)` → interval
+  (row fragment: 中間 row は全幅 band、端 row は部分 phase 断片 + continuation cap)/
+  それ以外 → tint(glyph 消滅、grid cell を染めて存在を示す)。
+  両境界に hysteresis(enter/exit = 1.25/0.8)。
+- **heat は 2 channel**: 整数 `count`(label・dot 抑制・lightness の log2 ramp)と
+  float `presence`(`Σ overlap(cell,window)/window`、質量保存; `alpha = A·(1−exp(−presence))`
+  の有界変換で count の下に敷く淡い wash)。「3.2 events」とは決して表示しない。
+- **写像は temporal.ts の純関数**: `precisionWindow(precision, tMs) → [start, end)` と
+  `projectWindow(foldId, start, end) → {rowIndex, phase0, phase1, full}[]`(半開・end−ε で
+  最終 row 特定・TimeClip/rowRepresentable で両端検証)。
+- **hover**: tint は cell 単位の hit — 「この区間に存在しうる event」を overlap 順で列挙し、
+  tooltip に精度を明記(「dated to year: 1994」)。偽の点 hit を返さない。
+- v1 では crossfade・深時間 fold 一般化・range-difference 最適化を後回しにする。
+
 ## Inbox (from otoji-agent)
 
 <!-- otoji-agent はここに追記 -->
