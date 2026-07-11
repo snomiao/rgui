@@ -107,6 +107,8 @@ export interface Lane {
   setView(v: { scrollY?: number; zoomY?: number }): void;
   /** animate to a focus target (center world-y + zoom), like double-click */
   focus(target: { center: number; zoom: number }): void;
+  /** true while a focus() animation is in flight (hosts gate view rewrites) */
+  isAnimating(): boolean;
   destroy(): void;
 }
 
@@ -554,6 +556,7 @@ export function createLane(
       focusAnim = null;
       invalidate();
     },
+    isAnimating: () => focusAnim !== null,
     focus(target) {
       focusTo(target.center, target.zoom);
     },

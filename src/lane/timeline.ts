@@ -474,7 +474,7 @@ export interface TimelineSource extends LaneSource {
    * The host should re-frame afterwards — use tMsForWorld()/worldForTMs()
    * to keep the instant at the viewport center fixed across the switch.
    */
-  setFold(fold: TimelineFold): void;
+  setFold(fold: TimelineFold, opts?: { animateFrom?: LaneView }): void;
   /** the instant at a world-y under the CURRENT projection (null if none) */
   tMsForWorld(worldY: number): number | null;
   /** folded mode: flash a transient ring at a search hit's (row, phase) */
@@ -1167,6 +1167,39 @@ export function createTimelineSource(
    *  too, not just their dots (codex review) */
   let foldLabelRects: { x0: number; x1: number; y: number; e: Ev }[] = [];
 
+  // ── fold-switch morph-lite ────────────────────────────────────────────────
+  // On a fold change, every event glyph glides from its OLD screen position to
+  // its new one (~280ms, easeOutBack for a light spring feel) instead of
+  // teleporting. Positions are captured from the outgoing projection+view;
+  // targets are computed live each frame, so the glide composes with whatever
+  // the viewport is doing.
+  const FOLD_ANIM_MS = 280;
+  let foldAnim: { from: Map<Ev, { x: number; y: number }>; t0: number } | null = null;
+  const easeOutBack = (t: number) => 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+  /** screen position of an event under the CURRENT mode (fold or continuous) */
+  const glyphScreenPos = (e: Ev, view: LaneView): { x: number; y: number } | null => {
+    if (fold !== "none") {
+      const g = foldGlyphPos(e, view);
+      return g ? { x: g.x, y: g.y } : null;
+    }
+    const tracks = activeTracks(view);
+    const tr2 = tracks.find((t) => t.meta.cat === e.cat);
+    if (!tr2) return null;
+    return { x: tr2.x0 + tr2.w / 2, y: worldToScreenY(view, worldOf(e.y)) };
+  };
+  const captureGlyphs = (view: LaneView) => {
+    const from = new Map<Ev, { x: number; y: number }>();
+    let n = 0;
+    for (const e of points) {
+      if (!enabled.has(e.cat) || tMsOfEv(e) == null) continue;
+      const p = glyphScreenPos(e, view);
+      if (!p || p.y < -50 || p.y > view.height + 50) continue;
+      from.set(e, p);
+      if (++n >= 400) break; // cap the animated population
+    }
+    return from;
+  };
+
   function drawFolded(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
     const { theme } = env;
     const W = view.width;
@@ -1230,7 +1263,18 @@ export function createTimelineSource(
     }
 
     // events — LOD ladder by row height: dots → micro-lane dots → labels;
-    // positions come from foldGlyphPos, the SAME helper eventAt hit-tests
+    // positions come from foldGlyphPos, the SAME helper eventAt hit-tests.
+    // During a fold-switch morph, each glyph glides old→new (easeOutBack);
+    // labels wait until the motion ends so text doesn't smear mid-flight.
+    let animK = 1;
+    if (foldAnim) {
+      const t = (performance.now() - foldAnim.t0) / FOLD_ANIM_MS;
+      if (t >= 1) foldAnim = null;
+      else {
+        animK = easeOutBack(Math.max(0, t));
+        onUpdate(); // keep animating
+      }
+    }
     ctx.textAlign = "left";
     const labelCandidates: { e: Ev; x: number; y: number; r: number }[] = [];
     for (const e of points) {
@@ -1238,18 +1282,27 @@ export function createTimelineSource(
       const g = foldGlyphPos(e, view);
       if (!g || g.p.rowIndex < yearTop - 1 || g.p.rowIndex > yearBot + 1) continue;
       const color = CAT_COLOR[e.cat];
+      let gx = g.x;
+      let gy = g.y;
+      if (foldAnim) {
+        const from = foldAnim.from.get(e);
+        if (from) {
+          gx = from.x + (g.x - from.x) * animK;
+          gy = from.y + (g.y - from.y) * animK;
+        }
+      }
       if (rowH < 14) {
         // collapsed row: plain density dots on the row centerline
         ctx.fillStyle = withAlpha(color, 0.85);
-        ctx.fillRect(g.x - 1, g.y - 1, 2, 2);
+        ctx.fillRect(gx - 1, gy - 1, 2, 2);
         continue;
       }
       const r = Math.min(3.2, Math.max(1.5, g.laneH * 0.3));
-      ctx.fillStyle = color;
+      ctx.fillStyle = foldAnim && !foldAnim.from.has(e) ? withAlpha(color, Math.min(1, animK)) : color;
       ctx.beginPath();
-      ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
+      ctx.arc(gx, gy, r, 0, Math.PI * 2);
       ctx.fill();
-      if (g.laneH >= 11) labelCandidates.push({ e, x: g.x, y: g.y, r });
+      if (!foldAnim && g.laneH >= 11) labelCandidates.push({ e, x: g.x, y: g.y, r });
     }
     // greedy label declutter: important events label first; later (lesser)
     // labels are dropped when they'd overlap an already-placed one on the
@@ -1494,13 +1547,9 @@ export function createTimelineSource(
     // the zoom anchor gravitates to nearby enabled events (and the now line);
     // each carries its track-centre x so the snap is track-aware
     snapTargets: (view) => {
-      if (fold !== "none") {
-        const top = Math.floor(screenToWorldY(view, -40));
-        const bot = Math.ceil(screenToWorldY(view, view.height + 40));
-        const out: { y: number }[] = [];
-        for (let y = top; y <= bot; y++) out.push({ y });
-        return out;
-      }
+      // fold mode: no zoom-center snapping — rows are a uniform lattice, and
+      // snap gravity just fights the user's own anchor (taku 2026-07-12)
+      if (fold !== "none") return [];
       const tracks = activeTracks(view);
       const cx = new Map(tracks.map((t) => [t.meta.cat, t.x0 + t.w / 2]));
       const top = screenToWorldY(view, -40);
@@ -1516,7 +1565,12 @@ export function createTimelineSource(
     draw: (ctx, view, env) =>
       fold === "none" ? draw(ctx, view, env) : drawFolded(ctx, view, env),
     getFold: () => fold,
-    setFold(f) {
+    setFold(f, opts) {
+      if (f === fold) return;
+      // capture outgoing glyph positions BEFORE the projection changes
+      foldAnim = opts?.animateFrom
+        ? { from: captureGlyphs(opts.animateFrom), t0: performance.now() }
+        : null;
       fold = f;
       pulse = null;
       onUpdate();

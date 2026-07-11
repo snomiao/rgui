@@ -346,47 +346,72 @@ axisBtn?.addEventListener("click", () => {
   refreshChrome();
 });
 // ── temporal fold: full auto ladder, every scale ───────────────────────────
-// "auto" (the default) picks the fold level from the VIEWING SCALE: a settled
-// view folds into whichever period keeps the row count readable —
-// continuous ⇄ year ⇄ month ⇄ week ⇄ day ⇄ hour ⇄ continuous(sub-hour).
-// Hysteresis: fold-in targets ≤ ROWS_MAX rows, climbing out needs ≥ ROWS_OUT,
-// drilling finer requires the finer level to land inside its own band;
-// adjacent periods differ ≥4×, so every transition settles well clear of the
-// opposite threshold — no flapping (TODO.md).
+// "auto" (the default) picks the fold level from READABILITY, per the
+// rg-merge principle: a scale change starts exactly when rendered elements
+// become unreadable. A fold level is eligible while its rows AND slot
+// columns render at ≥ 1rem on screen — the finest eligible level wins, and
+// the row count is whatever the viewport allows (never a fixed number).
 const YEAR_MS = FOLD_PERIOD_MS.year!;
 const LADDER = ["year", "month", "week", "day", "hour"] as const;
 type FoldLevel = (typeof LADDER)[number];
-const ROWS_MAX = 45; // fold-in picks the finest level with ≤ this many rows
-const ROWS_OUT = 50; // a folded view zoomed out past this climbs coarser
-const OUT_EXTENT_FRAC = 0.85; // …or past this fraction of the fold's extent
-const ROWS_UNDER = 1.2; // the finest fold zoomed past this unfolds to continuous
+const FOLD_SLOTS: Record<FoldLevel, number> = { year: 12, month: 31, week: 7, day: 24, hour: 60 };
+const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 let foldMode: "auto" | "none" = "auto";
 
-/** finest ladder level whose row count for span S stays readable, or null */
-function foldLevelFor(spanMs: number): FoldLevel | null {
+// last pointer position over the canvas: fold switches anchor on the instant
+// UNDER THE CURSOR, so a switch that fires mid zoom-gesture keeps the user's
+// zoom anchor fixed — the fold reads as the same zoom continuing, not a jump
+let lastPointer: { y: number; at: number } | null = null;
+for (const type of ["pointermove", "wheel"] as const) {
+  canvas.addEventListener(type, (e) => {
+    lastPointer = { y: (e as PointerEvent | WheelEvent).offsetY, at: performance.now() };
+  }, { passive: true });
+}
+const HYST = 0.85; // keep the current level until its rows drop below HYST·1rem
+const MIN_ROWS = 1.2; // below this a fold isn't folding anything — go continuous
+
+/** finest ladder level whose rows and slot columns stay readable, or null.
+ *  `keep` (the current level) gets the hysteresis allowance so tiny zoom
+ *  changes at a boundary don't flap between adjacent levels. */
+function foldLevelFor(spanMs: number, keep?: FoldLevel): FoldLevel | null {
+  const rem = remPx();
+  const v = lane.view;
+  const usableW = Math.max(40, v.width - 90); // ≈ width minus the fold ruler
   let pick: FoldLevel | null = null;
   for (const f of LADDER) {
     const rows = spanMs / FOLD_PERIOD_MS[f]!;
-    if (rows <= ROWS_MAX && rows >= ROWS_UNDER) pick = f;
+    const rowH = v.height / rows;
+    const slotW = usableW / FOLD_SLOTS[f];
+    const minRowH = f === keep ? rem * HYST : rem;
+    if (rows >= MIN_ROWS && rowH >= minRowH && slotW >= rem) pick = f;
   }
   return pick;
 }
 
-// orientation-preserving HARD switch (TODO.md: no morph in v1): re-project
-// the instant at the viewport center and jump there with setView — a focus
+// orientation-preserving HARD switch (TODO.md: no morph yet): re-project the
+// instant at the viewport center and jump there with setView — a focus
 // animation would interpolate across two unrelated coordinate systems.
-// `rows` = how many year-equivalents the new viewport should span; both
-// directions map scale continuously (1 year ≈ 1 row), so auto switches feel
-// like the same zoom continuing in a new coordinate system.
+// `spanMs` = the time window the new viewport should show; every transition
+// maps scale continuously, so auto switches feel like the same zoom
+// continuing in a new coordinate system.
+// debug ring buffer of fold transitions (QA aid, harmless in prod)
+const foldLog: unknown[] = [];
+(window as unknown as { __foldLog: unknown[] }).__foldLog = foldLog;
 function applyFold(next: TimelineFold, spanMs: number) {
   const v = lane.view;
-  const centerWorld = v.scrollY + v.height / 2 / v.zoomY;
-  const tMs = timeSource.tMsForWorld(centerWorld) ?? Date.now();
-  timeSource.setFold(next);
-  const center = timeSource.worldForTMs(tMs);
+  foldLog.push({ t: Math.round(performance.now()), from: timeSource.getFold(), next, spanMs: Math.round(spanMs), zoomY: +v.zoomY.toFixed(2), scrollY: +v.scrollY.toFixed(3) });
+  if (foldLog.length > 40) foldLog.shift();
+  // anchor: the cursor's screen-y when fresh (mid-gesture), else the center
+  const anchorY =
+    lastPointer && performance.now() - lastPointer.at < 1500 ? lastPointer.y : v.height / 2;
+  const tMs = timeSource.tMsForWorld(v.scrollY + anchorY / v.zoomY) ?? Date.now();
+  timeSource.setFold(next, { animateFrom: { ...v } }); // morph-lite: glyphs glide old→new
+  const anchorWorld = timeSource.worldForTMs(tMs);
   let zoomY: number;
   if (next !== "none") {
-    const rows = Math.min(Math.max(spanMs / FOLD_PERIOD_MS[next]!, 1.5), 75);
+    // readability clamp, not a count clamp: rows span [1, height/1rem] so
+    // every rendered row keeps ≥ 1rem after the switch
+    const rows = Math.min(Math.max(spanMs / FOLD_PERIOD_MS[next]!, 1.05), v.height / remPx());
     zoomY = v.height / rows;
   } else {
     // world-span of the same window in the continuous axis's own units
@@ -395,7 +420,8 @@ function applyFold(next: TimelineFold, spanMs: number) {
     const w2 = timeSource.worldForTMs(tMs + spanMs / 2);
     zoomY = v.height / Math.max(Math.abs(w2 - w1), 1e-9);
   }
-  lane.setView({ zoomY, scrollY: center - v.height / (2 * zoomY) });
+  // keep the anchored instant at the SAME screen y across the switch
+  lane.setView({ zoomY, scrollY: anchorWorld - anchorY / zoomY });
   refreshChrome();
 }
 
@@ -412,20 +438,18 @@ foldBtn?.addEventListener("click", () => {
 // auto-fold watcher: acts only once the view SETTLES (a few unchanged
 // frames) — firing mid zoom-gesture or mid focus-animation would re-anchor
 // on a transient center and land the fold somewhere the user wasn't going
-const STABLE_FRAMES = 8;
-let lastAuto = { zoomY: 0, scrollY: 0 };
-let stableFrames = 0;
+// The auto ladder evaluates EVERY frame — fold switches happen mid-gesture
+// (the rg flow: zoom IS the fold operation). Two guards only: lane focus()
+// animations finish first (they'd re-anchor on a transient center), and a
+// short min-interval between switches lets each morph read before the next.
+const SWITCH_MIN_GAP_MS = 140;
+let lastSwitchAt = 0;
 function autoFoldTick() {
   requestAnimationFrame(autoFoldTick);
   if (current !== "time" || foldMode !== "auto") return;
+  if (lane.isAnimating()) return;
+  if (performance.now() - lastSwitchAt < SWITCH_MIN_GAP_MS) return;
   const v = lane.view;
-  if (v.zoomY === lastAuto.zoomY && v.scrollY === lastAuto.scrollY) {
-    stableFrames++;
-  } else {
-    stableFrames = 0;
-    lastAuto = { zoomY: v.zoomY, scrollY: v.scrollY };
-  }
-  if (stableFrames !== STABLE_FRAMES) return; // fire exactly once per settle
   const fold = timeSource.getFold();
   if (fold === "none") {
     const tTop = timeSource.tMsForWorld(v.scrollY);
@@ -433,7 +457,7 @@ function autoFoldTick() {
     if (tTop == null || tBot == null) return; // deep-time: no calendar here
     const spanMs = Math.abs(tBot - tTop);
     const level = foldLevelFor(spanMs);
-    if (!level) return; // too wide for year rows / below sub-hour detail
+    if (!level) return; // rows unreadable at every level → stay continuous
     // only fold when the window actually INTERSECTS the dataset's year range
     // (foldRowRange reports year rows while unfolded) — a center-year test
     // rejected wide windows whose edge overlapped the data (codex review)
@@ -441,22 +465,21 @@ function autoFoldTick() {
     const winMin = new Date(Math.min(tTop, tBot)).getUTCFullYear();
     const winMax = new Date(Math.max(tTop, tBot)).getUTCFullYear();
     if (winMax < yr.min - 10 || winMin > yr.max + 10) return;
+    lastSwitchAt = performance.now();
     applyFold(level, spanMs);
   } else {
     const f = fold as FoldLevel;
-    const rows = v.height / v.zoomY;
-    const spanMs = rows * FOLD_PERIOD_MS[f]!;
-    // climbing out: the lane's min-zoom clamps at the fold extent, so a fixed
-    // row count can be unreachable — also climb once the user has zoomed out
-    // to most of this fold's own extent
-    const r = timeSource.foldRowRange();
-    const outAt = Math.min(ROWS_OUT, (r.max - r.min + 1) * OUT_EXTENT_FRAC);
-    // outside the readable band? re-pick the level for the CURRENT span —
-    // a fast zoom can fly several rungs in one settle, so this may jump
-    // levels or leave the ladder entirely (null → continuous, both ends)
-    if (rows >= outAt || rows < 3) {
-      const target = foldLevelFor(spanMs);
-      if (target !== f) applyFold(target ?? "none", Math.max(spanMs, 60_000));
+    const spanMs = (v.height / v.zoomY) * FOLD_PERIOD_MS[f]!;
+    // re-pick from readability with hysteresis for the current level; a fast
+    // zoom can fly several rungs at once, so this may jump levels or leave
+    // the ladder entirely (null → continuous, both ends). The min-zoom clamp
+    // needs no special case: parked at a small fold's extent the rows stay
+    // readable (stable no-op); zoomed out further they shrink below 1rem and
+    // the rule climbs coarser by itself.
+    const target = foldLevelFor(spanMs, f);
+    if (target !== f) {
+      lastSwitchAt = performance.now();
+      applyFold(target ?? "none", Math.max(spanMs, 60_000));
     }
   }
 }
