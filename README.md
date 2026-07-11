@@ -290,6 +290,13 @@ is framework-agnostic pure functions and plain data.
   `isDuplicable`, `isAliasable`, `portMerge`, `splitQuantity`, `splitAtoms`, `routeIndex`,
   types `Measure`, `Ownership`, `Fanout`, `Grain`, `SignalSpec`, `Atomizer` — what a wire
   carries and what happens when it forks or converges. See [docs/signal.md](docs/signal.md)
+- **Graph CRDT** (`core/crdt`): `newGraphCrdt`, `crdtAddNode`/`crdtSetFields`/
+  `crdtRemoveNode`/`crdtAddEdge`/`crdtRemoveEdge`, `mergeGraphCrdt`, `crdtToGraph`,
+  types `GraphCrdtState`, `JoinRule`, `Dot`, `Clock` — a dependency-free,
+  transport-agnostic CRDT for syncing graphs between replicas: observed-remove
+  presence (concurrent add wins, no tombstones), deterministic Lamport-LWW field
+  registers with opt-in semilattice joins (`max`/`min`/`any`/`all`), plain-JSON
+  states, deterministic merge. rgui ships the data type; hosts move the bytes.
 - **Federation** (`core/federation`): `FEDERATED_GRAPH_SCHEMA`,
   `FEDERATED_DEMO_CHAIN_IDS`, `clampFederatedGraph`, `federatedGraphToRgui`,
   `federatedDemoChain`, `federatedDemoChainGraph`, `federatedNodeId`,

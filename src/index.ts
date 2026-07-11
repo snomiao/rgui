@@ -194,6 +194,25 @@ export {
   TERMINAL_STATUS_COLOR,
   type TerminalPreview,
 } from "./render/terminalPreview.js";
+export {
+  newGraphCrdt,
+  crdtAddNode,
+  crdtSetFields,
+  crdtRemoveNode,
+  crdtAddEdge,
+  crdtRemoveEdge,
+  crdtEdgeId,
+  mergeGraphCrdt,
+  crdtToGraph,
+  type Clock,
+  type CrdtEdgeEnd,
+  type CrdtGraph,
+  type CrdtRegister,
+  type CrdtValue,
+  type Dot,
+  type GraphCrdtState,
+  type JoinRule,
+} from "./core/crdt.js";
 
 // renderers (Canvas 2D first impl)
 export {
