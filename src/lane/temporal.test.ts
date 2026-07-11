@@ -214,3 +214,43 @@ describe2("finer fold projectors", () => {
     }
   });
 });
+
+describe2("adversarial probes (self-review of ba588b2)", () => {
+  test2("week phase equals elapsed fraction for arbitrary instants (incl. pre-1970)", () => {
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let i = 0; i < 2000; i++) {
+      const t = Math.floor((rnd() * 2 - 1) * 4e12);
+      const p = foldWeekProjector.project(t)!;
+      const frac = (t - foldRowStartMs("week", p.rowIndex)) / (7 * 86400000);
+      expect2(Math.abs(p.phase0 - frac)).toBeLessThan(1e-9);
+    }
+    const p1969 = foldWeekProjector.project(Date.UTC(1969, 11, 29))!; // a pre-epoch Monday
+    expect2(p1969.phase0).toBe(0);
+    expect2(p1969.rowKey).toBe("1969-12-29");
+  });
+
+  test2("month rowStart inverts negative row indices (floor vs modulo)", () => {
+    for (const idx of [0, -1, -13, 5]) {
+      const start = foldRowStartMs("month", idx);
+      const p = foldMonthProjector.project(start)!;
+      expect2(p.rowIndex).toBe(idx);
+      expect2(p.phase0).toBe(0);
+      expect2(foldMonthProjector.project(start - 1)!.rowIndex).toBe(idx - 1);
+    }
+  });
+
+  test2("nominal mid-row instant stays inside its row for every fold", () => {
+    const projs = [foldYearProjector, foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector];
+    let seed = 42;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (const proj of projs) {
+      for (let i = 0; i < 1000; i++) {
+        const t = Math.floor(rnd() * 3e12);
+        const row = proj.project(t)!.rowIndex;
+        const mid = foldRowStartMs(proj.id, row) + FOLD_PERIOD_MS[proj.id]! / 2;
+        expect2(proj.project(mid)!.rowIndex).toBe(row);
+      }
+    }
+  });
+});
