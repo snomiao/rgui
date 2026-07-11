@@ -2283,12 +2283,30 @@ export function createTimelineSource(
       pulse = { world: hit.center, phase: hit.phase, until: performance.now() + PULSE_MS };
       onUpdate();
     },
-    hudLine: (view) => {
+    hudLine: (view, pointerY) => {
+      const screenY = pointerY ?? view.height / 2;
+      const cursorWorld = screenToWorldY(view, screenY);
+      let tMs: number;
       if (fold !== "none") {
-        const row = Math.round(screenToWorldY(view, view.height / 2));
-        return `fold: ${fold} · ${foldRowLabel(row)}`;
+        // Only global fold mode changes the y coordinate system. Per-track
+        // folds keep fold="none", so they correctly use the continuous-axis
+        // inverse below. Global rows are centered on integer world coords;
+        // interpolate exact UTC row boundaries so cursor time stays continuous.
+        const row = Math.floor(cursorWorld + 0.5);
+        const phase = Math.max(0, Math.min(1, cursorWorld - (row - 0.5)));
+        const start = foldRowStartMs(fold, row);
+        const end = foldRowStartMs(fold, row + 1);
+        tMs = start + (end - start) * phase;
+      } else {
+        tMs = tMsOfYbp(yBPof(cursorWorld));
       }
-      const yBP = yBPof(screenToWorldY(view, view.height / 2));
+      const clipped = new Date(tMs).getTime();
+      if (Number.isFinite(tMs) && Number.isFinite(clipped)) {
+        // ISO communicates the calendar instant; fractional unix_ms preserves
+        // the continuous y-derived value beyond Date's millisecond display.
+        return `${new Date(clipped).toISOString()} · unix_ms ${tMs.toFixed(6)}`;
+      }
+      const yBP = yBPof(cursorWorld);
       if (yBP > BIG_BANG) return "before time";
       if (yBP < 0) return `in ${fmtDur(-yBP)}`; // future
       if (yBP >= 1e6) return fmtLabel(yBP, 1e6);

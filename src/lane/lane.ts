@@ -54,7 +54,7 @@ export interface LaneSource {
    */
   maxZoom?: number;
   /** extra HUD line (e.g. hovered path / value under the cursor) */
-  hudLine?: (view: LaneView) => string | null;
+  hudLine?: (view: LaneView, pointerY?: number) => string | null;
   /**
    * notable points the zoom anchor gravitates toward: world-y plus an optional
    * screen-x (e.g. a track centre). When the cursor is near one, zooming keeps
@@ -298,7 +298,10 @@ export function createLane(
 
   function updateDebug() {
     if (!debug) return;
-    const extra = source.hudLine?.(view);
+    const extra = source.hudLine?.(
+      view,
+      pointerInside && pointerY != null ? pointerY : undefined,
+    );
     const zpx = view.zoomY;
     debug.innerHTML =
       `<span class="dim">src</span> ${source.title}\n` +
