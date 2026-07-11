@@ -38,6 +38,19 @@ Rendering is currently Canvas 2D, but the renderer is swappable behind a single 
 with a WebGPU implementation planned next. It mounts on any `<canvas>` and exposes the same
 API to React, Vue, Svelte, or plain DOM.
 
+## Scope — a graph-GUI library, no I/O
+
+rgui is scoped to **graph GUI + plain data, never transport**. The library renders and
+edits graphs (canvas layers, interaction, layout, LOD, overlays) and defines pure-data
+vocabularies for hosts to fill (the signal algebra, the `org.rgui.graph.v1` federation
+envelope). It performs **no I/O of its own**: no fetch, no WebSocket, no WebRTC, no
+polling — conversion functions take an envelope object and return a `Graph`, and how that
+envelope traveled is entirely the host app's business (otoji uses WebRTC + a signaling
+Worker, agent-yes serves HTTP). Even live embeds are host-owned: rgui offers the generic
+node `overlay` slot; the consumer decides whether to glue an iframe into it. Anything
+network-shaped (feed clients, subscriptions, share transports) belongs in host apps or a
+separate package — not here.
+
 ## Install
 
 ```bash

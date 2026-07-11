@@ -104,3 +104,16 @@ bun --hot ./index.ts
 ```
 
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+
+## Scope guard — graph-GUI library only, no I/O
+
+rgui is a **graph-GUI library**: canvas rendering, interaction, layout, LOD,
+overlays, plus pure-data vocabularies (signal algebra, `org.rgui.graph.v1`
+federation envelope). It must contain **no transport code** — no fetch /
+WebSocket / WebRTC / EventSource / polling in `src/core`, `src/render`, or
+anything exported from `src/index.ts`. Federation helpers convert envelope
+objects to `Graph`s; how envelopes travel is the host app's job (otoji,
+agent-yes). If a task seems to need a feed client or subscription helper in
+rgui, put it in the host app or propose a separate package instead. (The demo
+homepage under `src/lane*` may fetch demo data — it is not part of the lib
+bundle.)
