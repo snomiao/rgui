@@ -721,6 +721,7 @@ export function createTimelineSource(
     const topW = screenToWorldY(view, 0);
     const botW = screenToWorldY(view, H);
     foldLabelRects = []; // repopulated by whichever event path draws labels
+    foldHeaderAxes.length = 0; // pseudo-x-axes queued by folding tracks
 
     maybeFetch(view); // lazily pull real commits when zoomed to their scale
     drawEras(ctx, view, theme, H);
@@ -763,6 +764,17 @@ export function createTimelineSource(
     for (const t of tracks) {
       ctx.fillStyle = t.meta.color;
       ctx.fillText(fit(ctx, tr(t.meta.label), t.w - 8), t.x0 + 6, HEADER_H / 2);
+    }
+    // folding tracks: pseudo-x-axis slot labels share the sticky strip
+    // (skipping the zone the track's own name occupies)
+    ctx.font = "9px ui-monospace, Menlo, monospace";
+    for (const ax of foldHeaderAxes) {
+      for (let m2 = 0; m2 < ax.fv.slots; m2 += ax.every) {
+        const x = ax.x0 + (m2 / ax.fv.slots) * ax.contentW + 2;
+        if (x < ax.x0 + 68) continue; // leave room for the track name
+        ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
+        ctx.fillText(tr(ax.fv.slotLabel(m2)), x, HEADER_H / 2);
+      }
     }
 
     drawOffscreen(ctx, theme, W, H, topW, botW);
@@ -876,8 +888,10 @@ export function createTimelineSource(
     ctx.fillText(`now · ${PRESENT_YEAR}`, W - 6, sy - 2);
   }
 
-  /** cycle-band separators inside a folding track: the finest level whose
-   *  band at the viewport center is readable draws its row boundaries */
+  /** the fold GRID inside a folding track: vertical phase-slot columns (with
+   *  ghost placeholders for slots a short cycle doesn't have), horizontal
+   *  cycle-band separators, and a pseudo-x-axis of slot labels at the top —
+   *  the finest level readable at the viewport center draws its chrome */
   function drawTrackFoldBands(
     ctx: CanvasRenderingContext2D,
     view: LaneView,
@@ -901,40 +915,72 @@ export function createTimelineSource(
       const start = foldRowStartMs(lf, p.rowIndex);
       const end = foldRowStartMs(lf, p.rowIndex + 1);
       if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
-      const yTop = worldToScreenY(view, worldOf(ybpOfTMs(start)));
-      const yBot = worldToScreenY(view, worldOf(ybpOfTMs(end)));
-      const bandPx = Math.abs(yBot - yTop);
-      if (bandPx < rem) continue;
-      // walk visible cycle boundaries of this level (bounded)
-      ctx.strokeStyle = withAlpha(theme.textFaint, 0.26);
-      let row = p.rowIndex;
-      // up from the center row
-      for (let i = 0; i < 120; i++) {
-        const ms = foldRowStartMs(lf, row);
-        if (!Number.isFinite(ms)) break;
-        const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
-        if (y < HEADER_H - 2) break;
-        if (y <= H + 2) {
-          ctx.beginPath();
-          ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
-          ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
-          ctx.stroke();
-        }
-        row -= 1;
+      const yTop0 = worldToScreenY(view, worldOf(ybpOfTMs(start)));
+      const yBot0 = worldToScreenY(view, worldOf(ybpOfTMs(end)));
+      if (Math.abs(yBot0 - yTop0) < rem) continue;
+
+      const gx = (phase: number) => x0 + 7 + phase * contentW;
+
+      // vertical slot columns — every column gets a crisp 1px border (the
+      // slot-width gate guarantees ≥1rem cells, so full grids stay readable);
+      // identical x in every band (max-slot phases), so identical wall times
+      // align down the whole track
+      ctx.lineWidth = 1;
+      for (let m2 = 1; m2 < fv.slots; m2++) {
+        const major = m2 % fv.labelEvery === 0;
+        ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.42 : 0.28);
+        const x = gx(m2 / fv.slots);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x) + 0.5, HEADER_H);
+        ctx.lineTo(Math.round(x) + 0.5, H);
+        ctx.stroke();
       }
-      row = p.rowIndex + 1;
-      for (let i = 0; i < 120; i++) {
+
+      // pseudo-x-axis: slot labels live in the sticky header strip (drawn
+      // last, above everything) — queue this track's axis for that pass
+      let every = fv.labelEvery;
+      while ((contentW / fv.slots) * every < 30 && every < fv.slots) every *= 2;
+      foldHeaderAxes.push({ x0: x0 + 7, contentW, fv, every });
+
+      // horizontal cycle-band separators + month ghost placeholders
+      const drawRow = (row: number): number | null => {
         const ms = foldRowStartMs(lf, row);
-        if (!Number.isFinite(ms)) break;
+        if (!Number.isFinite(ms)) return null;
         const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
-        if (y > H + 2) break;
-        if (y >= HEADER_H - 2) {
+        if (y >= HEADER_H - 2 && y <= H + 2) {
+          ctx.strokeStyle = withAlpha(theme.textFaint, 0.42);
           ctx.beginPath();
           ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
           ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
           ctx.stroke();
         }
-        row += 1;
+        // ghost slots: a 28..30-day month leaves its 29..31 columns blank —
+        // dim the placeholder region so alignment reads as intentional
+        if (lf === "month") {
+          const nextMs = foldRowStartMs(lf, row + 1);
+          if (Number.isFinite(nextMs)) {
+            const y1 = worldToScreenY(view, worldOf(ybpOfTMs(nextMs)));
+            const year = Math.floor(row / 12);
+            const dim = new Date(Date.UTC(year, (((row % 12) + 12) % 12) + 1, 0)).getUTCDate();
+            if (dim < 31) {
+              const a = Math.max(Math.min(y, y1), HEADER_H);
+              const b = Math.min(Math.max(y, y1), H);
+              if (b > a) {
+                ctx.fillStyle = withAlpha(theme.textFaint, 0.07);
+                ctx.fillRect(gx(dim / 31), a, gx(1) - gx(dim / 31), b - a);
+              }
+            }
+          }
+        }
+        return y;
+      };
+      for (let row = p.rowIndex, i = 0; i < 120; i++, row--) {
+        const y = drawRow(row);
+        if (y == null || y < HEADER_H - 2) break;
+      }
+      for (let row = p.rowIndex + 1, i = 0; i < 120; i++, row++) {
+        const y = drawRow(row);
+        if (y == null || y > H + 2) break;
       }
       return; // finest readable level only
     }
@@ -1243,7 +1289,9 @@ export function createTimelineSource(
   const FOLD_VIEWS = {
     year: { projector: foldYearProjector, slots: 12, slotLabel: (i: number) => MONTHS[i]!, labelEvery: 1 },
     month: { projector: foldMonthProjector, slots: 31, slotLabel: (i: number) => String(i + 1), labelEvery: 5 },
-    week: { projector: foldWeekProjector, slots: 7, slotLabel: (i: number) => WDAYS[i]!, labelEvery: 1 },
+    // single-letter weekday initials read at any slot width (Monday-start;
+    // weekStartsOn config is a TODO — Sunday-start would read SMTWTFS)
+    week: { projector: foldWeekProjector, slots: 7, slotLabel: (i: number) => WDAYS[i]![0]!, labelEvery: 1 },
     day: { projector: foldDayProjector, slots: 24, slotLabel: (i: number) => `${p2(i)}h`, labelEvery: 3 },
     hour: { projector: foldHourProjector, slots: 60, slotLabel: (i: number) => `:${p2(i)}`, labelEvery: 5 },
   } as const;
@@ -1278,6 +1326,8 @@ export function createTimelineSource(
   /** label rects placed by the last folded draw — labels are hover targets
    *  too, not just their dots (codex review) */
   let foldLabelRects: { x0: number; x1: number; y: number; e: Ev }[] = [];
+  /** pseudo-x-axis specs queued by folding tracks for the sticky header */
+  const foldHeaderAxes: { x0: number; contentW: number; fv: (typeof FOLD_VIEWS)[keyof typeof FOLD_VIEWS]; every: number }[] = [];
 
   // ── fold-switch morph-lite ────────────────────────────────────────────────
   // On a fold change, every event glyph glides from its OLD screen position to
