@@ -949,14 +949,21 @@ export function createTimelineSource(
       const presence = new Map<string, number>();
       heatCells.set(cat, { level: lf, cells, presence });
       const list = byCat.get(cat) ?? [];
-      const rowTopVisible = fv.projector.project(tCenter)!.rowIndex - Math.ceil(H / Math.max(1, Math.abs(yBot0 - yTop0))) - 2;
-      const rowBotVisible = fv.projector.project(tCenter)!.rowIndex + Math.ceil(H / Math.max(1, Math.abs(yBot0 - yTop0))) + 2;
+      const centerRow = fv.projector.project(tCenter)!.rowIndex;
+      const vis = visibleRowRange(lf, view, H, centerRow); // projected endpoints
       for (const e of list) {
         const t2 = tMsOfEv(e);
         if (t2 == null) continue;
         const pe = fv.projector.project(t2);
         if (!pe) continue;
-        const { lod, win } = classifyEv(e, lf, div.slots, Math.abs(yBot0 - yTop0), H);
+        // classify at the event's OWN resolved level — the single source of
+        // truth shared with the glyph pass and hit-testing (codex review P0);
+        // an event resolved at a different level than this grid renders as
+        // its own glyph and skips these center-level cells entirely
+        const fpAgg = trackFoldPos(e, view, x0, w);
+        if (!fpAgg) continue;
+        const { lod, win } = classifyEv(e, fpAgg.level, FOLD_VIEWS[fpAgg.level].divisions[0]!.slots, fpAgg.bandPx, H);
+        if (fpAgg.level !== lf) continue;
         if (lod === "point" || !win) {
           const slot = Math.floor(Math.min(0.999999, pe.phase0) * div.slots);
           const key = `${pe.rowIndex}:${slot}`;
@@ -968,8 +975,8 @@ export function createTimelineSource(
         // bounding per temporal.ts contract), spread overlap/window weight.
         // Display phases approximate elapsed time here — acceptable for a wash.
         const winRows = (win[1] - win[0]) / FOLD_PERIOD_MS[lf]!;
-        const r0 = Math.max(fv.projector.project(win[0])?.rowIndex ?? rowTopVisible, rowTopVisible);
-        const r1 = Math.min(fv.projector.project(win[1] - 1)?.rowIndex ?? rowBotVisible, rowBotVisible);
+        const r0 = Math.max(fv.projector.project(win[0])?.rowIndex ?? vis.r0, vis.r0);
+        const r1 = Math.min(fv.projector.project(win[1] - 1)?.rowIndex ?? vis.r1, vis.r1);
         for (let row = r0; row <= r1 && row - r0 < 300; row++) {
           const perRow = 1 / winRows; // this row's share of the whole window
           const perSlot = perRow / div.slots;
@@ -984,7 +991,7 @@ export function createTimelineSource(
       // presence wash: bounded alpha, composed UNDER the count cells — the
       // "an imprecise event exists somewhere here" channel, never a number
       for (const [key, p] of presence) {
-        if (cells.has(key) || p < 0.015) continue;
+        if (cells.has(key) || p <= 0) continue; // count cells dominate (documented)
         const [rowS, slotS] = key.split(":");
         const row = Number(rowS);
         const slot = Number(slotS);
@@ -996,7 +1003,10 @@ export function createTimelineSource(
         const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
         const cy1 = Math.min(Math.max(ya, yb), H);
         if (cy1 <= cy0) continue;
-        ctx.fillStyle = withAlpha(CAT_COLOR[cat], 0.3 * (1 - Math.exp(-p)));
+        // perceptible floor + bounded ramp: the conserved p can be ~1e-4 for
+        // exactly the events tint exists for (codex review P0) — a tint-only
+        // event must never be invisible; magnitude still modulates above it
+        ctx.fillStyle = withAlpha(CAT_COLOR[cat], 0.07 + 0.23 * (1 - Math.exp(-p * 12)));
         ctx.fillRect(gx(slot / div.slots), cy0, slotWpx, cy1 - cy0);
       }
       ctx.textAlign = "center";
@@ -1153,22 +1163,25 @@ export function createTimelineSource(
       // to the band and takes its phase-x — same helper the hit-test uses
       const fp = trackFoldPos(e, view, x0, w);
       if (fp) {
-        // precision-aware: interval-state events render as row fragments
-        // (their whole precision window, clipped), tint-state events left
-        // the glyph layer entirely (presence wash carries them)
-        const lodNow = evLodPrev.get(e) ?? "point";
-        if (lodNow === "tint") continue;
-        if (lodNow === "interval") {
-          const win = precisionWindow(e);
+        // precision-aware: classification at the EVENT'S OWN fold level —
+        // the same level trackFoldPos resolved — so aggregation, glyphs and
+        // hit-testing can never disagree (codex review P0). Interval-state
+        // events render as row fragments; tint-state events left the glyph
+        // layer entirely (presence wash carries them).
+        const cls = classifyEv(e, fp.level, FOLD_VIEWS[fp.level].divisions[0]!.slots, fp.bandPx, H);
+        if (cls.lod === "tint") continue;
+        if (cls.lod === "interval") {
+          const win = cls.win;
           if (win) {
             const rem2 = remPx();
             const contentW2 = trackContentW(w, rem2);
             const cx0 = trackContentX0(x0, rem2);
-            const topRow = fp.row - Math.ceil(H / Math.max(1, fp.bandPx)) - 2;
-            const botRow = fp.row + Math.ceil(H / Math.max(1, fp.bandPx)) + 2;
-            const frags = projectWindow(fp.level, win[0], win[1]).filter(
-              (fr) => fr.rowIndex >= topRow && fr.rowIndex <= botRow,
-            );
+            // pre-clip the window IN TIME to the visible rows before
+            // projecting — projectWindow has no internal row cap by contract
+            const { r0, r1 } = visibleRowRange(fp.level, view, H, fp.row);
+            const clipA = Math.max(win[0], foldRowStartMs(fp.level, r0));
+            const clipB = Math.min(win[1], foldRowStartMs(fp.level, r1 + 1));
+            const frags = clipB > clipA ? projectWindow(fp.level, clipA, clipB) : [];
             ctx.fillStyle = withAlpha(color, 0.28);
             for (const fr of frags.slice(0, 200)) {
               const ms0 = foldRowStartMs(fp.level, fr.rowIndex);
@@ -1614,23 +1627,46 @@ export function createTimelineSource(
   // (no glyph; presence wash in the heat cells). Hysteresis 1.25/0.8 per
   // boundary so zoom jitter doesn't flap states (joint codex×claude design).
   type EvLod = "point" | "interval" | "tint";
-  const evLodPrev = new Map<Ev, EvLod>();
+  // hysteresis memory is keyed by (event, fold level): the SAME event can sit
+  // at different levels in different tracks/frames on the symlog axis, and a
+  // single-key map made states leak across levels (codex review P0). WeakMap
+  // needs no growth valve — a mid-frame clear corrupted the frame (P1).
+  const evLodPrev = new WeakMap<Ev, Map<string, EvLod>>();
+  // classification uses NOMINAL periods, not exact projected pixels — a
+  // documented v1 approximation of the projected-pixel classifier (calendar
+  // rows vary, symlog is nonlinear); the hysteresis band absorbs the error.
   const classifyEv = (e: Ev, level: Exclude<TimelineFold, "none">, slots: number, bandPx: number, H: number): { lod: EvLod; win: readonly [number, number] | null } => {
     const win = e.precision?.kind === "calendar" ? precisionWindow(e) : null;
     if (!win) return { lod: "point", win: null }; // no window → today's behavior
     const windowRows = (win[1] - win[0]) / FOLD_PERIOD_MS[level]!;
     const slotFrac = windowRows * slots; // window width in slot units
     const visibleRows = Math.max(1, H / Math.max(1, bandPx));
-    const prev = evLodPrev.get(e) ?? "point";
+    let mem = evLodPrev.get(e);
+    if (!mem) evLodPrev.set(e, (mem = new Map()));
+    const prev = mem.get(level) ?? "point";
     const up = 1.25;
     const down = 0.8;
     let lod: EvLod;
     if (windowRows > visibleRows * (prev === "tint" ? down : up)) lod = "tint";
     else if (slotFrac > (prev === "point" ? up : down)) lod = "interval";
     else lod = "point";
-    evLodPrev.set(e, lod);
-    if (evLodPrev.size > 3000) evLodPrev.clear();
+    mem.set(level, lod);
     return { lod, win };
+  };
+  /** visible fold-row range from PROJECTED screen endpoints — symlog rows
+   *  vary in height, so center ± H/centerBand under-covers (codex review) */
+  const visibleRowRange = (level: Exclude<TimelineFold, "none">, view: LaneView, H: number, fallbackRow: number): { r0: number; r1: number } => {
+    const proj = FOLD_VIEWS[level].projector;
+    const rowAt = (sy: number): number | null => {
+      const t = tMsOfYbp(yBPof(screenToWorldY(view, sy)));
+      if (!Number.isFinite(t)) return null;
+      return proj.project(t)?.rowIndex ?? null;
+    };
+    const a = rowAt(HEADER_H - 40);
+    const b = rowAt(H + 40);
+    const r0 = Math.min(a ?? fallbackRow, b ?? fallbackRow);
+    const r1 = Math.max(a ?? fallbackRow, b ?? fallbackRow);
+    return { r0: r0 - 1, r1: r1 + 1 };
   };
 
   /** per-frame cell counts per track (cat → rowIndex*64+slot → n), shared by
@@ -1997,6 +2033,10 @@ export function createTimelineSource(
       for (const e of points) {
         if (e.cat !== track.meta.cat) continue;
         const fp = trackFoldPos(e, view, track.x0, track.w);
+        // tint-state events have NO visible glyph — giving the invisible
+        // nominal point hover semantics would fake precision (cell-level
+        // candidate listing is the deferred v1 follow-up)
+        if (fp && classifyEv(e, fp.level, FOLD_VIEWS[fp.level].divisions[0]!.slots, fp.bandPx, view.height).lod === "tint") continue;
         const dy = fp
           ? Math.hypot(fp.x - sx, fp.y - sy)
           : Math.abs(worldToScreenY(view, worldOf(e.y)) - sy);
