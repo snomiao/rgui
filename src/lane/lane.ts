@@ -109,6 +109,8 @@ export interface Lane {
   focus(target: { center: number; zoom: number }): void;
   /** true while a focus() animation is in flight (hosts gate view rewrites) */
   isAnimating(): boolean;
+  /** enable/disable scroll-into-emptiness auto-zoom-out (default OFF) */
+  setAutoZoomOut(on: boolean): void;
   destroy(): void;
 }
 
@@ -166,8 +168,12 @@ export function createLane(
 
   // Scrolling into empty space auto-zooms-out: rate ∝ scroll speed × emptiness.
   // Self-limiting — zooming out reveals more content, emptiness drops, it eases.
+  // OFF by default (an opt-in preference): the surprise zoom fought users more
+  // than the blank stretches did.
   const EMPTY_K = 0.0012;
+  let autoZoomOut = false;
   function scrollDamp(dScreenPx: number) {
+    if (!autoZoomOut) return;
     const emp = source.emptiness?.(view) ?? 0;
     if (emp <= 0.02) return;
     zoomAt(
@@ -557,6 +563,9 @@ export function createLane(
       invalidate();
     },
     isAnimating: () => focusAnim !== null,
+    setAutoZoomOut(on) {
+      autoZoomOut = on;
+    },
     focus(target) {
       focusTo(target.center, target.zoom);
     },

@@ -497,6 +497,10 @@ export interface TimelineSource extends LaneSource {
   /** per-track folding: fold events inside each track whenever space allows */
   isTrackFold(): boolean;
   setTrackFold(on: boolean): void;
+  /** preference: OKLCH heat cells + presence wash in fold grids */
+  setHeatCells(on: boolean): void;
+  /** preference: glide animation on fold-level changes */
+  setGlide(on: boolean): void;
   /** world-y of an instant under the CURRENT projection */
   worldForTMs(tMs: number): number;
   /** the event under a screen point (for hover cards), or null */
@@ -962,8 +966,13 @@ export function createTimelineSource(
         // its own glyph and skips these center-level cells entirely
         const fpAgg = trackFoldPos(e, view, x0, w);
         if (!fpAgg) continue;
-        const { lod, win } = classifyEv(e, fpAgg.level, FOLD_VIEWS[fpAgg.level].divisions[0]!.slots, fpAgg.bandPx, H);
-        if (fpAgg.level !== lf) continue;
+        const { lod, win } = classifyEv(e, fpAgg.level, fpAgg.slots, fpAgg.bandPx, H);
+        // level mismatch (symlog variance): point/interval render as their
+        // own glyph/band at their own level — but TINT has no glyph, so its
+        // existence must still be carried by THIS grid's cells (codex P0):
+        // classification truth stays at the event's level, the encoding uses
+        // the center grid's geometry.
+        if (fpAgg.level !== lf && lod !== "tint") continue;
         if (lod === "point" || !win) {
           const slot = Math.floor(Math.min(0.999999, pe.phase0) * div.slots);
           const key = `${pe.rowIndex}:${slot}`;
@@ -977,12 +986,17 @@ export function createTimelineSource(
         const winRows = (win[1] - win[0]) / FOLD_PERIOD_MS[lf]!;
         const r0 = Math.max(fv.projector.project(win[0])?.rowIndex ?? vis.r0, vis.r0);
         const r1 = Math.min(fv.projector.project(win[1] - 1)?.rowIndex ?? vis.r1, vis.r1);
+        const nSlots = Math.ceil(div.slots);
         for (let row = r0; row <= r1 && row - r0 < 300; row++) {
           const perRow = 1 / winRows; // this row's share of the whole window
-          const perSlot = perRow / div.slots;
-          for (let sl = 0; sl < div.slots; sl++) {
+          // slot shares use each cell's ACTUAL phase width so fractional
+          // divisions (month's 31/7 week cells) conserve mass — the tail
+          // cell weighs its 3 days, not a full seventh (codex review)
+          for (let sl = 0; sl < nSlots; sl++) {
+            const share = (Math.min(sl + 1, div.slots) - sl) / div.slots;
+            if (share <= 0) continue;
             const key = `${row}:${sl}`;
-            presence.set(key, (presence.get(key) ?? 0) + perSlot);
+            presence.set(key, (presence.get(key) ?? 0) + perRow * share);
           }
         }
       }
@@ -990,7 +1004,7 @@ export function createTimelineSource(
       const slotWpx = contentW / div.slots;
       // presence wash: bounded alpha, composed UNDER the count cells — the
       // "an imprecise event exists somewhere here" channel, never a number
-      for (const [key, p] of presence) {
+      for (const [key, p] of heatEnabled ? presence : new Map<string, number>()) {
         if (cells.has(key) || p <= 0) continue; // count cells dominate (documented)
         const [rowS, slotS] = key.split(":");
         const row = Number(rowS);
@@ -1007,11 +1021,12 @@ export function createTimelineSource(
         // exactly the events tint exists for (codex review P0) — a tint-only
         // event must never be invisible; magnitude still modulates above it
         ctx.fillStyle = withAlpha(CAT_COLOR[cat], 0.07 + 0.23 * (1 - Math.exp(-p * 12)));
-        ctx.fillRect(gx(slot / div.slots), cy0, slotWpx, cy1 - cy0);
+        const cwP = ((Math.min(slot + 1, div.slots) - slot) / div.slots) * contentW;
+        ctx.fillRect(gx(slot / div.slots), cy0, Math.max(0, cwP), cy1 - cy0);
       }
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      for (const [key, n] of cells) {
+      for (const [key, n] of heatEnabled ? cells : new Map<string, number>()) {
         const [rowS, slotS] = key.split(":");
         const row = Number(rowS);
         const slot = Number(slotS);
@@ -1024,7 +1039,8 @@ export function createTimelineSource(
         const cy1 = Math.min(Math.max(ya, yb), H);
         if (cy1 <= cy0) continue;
         ctx.fillStyle = heatCellColor(cat, n, darkTheme);
-        ctx.fillRect(gx(slot / div.slots), cy0, slotWpx, cy1 - cy0);
+        const cwN = ((Math.min(slot + 1, div.slots) - slot) / div.slots) * contentW;
+        ctx.fillRect(gx(slot / div.slots), cy0, Math.max(0, cwN), cy1 - cy0);
         // selective direct label: the count, only when the cell affords it
         if (n > HEAT_DOT_MAX && slotWpx >= 2 * rem && cy1 - cy0 >= 1.1 * rem) {
           ctx.fillStyle = darkTheme ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.7)";
@@ -1168,7 +1184,7 @@ export function createTimelineSource(
         // hit-testing can never disagree (codex review P0). Interval-state
         // events render as row fragments; tint-state events left the glyph
         // layer entirely (presence wash carries them).
-        const cls = classifyEv(e, fp.level, FOLD_VIEWS[fp.level].divisions[0]!.slots, fp.bandPx, H);
+        const cls = classifyEv(e, fp.level, fp.slots, fp.bandPx, H);
         if (cls.lod === "tint") continue;
         if (cls.lod === "interval") {
           const win = cls.win;
@@ -1704,6 +1720,8 @@ export function createTimelineSource(
   // switch, no global mode. On the symlog axis the fold level varies ALONG
   // the axis: recent (tall) bands fold fine, deep-time (thin) bands stay dots.
   let trackFold = true;
+  let heatEnabled = true; // pref: heat cells + presence wash
+  let glideEnabled = true; // pref: glide animation on level changes
   const TRACK_FOLD_MIN_W_REM = 20; // a track folds only when at least this wide
   const TRACK_FOLD_EXIT_W_REM = 17; // …and unfolds below this (width hysteresis)
   /** per-category fold latch for the width hysteresis band */
@@ -1720,6 +1738,7 @@ export function createTimelineSource(
   const GLIDE_MS = 280;
   const glide = new Map<Ev, { x: number; y: number; key: string; from?: { x: number; y: number; t0: number } }>();
   const glidePos = (e: Ev, key: string, tx: number, ty: number): { x: number; y: number; moving: boolean } => {
+    if (!glideEnabled) return { x: tx, y: ty, moving: false };
     const prev = glide.get(e);
     let from = prev?.from;
     if (prev && prev.key !== key) from = { x: prev.x, y: prev.y, t0: performance.now() };
@@ -1782,6 +1801,7 @@ export function createTimelineSource(
         bandPx: Math.abs(yBot - yTop),
         row: p.rowIndex,
         slot: Math.floor(Math.min(0.999999, p.phase0) * div.slots),
+        slots: div.slots, // the CHOSEN division's slot count (may be fractional)
       };
     }
     return null;
@@ -2036,7 +2056,7 @@ export function createTimelineSource(
         // tint-state events have NO visible glyph — giving the invisible
         // nominal point hover semantics would fake precision (cell-level
         // candidate listing is the deferred v1 follow-up)
-        if (fp && classifyEv(e, fp.level, FOLD_VIEWS[fp.level].divisions[0]!.slots, fp.bandPx, view.height).lod === "tint") continue;
+        if (fp && classifyEv(e, fp.level, fp.slots, fp.bandPx, view.height).lod === "tint") continue;
         const dy = fp
           ? Math.hypot(fp.x - sx, fp.y - sy)
           : Math.abs(worldToScreenY(view, worldOf(e.y)) - sy);
@@ -2213,6 +2233,13 @@ export function createTimelineSource(
     setTrackFold(on) {
       trackFold = on;
       onUpdate();
+    },
+    setHeatCells(on) {
+      heatEnabled = on;
+      onUpdate();
+    },
+    setGlide(on) {
+      glideEnabled = on;
     },
     setPulse(hit) {
       if (fold === "none" || hit.phase === undefined) return;
