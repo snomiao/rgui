@@ -20,6 +20,33 @@ export interface TemporalProjector {
   project(tMs: number): FoldProjection | null;
 }
 
+export type CalendarPrecisionUnit = "year" | "month" | "day" | "hour" | "minute";
+
+/** Source precision, kept distinct from the event's representative instant. */
+export type TemporalPrecision =
+  | { readonly kind: "calendar"; readonly unit: CalendarPrecisionUnit }
+  | {
+      readonly kind: "uncertainty";
+      readonly beforeYears: number;
+      readonly afterYears: number;
+    };
+
+export type PrecisionEvent = {
+  readonly tMs?: unknown;
+  readonly precision?: TemporalPrecision;
+};
+
+export type PrecisionWindow = readonly [startMs: number, endMs: number];
+
+export type FoldWindowFragment = {
+  rowIndex: number;
+  phase0: number;
+  phase1: number;
+  full: boolean;
+};
+
+export type FoldId = "year" | "month" | "week" | "day" | "hour";
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MONTH_DAY_SLOTS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
 
@@ -34,6 +61,36 @@ export function evTimestampMs(event: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   const clipped = new Date(value).getTime();
   return Number.isFinite(clipped) ? clipped : null;
+}
+
+/**
+ * Construct the half-open UTC calendar cycle containing an event's instant.
+ * Epistemic uncertainty deliberately returns null: it remains on the
+ * continuous axis and must not acquire invented calendar coordinates.
+ */
+export function precisionWindow(event: PrecisionEvent): PrecisionWindow | null {
+  if (event.precision?.kind !== "calendar") return null;
+  const tMs = evTimestampMs(event);
+  if (tMs == null) return null;
+
+  const unit = event.precision.unit;
+  if (unit === "minute") {
+    const hour = foldHourProjector.project(tMs);
+    if (!hour) return null;
+    const hourStart = foldRowStartMs("hour", hour.rowIndex);
+    // Read the integral UTC component rather than recovering it from a
+    // floating phase at an exact minute boundary.
+    const minuteStart = hourStart + new Date(tMs).getUTCMinutes() * 60_000;
+    const minuteEnd = minuteStart + 60_000;
+    return validWindow(minuteStart, minuteEnd) ? [minuteStart, minuteEnd] : null;
+  }
+
+  const projector = projectorForFold(unit);
+  const projection = projector.project(tMs);
+  if (!projection) return null;
+  const startMs = foldRowStartMs(unit, projection.rowIndex);
+  const endMs = foldRowStartMs(unit, projection.rowIndex + 1);
+  return validWindow(startMs, endMs) ? [startMs, endMs] : null;
 }
 
 function projectFoldYear(tMs: number): FoldProjection | null {
@@ -87,9 +144,11 @@ const pad2 = (n: number) => String(n).padStart(2, "0");
  * partial rows at the TimeClip extremes are rejected so foldRowStartMs,
  * row labels, and mid-row instants stay total over accepted projections */
 function rowRepresentable(foldId: string, rowIndex: number): boolean {
+  const start = foldRowStartMs(foldId, rowIndex);
+  const end = foldRowStartMs(foldId, rowIndex + 1);
   return (
-    Number.isFinite(foldRowStartMs(foldId, rowIndex)) &&
-    Number.isFinite(foldRowStartMs(foldId, rowIndex + 1))
+    Number.isFinite(new Date(start).getTime()) &&
+    Number.isFinite(new Date(end).getTime())
   );
 }
 
@@ -170,6 +229,68 @@ export const foldHourProjector: TemporalProjector = {
     return { rowKey, rowIndex, rowLabel: rowKey, phase0: phase, phase1: phase };
   },
 };
+
+function projectorForFold(foldId: FoldId): TemporalProjector {
+  switch (foldId) {
+    case "year": return foldYearProjector;
+    case "month": return foldMonthProjector;
+    case "week": return foldWeekProjector;
+    case "day": return foldDayProjector;
+    case "hour": return foldHourProjector;
+  }
+}
+
+function validWindow(startMs: number, endMs: number): boolean {
+  return (
+    Number.isFinite(new Date(startMs).getTime()) &&
+    Number.isFinite(new Date(endMs).getTime()) &&
+    startMs < endMs
+  );
+}
+
+/**
+ * Project a half-open instant window into consecutive fold-row fragments.
+ * The caller owns viewport clipping and must bound wide windows before using
+ * a fine fold; this pure helper intentionally has no internal row cap.
+ * Invalid, empty, or partially unrepresentable windows are rejected as an
+ * empty fragment list.
+ */
+export function projectWindow(
+  foldId: FoldId,
+  startMs: number,
+  endMs: number,
+): FoldWindowFragment[] {
+  const clippedStart = new Date(startMs).getTime();
+  const clippedEnd = new Date(endMs).getTime();
+  if (
+    !Number.isFinite(clippedStart) ||
+    !Number.isFinite(clippedEnd) ||
+    clippedStart >= clippedEnd
+  ) return [];
+
+  const projector = projectorForFold(foldId);
+  const start = projector.project(clippedStart);
+  const end = projector.project(clippedEnd);
+  const last = projector.project(clippedEnd - 1);
+  if (!start || !end || !last) return [];
+
+  const fragments: FoldWindowFragment[] = [];
+  for (let rowIndex = start.rowIndex; rowIndex <= last.rowIndex; rowIndex++) {
+    if (!rowRepresentable(foldId, rowIndex)) return [];
+    const phase0 = rowIndex === start.rowIndex ? start.phase0 : 0;
+    const phase1 = rowIndex === end.rowIndex ? end.phase0 : 1;
+    if (!(phase0 >= 0 && phase0 < 1 && phase1 > 0 && phase1 <= 1 && phase0 < phase1)) {
+      return [];
+    }
+    fragments.push({
+      rowIndex,
+      phase0,
+      phase1,
+      full: phase0 === 0 && phase1 === 1,
+    });
+  }
+  return fragments;
+}
 
 function fracOfDayUTC(d: Date): number {
   return (
