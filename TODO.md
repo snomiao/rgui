@@ -54,6 +54,397 @@
 - [x] 公式ページ公開: live demo 上に hero overlay (rgui 大タイトル + backronym を CRT グリッチで巡回、tagline、GitHub/npm リンク)。`src/hero.ts` + `index.html` に追加、`bunx vite build --outDir site-dist` で site 生成 (npm lib の `dist/` は不変)。
 - [x] Cloudflare Pages へ deploy (SNOLAB account, snomiao@gmail.com): https://rgui.pages.dev/ + custom domain https://rgui.snomiao.com/ (proxied CNAME rgui -> rgui.pages.dev、証明書発行済み・HTTP 200 確認)。
 
+## TODO: 1D lane — 周期尺度を折り畳む時間 UI
+
+### 発想
+
+現在の 1D lane demo は、複数 track の履歴 event を一本の連続時間軸に沿って scroll する。
+これに対し、時間には「年内の位置」「週内の位置」「一日内の時刻」など、同じ timestamp を
+別の周期で見た位相が複数ある。選択した周期 `S` について、時刻を次の座標へ射影する:
+
+```text
+t → (cycleIndex_S(t), phaseWithinCycle_S(t))
+```
+
+- `cycleIndex` を行方向、`phaseWithinCycle` を列方向へ置けば、各周期を一行に折り畳める。
+- 離れた年・週・日にある同位相の event が縦に揃い、季節性、曜日性、日内周期を比較できる。
+- zoom は単なる幾何学的拡大ではなく、時間を別の周期座標系へ折り直す操作になる。
+- 仮称: **calendar-aware recursive folding** / **temporal folding**。
+
+### 基本的な fold
+
+| 表示尺度 | 一行が表す周期 | 行内の主な位相・分割 |
+|---|---|---|
+| year | 1 年 | 12 months |
+| month | 1 か月 | その月と交差する 4〜6 calendar weeks |
+| week | 1 週 | 7 weekdays |
+| day | 1 日 | 24 hours、または 4 dayparts × 6 hours |
+| hour | 1 時間 | quarter-hours、`個字`、minutes など複数候補 |
+| minute | 1 分 | 60 seconds |
+| subsecond | 1 秒以下 | decimal scale |
+
+#### Year → month
+
+- 各行を一つの calendar year、横軸を共通の Jan〜Dec とする。
+- 12 か月を比較しやすい等幅 cell にし、月内は `day / daysInMonth` で位置づける案を第一候補とする。
+- 実経過時間を重視する mode では、月幅を日数に比例させる余地も残す。
+- leap year は固定 `365d` の剰余で処理せず、calendar boundary から算出する。
+
+#### Month → calendar week → weekday
+
+- 月は厳密には 4 週ではない。28〜31 日であり、週の開始曜日へ揃えると 4〜6 個の週と交差する。
+- 各週は常に 7 個の weekday slot を持つ。月初・月末の月外 slot は clip または ghost 表示にする。
+- `weekStartsOn` は locale/user setting に従う。ISO week と各地域の週定義も切り替え可能にする。
+- week boundary は month boundary を横断するため、month→week は厳密な包含階層ではない。
+
+#### Day → hour / daypart
+
+- day level では各行を calendar date、横軸を wall-clock の `00:00〜24:00` とする。
+- 24 時間を直接示すほか、次の等幅 4 dayparts を中間尺度として利用できる:
+
+```text
+Overnight  00:00–06:00  [00 01 02 03 04 05]
+Morning    06:00–12:00  [06 07 08 09 10 11]
+Afternoon  12:00–18:00  [12 13 14 15 16 17]
+Evening    18:00–24:00  [18 19 20 21 22 23]
+```
+
+- 内部名は意味的に中立な `quarterDay`、表示名は locale/profile から与える。
+- DST により 23/25 時間になる日は、周期比較を優先するなら 24 個の wall-clock slot を維持し、
+  欠落 hour / 重複 hour を特殊表示する。経過時間を優先する可変幅 mode も検討する。
+
+#### Hour 以下
+
+一般的な zoom path の一例:
+
+```text
+1h → 4 × 15min → 15 × 1min → 60 × 1s
+1s → 10 × 100ms → 10 × 10ms → 10 × 1ms
+   → 10 × 100μs → 10 × 10μs → 10 × 1μs → …
+```
+
+秒以下は十進 fold を基本にできる。tick の読みやすさには `1–2–5 × 10^n` 系の補助目盛も使える。
+
+### 文化ごとの時間尺度と、尺度の重なり
+
+文化差はラベル翻訳だけではなく、認知的に目立つ分割そのものにも現れる。香港・広東語の例では、
+1 時間内の 5 分刻みを `個字` で数える:
+
+```text
+ 5min: 一個字
+10min: 兩個字
+15min: 三個字（例: 三點三個字）
+20min: 四個字
+30min: 半個鐘（特別な landmark alias）
+```
+
+ただし、これらを locale ごとに排他的な一本の scale tree として扱ってはいけない。
+同じ 60 分には次の尺度が同時に重なる:
+
+```text
+60min
+├── 2 × 30min (half-hours)
+├── 4 × 15min (quarter-hours)
+├── 12 × 5min (個字)
+└── 60 × 1min
+```
+
+同様に、一つの timestamp は `year/month/day`、`ISO week/weekday`、
+`day/daypart/hour`、`hour/quarter/minute`、`hour/個字/minute` など複数の座標系に同時に属する。
+したがって設計対象は tree ではなく、境界が交差する **overlapping temporal scale graph** である。
+
+### UI / interaction 案
+
+- 一つの scale を **primary fold** として layout に使い、他の scale は secondary ruler、境界線、
+  label、snap guide として重ねる。必要なら複数 ruler を pin できるようにする。
+- zoom に応じて primary scale を連続的に交代させる。例:
+  `year/month → month/week → week/weekday → day/hour → hour/minute`。
+- cell/month/week/daypart を click すると、その区間を次の fold へ展開する。
+- event が周期境界を越える場合は両側で clip し、continuation marker と同一 event の視覚的接続を残す。
+- 月外 weekday、DST の欠落 hour など、座標 slot は存在するが値がない箇所を ghost 表示する。
+- `Overnight` や `個字` などの自然言語 label には、曖昧さを避けるため正確な数値範囲も併記できる。
+- locale は初期設定に使うが、文化的 ruler を排他的に固定しない。user が追加・併用できるようにする。
+
+### 抽象化案
+
+各 scale は固定 duration や親子関係ではなく、timestamp から周期行・位相・境界・label を得る関数として表す。
+calendar unit は milliseconds の剰余ではなく、calendar/timezone aware な boundary generator を使う。
+
+```ts
+interface TemporalFoldScale {
+  id: string
+  project(t: Temporal.Instant, context: TemporalContext): {
+    cycleKey: string
+    cycleStart: Temporal.Instant
+    cycleEnd: Temporal.Instant
+    phase: number // normalized 0..1
+  }
+  divisions?: TemporalDivision[]
+  landmarks?: TemporalLandmark[]
+  preferredOverlays?: string[]
+}
+
+interface TemporalContext {
+  calendar: string
+  timeZone: string
+  locale: string
+  weekStartsOn?: number
+}
+```
+
+`divisions` は複数定義でき、同一 span に quarter-hour / `個字` / minute などの ruler を重ねられる。
+`landmarks` は `30min → 半個鐘` のような文化的別名、正午、深夜、DST transition などに使う。
+
+### 実装候補
+
+- [ ] 現行 historic-events demo に `year/month` fold を追加し、複数年を縦に比較する。
+- [ ] `TemporalFoldScale` 相当の projection/boundary API を設計する。
+- [ ] month/week/weekday の非包含境界、clip、ghost slot を実装する。
+- [ ] day/hour と `4 × 6h` daypart 表示を実装する。
+- [ ] primary fold + overlapping secondary rulers を実装する。
+- [ ] quarter-hour / minute / 広東語 `個字` ruler を同時表示できる prototype を作る。
+- [ ] event の周期境界 clipping と continuation marker を実装する。
+- [ ] leap year、timezone、DST 23/25h、週開始曜日を test fixture にする。
+- [ ] zoom 中の primary scale 交代を morph animation で連続化する。
+- [ ] 周期ごとの pattern density / recurring-event alignment を可視化する demo dataset を用意する。
+
+### 実装に根ざした追加整理 (Codex ⇄ Claude review)
+
+現行 `src/lane` を読んだ上での制約は明確である。`createLane()` は `LaneView`
+(`scrollY`, `zoomY`, `width`, `height`) と入力処理だけを所有し、domain 固有の配置は
+`LaneSource.draw(ctx, view, env)` に閉じている。横軸は core engine の world 座標ではなく、
+各 source が screen px として自由に使う。したがって temporal folding は、まず lane core の
+一般化ではなく **`TimelineSource` の projection mode** として試作するのが安全である。
+
+#### 現行実装から見た v1 の形
+
+- `worldY = rowIndex` とする。各 row は year / week / day など一つの cycle を表し、
+  既存の `scrollY` / `zoomY` / `clampScroll()` / `focus()` をそのまま使う。
+- `x = phaseWithinCycle * usableWidth` とする。横幅は今の lane と同じく viewport 固定で、
+  horizontal pan は v1 では入れない。
+- event category は現行 `CAT_META` / filter / color を再利用し、row 内の小 lane・jitter・
+  priority label で重なりを避ける。既存の `activeTracks()` と `drawTrackEvents()` は
+  そのまま流用せず、folded layout 専用に小さく作る。
+- 既存の `drawPeriodic()` は「周期 tick を別 track に描く」実装であり、layout projection
+  ではない。temporal folding はこれを置換せず、別 mode として併存させる。
+- 既存 `logAxis` / `linear` toggle は絶対時間軸の切替である。fold は第三の projection
+  なので、将来は `setProjection("log" | "linear" | "fold-year" | "fold-week" | "fold-day")`
+  のような additive API に拡張し、既存 `setLogAxis()` は wrapper として残す。
+
+#### データモデル上の不足
+
+`timeline.ts` の event は現在 `y: yearsBeforePresent` を主座標にしており、deep-time の曖昧な
+出来事には十分だが calendar fold には不足する。fold 対象には、内部正規化後の event に
+`tMs?: number` などの exact timestamp を追加する必要がある。
+
+- `ymd()` で作っている Linux milestone、lazy fetch された GitHub commit / launch /
+  Wikidata rows は `tMs` を持てる。
+- `span` が大きい prehistoric / deep-time event は、細かい calendar fold では除外するか、
+  「approx / undated」gutter に置く。無理に Jan-Dec や weekday へ投影しない。
+- lazy fetch は現状 `draw()` 中で visible `yBP` window を見て発火する。folded view は
+  visible rows が複数の非連続絶対時間範囲を表し得るため、v1 では curated / already-ingested
+  event だけで始め、後で `visibleTimeWindowsForFold(view)` を追加する。
+
+#### `TemporalProjector` はまず内部 API
+
+最初から public core API にせず、`timeline.ts` 内部または `src/lane/temporal.ts` の純粋関数
+として切り出す。依存を増やさないため v0 は `Date` + UTC 固定でよいが、型は将来の
+Temporal / host-supplied calendar adapter に差し替えられる形にしておく。
+
+```ts
+type FoldProjection = {
+  rowKey: string;       // e.g. "2026", "2026-W28", "2026-07-11"
+  rowIndex: number;     // lane world-y
+  rowLabel: string;
+  phase0: number;       // 0..1, event or span start in the row
+  phase1: number;       // 0..1, event or span end in the row
+  ghost?: boolean;      // month-outside weekday, missing DST hour, etc.
+};
+
+interface TemporalProjector {
+  id: string;
+  project(tMs: number, ctx: TemporalFoldContext): FoldProjection | null;
+  rowRange(events: readonly TimelineEvent[]): { min: number; max: number };
+  drawRuler?(ctx: CanvasRenderingContext2D, rect: DOMRectLike, env: LaneEnv): void;
+}
+```
+
+ここでの `TimelineEvent` は現行 `Ev` をそのまま公開する意味ではなく、`y`, `span`,
+`tMs`, `label`, `cat`, `imp`, `detail` を持つ内部正規化型を指す。
+
+#### interaction の段階化
+
+現行 lane core は source へ click / pointer event を渡さない。`focusAt(screenY)` と
+`eventAt(screenX, screenY, view)` はあるが、cell click で fold を展開する一般 API はない。
+そのため v1 は次の範囲に止める。
+
+- UI は `lane-main.ts` の time dataset chrome に `projection` toggle を足す。
+- hover card は `eventAt()` を folded mode 対応にする。
+- search focus は row center へ移動し、phase column を一時 highlight する。横 pan がないため、
+  `Lane.focus()` だけで x を中央へ寄せようとしない。
+- cell click / drill-down / fold morph は v2。必要になった時点で `LaneSource.onPointer?` か
+  host-side canvas listener のどちらを正式化するか決める。
+
+#### 推奨 prototype 順
+
+1. `fold-year`: exact timestamp を持つ modern events だけを対象に、row = calendar year、
+   x = month/day phase として Jan-Dec を比較する。leap year は UTC calendar boundary で計算する。
+2. category filter / search / hover を folded mode でも動かす。deep-time event は approx gutter に出す。
+3. `fold-week`: row = ISO/local week、x = weekday + time-of-day phase。`weekStartsOn` を test fixture 化する。
+4. `fold-day`: row = date、x = 24 wall-clock hours。DST は v1 では UTC 固定、v2 で local timezone の
+   missing / repeated hour を ghost slot 表示する。
+5. overlay ruler として `quarter-hour` / `個字` / minute を重ねる。主 layout は一つに保ち、
+   overlapping temporal scale graph は secondary ruler と snap guide から始める。
+6. 最後に projection 間の morph animation を検討する。現在の `setSource()` は fit をリセットするため、
+   連続 morph は projection と view state が安定してからでよい。
+
+#### test 方針
+
+canvas screenshot より前に、projection の純粋関数 test を作る。
+
+- leap year: Feb 29 を含む year/month phase が 0..1 に収まり、rowKey が安定する。
+- month/week: 月初・月末が週境界を横断しても ghost slot と row/phase が破綻しない。
+- weekStartsOn: Sunday-start と Monday-start で weekday phase が期待通り変わる。
+- day/hour: UTC day で 00:00 / 12:00 / 23:59 が正しい phase になる。
+- DST: v1 では UTC 固定を明記し、local timezone 版の missing/repeated hour は pending fixture とする。
+- fuzzy event: `span` が cycle 境界を跨ぐ時に phase interval を clip し、continuation marker を出せる情報を返す。
+
+### 実装に基づく追補 (joint: codex × claude)
+
+上の構想は有効だが、現行 `src/lane` の構造に合わせると、最初の実装単位は
+「lane engine の一般化」ではなく `TimelineSource` の fold mode である。`createLane()` は
+`LaneView` と入力を持つだけで、横方向の配置は `LaneSource.draw()` が screen px で決める。
+この制約はむしろ temporal folding に合っている。縦軸を cycle row、横軸を cycle 内 phase として
+source 内で描けば、`scrollY` / `zoomY` / `focus()` / `clampScroll()` をそのまま使える。
+
+#### fold mode と既存 axis の分離
+
+- `setFold("none" | "year" | "week" | "day")` を `TimelineSource` に足す案を第一候補にする。
+  `logAxis` / `linear` は `fold="none"` のときだけ意味を持つ絶対時間軸であり、fold とは直交する。
+  既存 `isLogAxis()` / `setLogAxis()` は互換 wrapper として残す。
+- v1 では `fold-year` を手動 toolbar toggle で選ぶ。zoom による自動 fold 交代や morph animation は
+  projection と row anchoring が固まってからの v2 とする。
+- fold 切替時は viewport center の instant を新しい projection に再投影し、その row が中心に来るよう
+  `scrollY` を合わせる。横方向 pan はないため、phase は highlight で示す。crossfade は任意。
+- v2 の animation は hard switch ではなく、同一 event id を unfolded coordinate と folded coordinate の
+  間で移動させる。event が片側では point、もう片側では clipped span / uncertainty area になる場合があるため、
+  animation primitive は「点」だけでなく `point ↔ interval/area` の補間を扱う。
+  例: continuous timeline では fuzzy band、folded year row では複数 row に分割された clipped area になる。
+- animation primitive は形状ペアごとに分ける (taku):
+  - `point → point`: 最も簡単。x/y の移動 animation に軽い spring feeling を付けるだけでよい。
+  - `area → area`: translation + resize の affine 補間(rect lerp)。
+  - `point ↔ area`: point 側を退化 area(幅 0)とみなして同じ rect lerp に載せる。
+  - `area → 複数 clipped fragments`(fuzzy band が複数 row に割れる場合): source rect を cycle
+    境界で切った piece ごとに対応先 fragment へ rect lerp する split/join。
+- 概念 model は「紙の帯を折る」: 連続時間軸の帯を cycle 境界で切り、segment 単位で平行移動 +
+  横 rescale して row へ積む。event glyph は自分の segment に乗って動く(event ごとの独立散乱より
+  局所構造が保たれ、「折り畳み」として読める)。展開は逆再生。
+- engine 変更なしで実装できる: transition 中 `TimelineSource` が両 projector を保持し、`draw()` が
+  両座標系での screen 位置を計算して easing / spring で lerp、`t=1` で worldY の意味と view を swap。
+  LOD は transition 中は両状態の粗い方に固定して label flicker を防ぎ、動かす glyph 数に上限
+  (例: 可視 500、超過分は heat strip 経由で fade)を設ける。`prefers-reduced-motion` では
+  crossfade + center-instant anchor に fallback。
+- morph の最初の対象は `linear ⇄ fold-year`(両者とも絶対時間に線形で、segment 写像が区分線形に
+  なり最も素直)。`log ⇄ fold` は非線形 warp になるため後回し。
+- 将来 zoom で fold を切り替える場合は、閾値に hysteresis band を入れて flapping を防ぐ。
+
+#### row model と scroll anchoring
+
+- row は常に 1.0 world unit とし、`rowKey` は calendar-stable な文字列にする。
+  例: `2026`, `2026-W15`, `2026-07-11`。
+- cycle は半開区間 `[start, end)` とする。境界上の instant、たとえば `Jan 1 00:00` は
+  古い row の `phase=1.0` ではなく新しい row の `phase=0` である。
+- lazy fetch や ingest で古い cycle が前に追加されると、単純な `rowIndex` は全 row をずらし、
+  viewport jump を起こす。`rowKey` で anchor し、prepend された row 数だけ `lane.view.scrollY` を
+  lane-main 側で補正する。
+- folded view の visible rows は非連続の絶対時間 window を表すことがある。v1 では lazy fetch を
+  fold mode で無効化し、curated / already-ingested event だけを描く。後で
+  `visibleTimeWindowsForFold(view)` を設計する。
+
+#### interaction
+
+v1 では lane core に pointer API を足さない。現行 demo は hover を `timeSource.eventAt()`、
+double-click focus を `focusAt()` で source 側に寄せており、この延長で足りる。
+
+- `TimelineSource.cellAt(screenX, screenY, view)` を追加し、cycle cell / division / rowKey /
+  phase range を返す。
+- `lane-main.ts` が double-click 時に `cellAt()` を見て、`source.drill(cell)` 相当を呼ぶ。
+  `drill` は次の fold へ進め、対象 interval に focus する。single click は v1 では inert のままにし、
+  drag / scroll と競合させない。
+- `Esc` または toolbar back button で lane-main が小さな fold stack を pop する。
+- cell click drill-down は shortcut であり、主要な展開操作はあくまで zoom / fold toolbar とする。
+
+#### visual encoding
+
+- row 内 category は固定順の micro-lane にする。jitter は phase alignment を壊すため v1 では避ける。
+  row height が小さいときは micro-lane を畳み、density 表示へ落とす。
+- LOD は row height で段階化する。
+  - `rowH < ~14px`: phase-density heat strip
+  - medium: colored dots / clipped spans
+  - tall: labels, detail line, hover target
+- alignment が主役なので、primary divisions の縦線を薄く全高に通す。phase labels は既存の
+  sticky header strip に置く。year fold なら Jan..Dec、week fold なら weekday。
+- `RULER_W` 左余白は維持し、右には approx / undated gutter を予約する。
+  `usableWidth = width - RULER_W - GUTTER_W` とする。
+- month 外 weekday、将来の DST missing/repeated hour などは hatched ghost slot とし、
+  「event がない」状態と視覚的に分ける。
+- cycle 境界を跨ぐ event span は row ごとに clip し、端に chevron continuation marker を出す。
+  同一 event の fragment は hover でまとめて highlight する。
+- `yBP` しかない approximate event は fold 本体へ無理に投影せず、右 gutter に `+3 approx` のような
+  badge として出し、hover で一覧する。
+
+#### overlapping scale graph の v1 表現
+
+概念上は複数 scale が重なる graph だが、v1 の layout は primary fold を一つに限定する。
+secondary scale は ruler として最大 2 本まで sticky header に pin できるようにする。
+
+- secondary ruler strip をクリックすると「emphasized」状態になり、その境界だけを全高に描く。
+- 最初の non-containment demo は `fold-year` に ISO-week ruler を重ねる。month boundary と
+  week boundary が交差するため、overlapping scale graph の意味が伝わりやすく、DST を避けられる。
+- quarter ruler も year/month fold に重ねられる。`個字` / quarter-hour / noon / 半個鐘などは
+  `fold-day` / `fold-hour` まで延期する。
+- landmark は小さな diamond と exact-range tooltip として扱う。
+
+#### search / hover
+
+- fold mode の `SearchHit.center` は対象 row の中心を返す。`scale` は row detail が読める程度の
+  row span にする。
+- x pan がないため、検索結果の phase は一時的な pulse highlight で示す。
+- `eventAt(screenX, screenY, view)` は folded layout の micro-lane / phase / clipped fragment を見る。
+  hover card は既存 Wikipedia card と同じ経路を使う。
+
+#### Temporal / Date 方針
+
+v0 は dependency-free を守るため `Date` + UTC 固定で実装してよい。ただし API 名と fixture は
+Temporal へ差し替えやすい形にする。local timezone / DST は v1 では仕様として deferred にし、
+ghost slot の test fixture だけ pending として置く。
+
+#### test fixture
+
+純粋 projection test を canvas より先に作る。
+
+- leap year: Feb 29 が equal-width month mode で February cell の中に収まる。
+- half-open boundary: `Jan 1 00:00` は新 row の phase 0 になる。
+- multi-year span event: 各 row に clip された fragment と continuation marker 情報が出る。
+- weekStartsOn: Sunday-start と Monday-start で weekday phase が変わる。
+- ISO week 53 が安定した `rowKey` を持つ。
+- 6 calendar weeks と交差する month が ghost slot を含めて壊れない。
+- `phase0` / `phase1` は常に `[0, 1)` に正規化される。
+- equal-width year/month mode では、同じ wall-date が複数年で同じ phase に揃う。
+- lazy ingest で前方 row が増えても `rowKey` anchoring により viewport center が保たれる。
+
+#### prototype の順序
+
+1. `tMs` を内部 event に追加し、Linux release / GitHub commit / launch / Wikidata rows を exact timestamp 化する。
+2. `fold-year`: 10 年程度の Linux release / software event を Jan..Dec に揃え、季節性や release cadence を見る。
+3. synthetic periodic dataset を足す。例: weekly standup、annual release、quarterly planning。
+   目標 screenshot は「10 年の Linux releases が year/month fold で cadence と偏りを示す」状態。
+4. hover / search pulse / category filter / approx gutter を fold-year に対応させる。
+5. `fold-week`: ISO/local week と weekday ruler。`weekStartsOn` と ISO week 53 を test に入れる。
+6. `fold-day`: 24 hour wall-clock row と daypart ruler。UTC 固定から始める。
+7. `fold-hour`: quarter-hour / minute / 広東語 `個字` ruler と landmark alias を足す。
+8. 最後に fold switch morph と engine-level pointer API の要否を判断する。
+
 ## Inbox (from otoji-agent)
 
 <!-- otoji-agent はここに追記 -->

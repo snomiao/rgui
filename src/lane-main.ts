@@ -311,16 +311,24 @@ const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
 const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
 const axisBtn = document.querySelector<HTMLButtonElement>("#axis");
+const foldBtn = document.querySelector<HTMLButtonElement>("#fold");
 function refreshChrome() {
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
     logBtn.setAttribute("aria-pressed", String(seriesLog));
   }
   if (axisBtn) {
-    axisBtn.style.display = current === "time" ? "" : "none";
+    // the log/linear axis only applies to the continuous (unfolded) view
+    axisBtn.style.display = current === "time" && timeSource.getFold() === "none" ? "" : "none";
     const log = timeSource.isLogAxis();
     axisBtn.textContent = log ? "log axis" : "linear axis";
     axisBtn.setAttribute("aria-pressed", String(log));
+  }
+  if (foldBtn) {
+    foldBtn.style.display = current === "time" ? "" : "none";
+    const f = timeSource.getFold();
+    foldBtn.textContent = f === "none" ? "fold: off" : `fold: ${f}`;
+    foldBtn.setAttribute("aria-pressed", String(f !== "none"));
   }
   filters.style.display = current === "time" ? "flex" : "none";
   searchWrap.style.display = current === "time" ? "" : "none";
@@ -333,6 +341,25 @@ function refreshChrome() {
 axisBtn?.addEventListener("click", () => {
   timeSource.setLogAxis(!timeSource.isLogAxis());
   lane.fit(); // re-frame the biased fit in the new axis
+  refreshChrome();
+});
+// the continuous-axis zoom is stashed across a fold round-trip so unfolding
+// returns to the same magnification, not the whole-extent fit
+let unfoldedZoom: number | null = null;
+foldBtn?.addEventListener("click", () => {
+  // orientation-preserving HARD switch (TODO.md: no morph in v1): re-project
+  // the instant at the viewport center and jump there with setView — a focus
+  // animation would interpolate across two unrelated coordinate systems
+  const centerWorld = lane.view.scrollY + lane.view.height / 2 / lane.view.zoomY;
+  const tMs = timeSource.tMsForWorld(centerWorld);
+  const next = timeSource.getFold() === "none" ? "year" : "none";
+  if (next === "year") unfoldedZoom = lane.view.zoomY;
+  timeSource.setFold(next);
+  // frame ~14 year rows when folding; restore the stashed zoom when unfolding
+  const zoomY = next === "year" ? Math.max(lane.view.height / 14, 8) : (unfoldedZoom ?? lane.view.zoomY);
+  // no calendar instant at the old center (deep-time framing)? land on now
+  const center = timeSource.worldForTMs(tMs ?? Date.now());
+  lane.setView({ zoomY, scrollY: center - lane.view.height / (2 * zoomY) });
   refreshChrome();
 });
 seg.addEventListener("click", (e) => {
@@ -385,6 +412,7 @@ function doSearch() {
 }
 function focusHit(h: Hit) {
   lane.focus({ center: h.center, zoom: lane.view.height / h.scale });
+  timeSource.setPulse(h);
   hits = [];
   renderSuggest();
   searchEl.blur();

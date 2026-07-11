@@ -22,6 +22,7 @@
  */
 import { withAlpha, type RgTheme } from "../core/theme.js";
 import type { LaneEnv, LaneSource } from "./lane.js";
+import { evTimestampMs, foldYearProjector } from "./temporal.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
 /** "now" — present reference (Unix seconds, ~2026-07). */
@@ -38,6 +39,16 @@ const FUTURE_HORIZON = 1e10; // years after present the axis extends to
 /** years before present for a UTC calendar date */
 const ymd = (y: number, m: number, d: number) =>
   (PRESENT_EPOCH - Date.UTC(y, m - 1, d) / 1000) / SPY;
+
+/**
+ * exact-date event coords: years-before-present PLUS the precise instant.
+ * `tMs` is what admits an event into calendar folds (see temporal.ts —
+ * a bare `y` must never invent calendar precision it doesn't have).
+ */
+const dated = (y: number, m: number, d: number) => ({
+  y: ymd(y, m, d),
+  tMs: Date.UTC(y, m - 1, d),
+});
 
 type Cat = "cosmic" | "bio" | "human" | "tech" | "repo" | "future" | "periodic";
 
@@ -80,6 +91,12 @@ interface Ev {
    * small fraction of the age for prehistoric events, 0 (crisp) for dated ones.
    */
   span?: number;
+  /**
+   * exact instant (Unix ms, UTC) — present ONLY when the event's source is a
+   * real calendar date (dated()/ingested timestamps). Admits the event into
+   * temporal folds; without it the event stays on the continuous axis only.
+   */
+  tMs?: number;
 }
 
 /**
@@ -178,20 +195,20 @@ const EVENTS: Ev[] = [
 
 // dated Linux kernel milestones (finest curated scale)
 const LINUX: Ev[] = [
-  { y: ymd(1991, 8, 25), label: "Linus announces Linux", imp: 0.68, cat: "repo", detail: '"just a hobby"' },
-  { y: ymd(1991, 9, 17), label: "Linux 0.01", imp: 0.6, cat: "repo" },
-  { y: ymd(1992, 1, 5), label: "Linux 0.12 — GPL", imp: 0.55, cat: "repo" },
-  { y: ymd(1994, 3, 14), label: "Linux 1.0", imp: 0.62, cat: "repo" },
-  { y: ymd(1996, 6, 9), label: "Linux 2.0 — SMP", imp: 0.55, cat: "repo" },
-  { y: ymd(1999, 1, 26), label: "Linux 2.2", imp: 0.45, cat: "repo" },
-  { y: ymd(2001, 1, 4), label: "Linux 2.4", imp: 0.48, cat: "repo" },
-  { y: ymd(2003, 12, 17), label: "Linux 2.6", imp: 0.5, cat: "repo" },
-  { y: ymd(2005, 4, 7), label: "Git created", imp: 0.66, cat: "repo", detail: "for kernel dev" },
-  { y: ymd(2011, 7, 21), label: "Linux 3.0", imp: 0.52, cat: "repo" },
-  { y: ymd(2015, 4, 12), label: "Linux 4.0", imp: 0.5, cat: "repo" },
-  { y: ymd(2019, 3, 3), label: "Linux 5.0", imp: 0.5, cat: "repo" },
-  { y: ymd(2022, 10, 2), label: "Linux 6.0", imp: 0.52, cat: "repo" },
-  { y: ymd(2024, 11, 17), label: "Linux 6.12 LTS", imp: 0.48, cat: "repo" },
+  { ...dated(1991, 8, 25), label: "Linus announces Linux", imp: 0.68, cat: "repo", detail: '"just a hobby"' },
+  { ...dated(1991, 9, 17), label: "Linux 0.01", imp: 0.6, cat: "repo" },
+  { ...dated(1992, 1, 5), label: "Linux 0.12 — GPL", imp: 0.55, cat: "repo" },
+  { ...dated(1994, 3, 14), label: "Linux 1.0", imp: 0.62, cat: "repo" },
+  { ...dated(1996, 6, 9), label: "Linux 2.0 — SMP", imp: 0.55, cat: "repo" },
+  { ...dated(1999, 1, 26), label: "Linux 2.2", imp: 0.45, cat: "repo" },
+  { ...dated(2001, 1, 4), label: "Linux 2.4", imp: 0.48, cat: "repo" },
+  { ...dated(2003, 12, 17), label: "Linux 2.6", imp: 0.5, cat: "repo" },
+  { ...dated(2005, 4, 7), label: "Git created", imp: 0.66, cat: "repo", detail: "for kernel dev" },
+  { ...dated(2011, 7, 21), label: "Linux 3.0", imp: 0.52, cat: "repo" },
+  { ...dated(2015, 4, 12), label: "Linux 4.0", imp: 0.5, cat: "repo" },
+  { ...dated(2019, 3, 3), label: "Linux 5.0", imp: 0.5, cat: "repo" },
+  { ...dated(2022, 10, 2), label: "Linux 6.0", imp: 0.52, cat: "repo" },
+  { ...dated(2024, 11, 17), label: "Linux 6.12 LTS", imp: 0.48, cat: "repo" },
 ];
 
 // tech & culture across world civilizations (yBP = 2026 − CE year; +BCE)
@@ -418,7 +435,11 @@ export interface SearchHit {
   center: number;
   /** world-span to fit (→ zoom = viewportHeight / scale) */
   scale: number;
+  /** folded mode: the hit's phase within its row (for the pulse highlight) */
+  phase?: number;
 }
+
+export type TimelineFold = "none" | "year";
 
 export interface TimelineSource extends LaneSource {
   readonly categories: readonly CatMeta[];
@@ -436,6 +457,21 @@ export interface TimelineSource extends LaneSource {
   isLogAxis(): boolean;
   /** switch the time axis at runtime (host should re-fit afterwards) */
   setLogAxis(on: boolean): void;
+  /** current temporal fold ("none" = continuous axis) */
+  getFold(): TimelineFold;
+  /**
+   * switch the temporal fold at runtime. "year" folds dated modern events
+   * into calendar-year rows (worldY = UTC year, x = phase within the year).
+   * The host should re-frame afterwards — use tMsForWorld()/worldForTMs()
+   * to keep the instant at the viewport center fixed across the switch.
+   */
+  setFold(fold: TimelineFold): void;
+  /** the instant at a world-y under the CURRENT projection (null if none) */
+  tMsForWorld(worldY: number): number | null;
+  /** folded mode: flash a transient ring at a search hit's (row, phase) */
+  setPulse(hit: SearchHit): void;
+  /** world-y of an instant under the CURRENT projection */
+  worldForTMs(tMs: number): number;
   /** the event under a screen point (for hover cards), or null */
   eventAt(
     screenX: number,
@@ -509,6 +545,7 @@ export function createTimelineSource(
         (Array.isArray(data) ? data : []).map(
           (c: { commit: { message: string; author: { date: string } } }) => ({
             y: (PRESENT_EPOCH - Date.parse(c.commit.author.date) / 1000) / SPY,
+            tMs: Date.parse(c.commit.author.date),
             label: (String(c.commit.message).split("\n")[0] ?? "").slice(0, 72),
             detail: "torvalds/linux",
             imp: 0.3,
@@ -534,6 +571,7 @@ export function createTimelineSource(
           .filter((l) => l.net)
           .map((l) => ({
             y: (PRESENT_EPOCH - Date.parse(l.net!) / 1000) / SPY,
+            tMs: Date.parse(l.net!),
             label: (l.name ?? "launch").slice(0, 60),
             detail: "🚀 launch",
             imp: 0.32,
@@ -564,6 +602,7 @@ export function createTimelineSource(
     lazyFetch(`wde:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
       wdRows(data).map((r) => ({
         y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
+        tMs: Date.parse(r.d.value),
         label: r.l.value.slice(0, 56),
         detail: "Wikidata",
         imp: 0.42,
@@ -1039,6 +1078,186 @@ export function createTimelineSource(
     ctx.fillText(text, x + pad, cy);
   }
 
+  // ── temporal fold (v1: fold-year) — integration/UX layer ─────────────────
+  // Projection math lives in ./temporal.js (codex-owned, pure + tested); this
+  // side owns the Ev→tMs gate, layout, LOD, and chrome wiring.
+  let fold: TimelineFold = "none";
+  /**
+   * The instant an event may be folded at: its explicit `tMs`, or nothing.
+   * There is deliberately NO fallback from `y` — an age-derived coordinate
+   * cannot recover calendar precision, and fold-year must not visually assert
+   * a month/day the data doesn't have (bare-year events like "Transistor
+   * (1947)" stay on the continuous axis / future approx gutter).
+   */
+  const tMsOfEv = (e: Ev): number | null =>
+    e.cat === "periodic" ? null : evTimestampMs(e);
+  const tMsOfYbp = (yBP: number) => (PRESENT_EPOCH - yBP * SPY) * 1000;
+  const ybpOfTMs = (tMs: number) => (PRESENT_EPOCH - tMs / 1000) / SPY;
+  /** folded row range: the UTC years covered by foldable events */
+  const foldRows = () => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const e of points) {
+      const t = tMsOfEv(e);
+      if (t == null) continue;
+      const p = foldYearProjector.project(t);
+      if (!p) continue;
+      if (p.rowIndex < min) min = p.rowIndex;
+      if (p.rowIndex > max) max = p.rowIndex;
+    }
+    if (min > max) return { min: PRESENT_YEAR - 10, max: PRESENT_YEAR };
+    // the now-marker row and "today" orientation must always be in extent
+    return { min: Math.min(min, PRESENT_YEAR), max: Math.max(max, PRESENT_YEAR) };
+  };
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  /** folded glyph layout, shared by drawFolded and eventAt so hover matches
+   *  pixels exactly: micro-lanes appear once rows are tall enough, else the
+   *  row centerline. Returns null for unfoldable events. */
+  const foldGlyphPos = (e: Ev, view: LaneView) => {
+    const t = tMsOfEv(e);
+    if (t == null) return null;
+    const p = foldYearProjector.project(t);
+    if (!p) return null;
+    const usableW = Math.max(40, view.width - FOLD_X0 - 8);
+    const rowH = view.zoomY;
+    const x = FOLD_X0 + p.phase0 * usableW;
+    const rowTop = worldToScreenY(view, p.rowIndex - 0.5);
+    if (rowH < 14) return { x, y: rowTop + rowH / 2, p, laneH: 0 };
+    const cats = CAT_META.filter((m) => m.cat !== "periodic" && enabled.has(m.cat));
+    const lane = Math.max(0, cats.findIndex((m) => m.cat === e.cat));
+    const laneH = (rowH - 4) / Math.max(1, cats.length);
+    return { x, y: rowTop + 2 + lane * laneH + laneH / 2, p, laneH };
+  };
+  const FOLD_X0 = RULER_W + 8;
+  const PULSE_MS = 2200;
+  /** transient search-pulse marker (folded mode has no horizontal pan) */
+  let pulse: { world: number; phase: number; until: number } | null = null;
+
+  function drawFolded(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
+    const { theme } = env;
+    const W = view.width;
+    const H = view.height;
+    const usableW = Math.max(40, W - FOLD_X0 - 8);
+    const rowH = view.zoomY; // one row = 1.0 world unit = one calendar year
+    const yearTop = Math.floor(screenToWorldY(view, 0) + 0.5);
+    const yearBot = Math.ceil(screenToWorldY(view, H) + 0.5);
+    const phaseX = (p: number) => FOLD_X0 + p * usableW;
+    const rowTopY = (year: number) => worldToScreenY(view, year - 0.5);
+
+    // row bands + year labels + per-year month gridlines
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    ctx.textBaseline = "middle";
+    for (let year = yearTop; year <= yearBot; year++) {
+      const y0 = rowTopY(year);
+      if (year % 2 === 0) {
+        ctx.fillStyle = withAlpha(theme.textFaint, 0.05);
+        ctx.fillRect(FOLD_X0, y0, usableW, rowH);
+      }
+      ctx.strokeStyle = withAlpha(theme.textFaint, 0.22);
+      ctx.beginPath();
+      ctx.moveTo(FOLD_X0, y0 + 0.5);
+      ctx.lineTo(W - 8, y0 + 0.5);
+      ctx.stroke();
+      // year label in the left ruler, readable even for thin rows
+      if (rowH >= 9) {
+        ctx.fillStyle = theme.textFaint;
+        ctx.textAlign = "right";
+        ctx.fillText(String(year), RULER_W - 2, y0 + rowH / 2);
+      }
+    }
+
+    // equal-width month grid: boundaries sit at exactly m/12 in EVERY row
+    // (the projector's phase is (monthIndex + fracInMonth)/12), so the guides
+    // are single full-height lines — same wall-date alignment across years
+    ctx.strokeStyle = withAlpha(theme.textFaint, 0.12);
+    for (let m = 1; m < 12; m++) {
+      const x = phaseX(m / 12);
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, H);
+      ctx.stroke();
+    }
+
+    // "now" marker: a tick at today's phase in the current year's row
+    const nowP = foldYearProjector.project(PRESENT_EPOCH * 1000);
+    if (nowP && nowP.rowIndex >= yearTop && nowP.rowIndex <= yearBot) {
+      const x = phaseX(nowP.phase0);
+      const y0 = rowTopY(nowP.rowIndex);
+      ctx.strokeStyle = withAlpha(theme.accent, 0.9);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y0 + 1);
+      ctx.lineTo(x, y0 + rowH - 1);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
+    // events — LOD ladder by row height: dots → micro-lane dots → labels;
+    // positions come from foldGlyphPos, the SAME helper eventAt hit-tests
+    ctx.textAlign = "left";
+    for (const e of points) {
+      if (!enabled.has(e.cat)) continue;
+      const g = foldGlyphPos(e, view);
+      if (!g || g.p.rowIndex < yearTop - 1 || g.p.rowIndex > yearBot + 1) continue;
+      const color = CAT_COLOR[e.cat];
+      if (rowH < 14) {
+        // collapsed row: plain density dots on the row centerline
+        ctx.fillStyle = withAlpha(color, 0.85);
+        ctx.fillRect(g.x - 1, g.y - 1, 2, 2);
+        continue;
+      }
+      const r = Math.min(3.2, Math.max(1.5, g.laneH * 0.3));
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(g.x, g.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      if (g.laneH >= 11) {
+        ctx.fillStyle = withAlpha(theme.text, 0.92);
+        ctx.fillText(fit(ctx, tr(e.label), W - 8 - g.x - 6), g.x + r + 3, g.y);
+      }
+    }
+
+    // search pulse: expanding ring at the found (row, phase)
+    if (pulse) {
+      const life = pulse.until - performance.now();
+      if (life <= 0) pulse = null;
+      else {
+        const k = 1 - life / PULSE_MS;
+        const x = phaseX(pulse.phase);
+        const y = worldToScreenY(view, pulse.world);
+        ctx.strokeStyle = withAlpha(theme.accent, 0.85 * (1 - k));
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, 6 + k * 26, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        onUpdate(); // keep animating until expiry
+      }
+    }
+
+    // sticky header: month phase labels (reference year — exact per-row lines
+    // above carry the per-year truth; the header is a guide)
+    ctx.fillStyle = withAlpha(theme.background, 0.82);
+    ctx.fillRect(FOLD_X0, 0, W - FOLD_X0, HEADER_H);
+    ctx.strokeStyle = withAlpha(theme.textFaint, 0.2);
+    ctx.beginPath();
+    ctx.moveTo(FOLD_X0, HEADER_H + 0.5);
+    ctx.lineTo(W, HEADER_H + 0.5);
+    ctx.stroke();
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    for (let m = 0; m < 12; m++) {
+      const x = phaseX(m / 12);
+      ctx.fillStyle = theme.textFaint;
+      ctx.fillText(tr(MONTHS[m]!), x + 3, HEADER_H / 2);
+    }
+    ctx.fillStyle = theme.textFaint;
+    ctx.textAlign = "right";
+    ctx.fillText(tr("year"), RULER_W - 2, HEADER_H / 2);
+    ctx.textAlign = "left";
+  }
+
   return {
     title: "deep time",
     categories: CAT_META,
@@ -1070,6 +1289,23 @@ export function createTimelineSource(
       onUpdate();
     },
     eventAt(sx, sy, view) {
+      if (fold !== "none") {
+        let best: Ev | null = null;
+        let bestD = 9;
+        for (const e of points) {
+          if (!enabled.has(e.cat)) continue;
+          const g = foldGlyphPos(e, view);
+          if (!g) continue;
+          const d = Math.hypot(g.x - sx, g.y - sy);
+          if (d < bestD) {
+            bestD = d;
+            best = e;
+          }
+        }
+        if (!best) return null;
+        const title = best.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+        return { title, detail: best.detail, cat: best.cat };
+      }
       // the event in the hovered track whose y is nearest the cursor
       const tracks = activeTracks(view);
       const track = tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
@@ -1104,6 +1340,27 @@ export function createTimelineSource(
         hits.push({ e, rank });
       }
       hits.sort((a, b) => b.rank - a.rank);
+      if (fold !== "none") {
+        // folded hits focus their row; the phase drives the pulse highlight
+        // (the lane cannot pan horizontally). Undatable hits fall back to
+        // their row-less continuous position — skip them in fold mode.
+        return hits
+          .flatMap(({ e }) => {
+            const t = tMsOfEv(e);
+            const p = t == null ? null : foldYearProjector.project(t);
+            if (!p) return [];
+            return [{
+              label: e.label,
+              detail: e.detail,
+              cat: e.cat,
+              color: CAT_COLOR[e.cat],
+              center: p.rowIndex,
+              scale: 1.6,
+              phase: p.phase0,
+            }];
+          })
+          .slice(0, limit);
+      }
       return hits.slice(0, limit).map(({ e }) => ({
         label: e.label,
         detail: e.detail,
@@ -1113,20 +1370,33 @@ export function createTimelineSource(
         scale: ctxWorld(e),
       }));
     },
-    extent: () => ({
-      min: worldOf(BIG_BANG) * 1.01,
-      max: worldOf(-FUTURE_HORIZON) * 1.01,
-    }),
+    extent: () => {
+      if (fold !== "none") {
+        const r = foldRows();
+        return { min: r.min - 0.5, max: r.max + 0.5 };
+      }
+      return {
+        min: worldOf(BIG_BANG) * 1.01,
+        max: worldOf(-FUTURE_HORIZON) * 1.01,
+      };
+    },
     // bias the initial fit toward the PAST: frame Big Bang→now plus a thin
     // future sliver; the sparse far future stays reachable by scrolling
-    fitExtent: () => ({
-      min: worldOf(BIG_BANG) * 1.01,
-      max: logAxis ? 2.5 : 0,
-    }),
+    fitExtent: () => {
+      if (fold !== "none") {
+        const r = foldRows();
+        return { min: r.min - 0.5, max: r.max + 0.5 };
+      }
+      return {
+        min: worldOf(BIG_BANG) * 1.01,
+        max: logAxis ? 2.5 : 0,
+      };
+    },
     maxZoom: 5e6,
     // viewport emptiness (target-density): 1 when a void, 0 once ≥ TARGET
     // in-scale events are on screen — drives scroll-into-void auto-zoom-out
     emptiness: (view) => {
+      if (fold !== "none") return 0;
       const TARGET = 5;
       const top = screenToWorldY(view, 0);
       const bot = screenToWorldY(view, view.height);
@@ -1141,6 +1411,10 @@ export function createTimelineSource(
     },
     // double-click an event → center it and zoom to ~its precision scale
     focusAt: (screenY, view) => {
+      if (fold !== "none") {
+        const year = Math.round(screenToWorldY(view, screenY));
+        return { center: year, zoom: view.height / 1.6 };
+      }
       let best: Ev | null = null;
       let bestD = 30;
       for (const e of points) {
@@ -1157,6 +1431,13 @@ export function createTimelineSource(
     // the zoom anchor gravitates to nearby enabled events (and the now line);
     // each carries its track-centre x so the snap is track-aware
     snapTargets: (view) => {
+      if (fold !== "none") {
+        const top = Math.floor(screenToWorldY(view, -40));
+        const bot = Math.ceil(screenToWorldY(view, view.height + 40));
+        const out: { y: number }[] = [];
+        for (let y = top; y <= bot; y++) out.push({ y });
+        return out;
+      }
       const tracks = activeTracks(view);
       const cx = new Map(tracks.map((t) => [t.meta.cat, t.x0 + t.w / 2]));
       const top = screenToWorldY(view, -40);
@@ -1169,8 +1450,51 @@ export function createTimelineSource(
       }
       return out;
     },
-    draw,
+    draw: (ctx, view, env) =>
+      fold === "none" ? draw(ctx, view, env) : drawFolded(ctx, view, env),
+    getFold: () => fold,
+    setFold(f) {
+      fold = f;
+      pulse = null;
+      onUpdate();
+    },
+    tMsForWorld(worldY) {
+      let t: number;
+      if (fold !== "none") {
+        // mid-year representative instant. Date.UTC remaps years 0..99 to
+        // 1900..1999; setUTCFullYear does not (same guard as temporal.ts).
+        const d = new Date(0);
+        d.setUTCFullYear(Math.round(worldY), 6, 1);
+        d.setUTCHours(0, 0, 0, 0);
+        t = d.getTime();
+      } else {
+        t = tMsOfYbp(yBPof(worldY));
+      }
+      // TimeClip: deep-time worlds (Big Bang framing) exceed Date range —
+      // report "no calendar instant here" instead of a poisoned number
+      return Number.isFinite(t) && Number.isFinite(new Date(t).getTime()) ? t : null;
+    },
+    worldForTMs(tMs) {
+      // TimeClip at entry: garbage in must not poison scrollY with NaN
+      const clipped = Number.isFinite(tMs) ? new Date(tMs).getTime() : NaN;
+      if (!Number.isFinite(clipped)) return fold !== "none" ? PRESENT_YEAR : worldOf(0);
+      if (fold !== "none") {
+        const p = foldYearProjector.project(clipped);
+        // out-of-fold instant: land on the present row, never NaN
+        return p ? p.rowIndex : PRESENT_YEAR;
+      }
+      return worldOf(ybpOfTMs(clipped));
+    },
+    setPulse(hit) {
+      if (fold === "none" || hit.phase === undefined) return;
+      pulse = { world: hit.center, phase: hit.phase, until: performance.now() + PULSE_MS };
+      onUpdate();
+    },
     hudLine: (view) => {
+      if (fold !== "none") {
+        const year = Math.round(screenToWorldY(view, view.height / 2));
+        return `fold: year · ${year}`;
+      }
       const yBP = yBPof(screenToWorldY(view, view.height / 2));
       if (yBP > BIG_BANG) return "before time";
       if (yBP < 0) return `in ${fmtDur(-yBP)}`; // future
