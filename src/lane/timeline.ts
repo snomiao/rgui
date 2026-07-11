@@ -2296,6 +2296,9 @@ export function createTimelineSource(
         const phase = Math.max(0, Math.min(1, cursorWorld - (row - 0.5)));
         const start = foldRowStartMs(fold, row);
         const end = foldRowStartMs(fold, row + 1);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+          return `fold: ${fold} · ${foldRowLabel(row)}`;
+        }
         tMs = start + (end - start) * phase;
       } else {
         tMs = tMsOfYbp(yBPof(cursorWorld));
