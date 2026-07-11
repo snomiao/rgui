@@ -1042,10 +1042,10 @@ export function createTimelineSource(
         const cwN = ((Math.min(slot + 1, div.slots) - slot) / div.slots) * contentW;
         ctx.fillRect(gx(slot / div.slots), cy0, Math.max(0, cwN), cy1 - cy0);
         // selective direct label: the count, only when the cell affords it
-        if (n > HEAT_DOT_MAX && slotWpx >= 2 * rem && cy1 - cy0 >= 1.1 * rem) {
+        if (n > HEAT_DOT_MAX && cwN >= 2 * rem && cy1 - cy0 >= 1.1 * rem) {
           ctx.fillStyle = darkTheme ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.7)";
           ctx.font = "9px ui-monospace, Menlo, monospace";
-          ctx.fillText(String(n), gx(slot / div.slots) + slotWpx / 2, (cy0 + cy1) / 2);
+          ctx.fillText(String(n), gx(slot / div.slots) + cwN / 2, (cy0 + cy1) / 2);
         }
       }
       ctx.textAlign = "left";
@@ -1234,7 +1234,7 @@ export function createTimelineSource(
         // dense cells are represented by their heat shade + count label —
         // individual dots would just overplot (hover still resolves them)
         const hc = heatCells.get(e.cat);
-        if (hc && hc.level === fp.level && (hc.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX) {
+        if (heatEnabled && hc && hc.level === fp.level && (hc.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX) {
           glide.delete(e); // no stale glide origin while represented by the cell
           continue;
         }
@@ -1667,7 +1667,12 @@ export function createTimelineSource(
     else if (slotFrac > (prev === "point" ? up : down)) lod = "interval";
     else lod = "point";
     mem.set(level, lod);
-    return { lod, win };
+    // with heat cells disabled there is NO presence carrier: a tint event
+    // would simply vanish (codex P0). The classification truth is stored
+    // undegraded (hysteresis stays honest); the EFFECTIVE state every
+    // consumer renders/hits with degrades tint → interval while heat is off.
+    const eff: EvLod = !heatEnabled && lod === "tint" ? "interval" : lod;
+    return { lod: eff, win };
   };
   /** visible fold-row range from PROJECTED screen endpoints — symlog rows
    *  vary in height, so center ± H/centerBand under-covers (codex review) */
@@ -2240,6 +2245,7 @@ export function createTimelineSource(
     },
     setGlide(on) {
       glideEnabled = on;
+      if (!on) glide.clear(); // stale origins would animate on re-enable
     },
     setPulse(hit) {
       if (fold === "none" || hit.phase === undefined) return;
