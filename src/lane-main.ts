@@ -313,6 +313,42 @@ const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
 const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
 const axisBtn = document.querySelector<HTMLButtonElement>("#axis");
 const foldBtn = document.querySelector<HTMLButtonElement>("#fold");
+
+// ── preferences panel: persisted, applied on load ───────────────────────────
+// Behavioral toggles live here instead of hidden defaults. Auto zoom-out on
+// empty scroll is OFF by default (taku: it fought users more than blank
+// stretches did) and opt-in; animation/heat default on.
+const PREFS_KEY = "lane-prefs";
+type LanePrefs = { autoZoomOut: boolean; glide: boolean; heat: boolean };
+const prefs: LanePrefs = { autoZoomOut: false, glide: true, heat: true };
+try {
+  Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}"));
+} catch { /* corrupted prefs → defaults */ }
+function applyPrefs() {
+  lane.setAutoZoomOut(prefs.autoZoomOut);
+  timeSource.setGlide(prefs.glide);
+  timeSource.setHeatCells(prefs.heat);
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* private mode */ }
+}
+const prefsBtn = document.querySelector<HTMLButtonElement>("#prefs");
+const prefsPanel = document.querySelector<HTMLDivElement>("#prefsPanel");
+prefsBtn?.addEventListener("click", () => {
+  if (!prefsPanel) return;
+  prefsPanel.style.display = prefsPanel.style.display === "none" ? "" : "none";
+});
+function bindPref(id: string, key: keyof LanePrefs) {
+  const el = document.querySelector<HTMLInputElement>(id);
+  if (!el) return;
+  el.checked = prefs[key];
+  el.addEventListener("change", () => {
+    prefs[key] = el.checked;
+    applyPrefs();
+    lane.invalidate();
+  });
+}
+bindPref("#prefAutoZoomOut", "autoZoomOut");
+bindPref("#prefGlide", "glide");
+bindPref("#prefHeat", "heat");
 function refreshChrome() {
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
@@ -534,6 +570,7 @@ logBtn?.addEventListener("click", () => {
   refreshChrome();
 });
 refreshChrome();
+applyPrefs();
 
 // ── folder tree from any GitHub repo (default: torvalds/linux) ────────────
 interface GhEntry {
