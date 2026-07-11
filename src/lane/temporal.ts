@@ -55,6 +55,7 @@ function projectFoldYear(tMs: number): FoldProjection | null {
   // Defensive invariant guard; valid Date components make this unreachable.
   if (!(phase >= 0 && phase < 1)) return null;
 
+  if (!rowRepresentable("year", year)) return null;
   const rowKey = String(year);
   return {
     rowKey,
@@ -82,6 +83,16 @@ export const foldYearProjector: TemporalProjector = {
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
+/** a row is representable only if its start AND end are valid Dates —
+ * partial rows at the TimeClip extremes are rejected so foldRowStartMs,
+ * row labels, and mid-row instants stay total over accepted projections */
+function rowRepresentable(foldId: string, rowIndex: number): boolean {
+  return (
+    Number.isFinite(foldRowStartMs(foldId, rowIndex)) &&
+    Number.isFinite(foldRowStartMs(foldId, rowIndex + 1))
+  );
+}
+
 function clipped(tMs: number): Date | null {
   if (!Number.isFinite(tMs)) return null;
   const d = new Date(tMs);
@@ -96,11 +107,12 @@ export const foldMonthProjector: TemporalProjector = {
     if (!d) return null;
     const year = d.getUTCFullYear();
     const month = d.getUTCMonth();
-    const phase =
-      (d.getUTCDate() - 1 + fracOfDayUTC(d)) / 31;
+    const phase = (d.getUTCDate() - 1 + fracOfDayUTC(d)) / 31;
     if (!(phase >= 0 && phase < 1)) return null;
+    const rowIndex = year * 12 + month;
+    if (!rowRepresentable("month", rowIndex)) return null;
     const rowKey = `${year}-${pad2(month + 1)}`;
-    return { rowKey, rowIndex: year * 12 + month, rowLabel: rowKey, phase0: phase, phase1: phase };
+    return { rowKey, rowIndex, rowLabel: rowKey, phase0: phase, phase1: phase };
   },
 };
 
@@ -121,6 +133,7 @@ export const foldWeekProjector: TemporalProjector = {
     const weekday = (d.getUTCDay() + 6) % 7; // Mon=0 … Sun=6
     const phase = (weekday + fracOfDayUTC(d)) / 7;
     if (!(phase >= 0 && phase < 1)) return null;
+    if (!rowRepresentable("week", rowIndex)) return null;
     const mon = new Date(EPOCH_MONDAY_MS + rowIndex * WEEK_MS);
     const rowKey = `${mon.getUTCFullYear()}-${pad2(mon.getUTCMonth() + 1)}-${pad2(mon.getUTCDate())}`;
     return { rowKey, rowIndex, rowLabel: rowKey, phase0: phase, phase1: phase };
@@ -136,6 +149,7 @@ export const foldDayProjector: TemporalProjector = {
     const rowIndex = Math.floor(d.getTime() / DAY_MS);
     const phase = fracOfDayUTC(d);
     if (!(phase >= 0 && phase < 1)) return null;
+    if (!rowRepresentable("day", rowIndex)) return null;
     const rowKey = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
     return { rowKey, rowIndex, rowLabel: rowKey, phase0: phase, phase1: phase };
   },
@@ -151,6 +165,7 @@ export const foldHourProjector: TemporalProjector = {
     const phase =
       (d.getUTCMinutes() + (d.getUTCSeconds() * 1000 + d.getUTCMilliseconds()) / 60000) / 60;
     if (!(phase >= 0 && phase < 1)) return null;
+    if (!rowRepresentable("hour", rowIndex)) return null;
     const rowKey = `${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:00`;
     return { rowKey, rowIndex, rowLabel: rowKey, phase0: phase, phase1: phase };
   },

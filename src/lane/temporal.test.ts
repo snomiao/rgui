@@ -254,3 +254,29 @@ describe2("adversarial probes (self-review of ba588b2)", () => {
     }
   });
 });
+
+describe2("Date TimeClip extremes (codex review of 6a92730)", () => {
+  test2("projections at ±8.64e15 either reject or keep the inverse contract total", () => {
+    const projs = [foldYearProjector, foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector];
+    for (const proj of projs) {
+      for (const t of [-8.64e15, 8.64e15, -8.64e15 + 1, 8.64e15 - 1]) {
+        const p = proj.project(t);
+        if (!p) continue; // edge rows may be rejected — that's the contract
+        // accepted rows must have finite start/end, sane labels, stable inverse
+        const start = foldRowStartMs(proj.id, p.rowIndex);
+        const end = foldRowStartMs(proj.id, p.rowIndex + 1);
+        expect2(Number.isFinite(start)).toBe(true);
+        expect2(Number.isFinite(end)).toBe(true);
+        expect2(p.rowKey.includes("NaN")).toBe(false);
+        expect2(proj.project(start)!.rowIndex).toBe(p.rowIndex);
+      }
+    }
+  });
+
+  test2("ordinary modern instants are unaffected by the edge guards", () => {
+    const t = Date.UTC(2026, 6, 11, 14, 30);
+    for (const proj of [foldYearProjector, foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector]) {
+      expect2(proj.project(t)).not.toBeNull();
+    }
+  });
+});

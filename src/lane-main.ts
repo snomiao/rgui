@@ -434,11 +434,13 @@ function autoFoldTick() {
     const spanMs = Math.abs(tBot - tTop);
     const level = foldLevelFor(spanMs);
     if (!level) return; // too wide for year rows / below sub-hour detail
-    // only fold when the window actually overlaps the dataset's year range
-    // (foldRowRange reports year rows while unfolded)
+    // only fold when the window actually INTERSECTS the dataset's year range
+    // (foldRowRange reports year rows while unfolded) — a center-year test
+    // rejected wide windows whose edge overlapped the data (codex review)
     const yr = timeSource.foldRowRange();
-    const centerYear = new Date((tTop + tBot) / 2).getUTCFullYear();
-    if (centerYear < yr.min - 10 || centerYear > yr.max + 10) return;
+    const winMin = new Date(Math.min(tTop, tBot)).getUTCFullYear();
+    const winMax = new Date(Math.max(tTop, tBot)).getUTCFullYear();
+    if (winMax < yr.min - 10 || winMin > yr.max + 10) return;
     applyFold(level, spanMs);
   } else {
     const f = fold as FoldLevel;

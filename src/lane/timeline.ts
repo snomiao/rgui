@@ -1163,6 +1163,9 @@ export function createTimelineSource(
   const PULSE_MS = 2200;
   /** transient search-pulse marker (folded mode has no horizontal pan) */
   let pulse: { world: number; phase: number; until: number } | null = null;
+  /** label rects placed by the last folded draw — labels are hover targets
+   *  too, not just their dots (codex review) */
+  let foldLabelRects: { x0: number; x1: number; y: number; e: Ev }[] = [];
 
   function drawFolded(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
     const { theme } = env;
@@ -1252,17 +1255,18 @@ export function createTimelineSource(
     // labels are dropped when they'd overlap an already-placed one on the
     // same text line — dense ingest clusters degrade to dots, not soup
     labelCandidates.sort((a, b) => b.e.imp - a.e.imp);
-    const placed: { x0: number; x1: number; y: number }[] = [];
+    const placed: { x0: number; x1: number; y: number; e: Ev }[] = [];
     for (const c of labelCandidates) {
       const text = fit(ctx, tr(c.e.label), W - 8 - c.x - 6);
       if (!text) continue;
       const x0 = c.x + c.r + 3;
       const x1 = x0 + ctx.measureText(text).width + 6;
       if (placed.some((p) => Math.abs(p.y - c.y) < 11 && x0 < p.x1 && x1 > p.x0)) continue;
-      placed.push({ x0, x1, y: c.y });
+      placed.push({ x0, x1, y: c.y, e: c.e });
       ctx.fillStyle = withAlpha(theme.text, 0.92);
       ctx.fillText(text, x0, c.y);
     }
+    foldLabelRects = placed;
 
     // search pulse: expanding ring at the found (row, phase)
     if (pulse) {
@@ -1294,7 +1298,12 @@ export function createTimelineSource(
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     ctx.font = "10px ui-monospace, Menlo, monospace";
-    for (let m = 0; m < fv.slots; m += fv.labelEvery) {
+    // cull header labels on narrow canvases: widen the label stride until
+    // neighbouring labels keep a readable gap (codex review: 60-slot hour
+    // fold could space its labels ~3px apart at min width)
+    let every = fv.labelEvery;
+    while ((usableW / fv.slots) * every < 34 && every < fv.slots) every *= 2;
+    for (let m = 0; m < fv.slots; m += every) {
       const x = phaseX(m / fv.slots);
       ctx.fillStyle = theme.textFaint;
       ctx.fillText(tr(fv.slotLabel(m)), x + 3, HEADER_H / 2);
@@ -1337,6 +1346,13 @@ export function createTimelineSource(
     },
     eventAt(sx, sy, view) {
       if (fold !== "none") {
+        // a visible label is a hover target for its event
+        for (const l of foldLabelRects) {
+          if (sx >= l.x0 && sx <= l.x1 && Math.abs(sy - l.y) <= 7) {
+            const title = l.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+            return { title, detail: l.e.detail, cat: l.e.cat };
+          }
+        }
         let best: Ev | null = null;
         let bestD = 9;
         for (const e of points) {
