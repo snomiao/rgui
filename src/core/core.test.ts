@@ -46,7 +46,7 @@ import {
   resolveOverlap,
   snapConnections,
 } from "./pack";
-import { layoutGraph } from "./layout";
+import { layoutDenseGraph, layoutGraph } from "./layout";
 import {
   gripBase,
   gripRescale,
@@ -532,6 +532,80 @@ describe("auto-layout", () => {
     for (const p of pos.values()) {
       expect(Math.abs(p.x % 20)).toBe(0);
       expect(Math.abs(p.y % 20)).toBe(0);
+    }
+  });
+});
+
+describe("dense workflow auto-layout", () => {
+  const edge = (from: string, to: string, port = "p"): Edge => ({
+    from: { node: from, port },
+    to: { node: to, port },
+  });
+
+  test("contracts only maximal directed one-out/one-in chains", () => {
+    const nodes = ["a", "b", "c", "d", "e"].map((id) => mkNode(id, 3, 7, 101, 1));
+    const graph = {
+      nodes,
+      edges: [edge("a", "b"), edge("a", "b", "parallel"), edge("b", "c"), edge("c", "d"), edge("c", "e")],
+    };
+    const result = layoutDenseGraph(graph, { gridStep: 20 });
+    expect(result.chains).toContainEqual(["a", "b", "c"]);
+    const a = result.nodes.get("a")!;
+    const b = result.nodes.get("b")!;
+    const c = result.nodes.get("c")!;
+    expect(b.x).toBe(a.x + a.w);
+    expect(c.x).toBe(b.x + b.w);
+    expect(a.y).toBe(b.y);
+    expect(b.y).toBe(c.y);
+  });
+
+  test("leaves a main-grid gap at fan-out and fan-in boundaries", () => {
+    const nodes = ["root", "left", "right", "join"].map((id) => mkNode(id, 0, 0, 100, 1));
+    const result = layoutDenseGraph({
+      nodes,
+      edges: [edge("root", "left"), edge("root", "right"), edge("left", "join"), edge("right", "join")],
+    }, { gridStep: 20, gapCells: 1 });
+    const root = result.nodes.get("root")!;
+    const left = result.nodes.get("left")!;
+    const right = result.nodes.get("right")!;
+    const join = result.nodes.get("join")!;
+    expect(Math.min(left.x, right.x) - (root.x + root.w)).toBeGreaterThanOrEqual(20);
+    expect(join.x - Math.max(left.x + left.w, right.x + right.w)).toBeGreaterThanOrEqual(20);
+  });
+
+  test("snaps positions and sizes and guarantees zero overlap", () => {
+    const nodes = ["a", "b", "c", "d", "e", "f"].map((id, i) => mkNode(id, 13 * i, 17 * i, 101 + i, i % 3));
+    const result = layoutDenseGraph({
+      nodes,
+      edges: [edge("a", "c"), edge("b", "c"), edge("c", "d"), edge("c", "e"), edge("e", "f")],
+    }, { gridStep: 20 });
+    const rects = [...result.nodes.values()];
+    for (const r of rects) {
+      expect(r.x % 20).toBe(0);
+      expect(r.y % 20).toBe(0);
+      expect(r.w % 20).toBe(0);
+      expect(r.h % 20).toBe(0);
+    }
+    for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i]!;
+      const b = rects[j]!;
+      const overlap = a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      expect(overlap).toBe(false);
+    }
+  });
+
+  test("places every acyclic non-chain edge downstream and is deterministic", () => {
+    const graph = {
+      nodes: ["s", "a", "b", "t"].map((id, i) => mkNode(id, i * 13, i * 17, 100, 1)),
+      edges: [edge("s", "a"), edge("s", "b"), edge("a", "t"), edge("b", "t")],
+    };
+    const first = layoutDenseGraph(graph, { gridStep: 20 });
+    const second = layoutDenseGraph(graph, { gridStep: 20 });
+    expect([...second.nodes]).toEqual([...first.nodes]);
+    for (const e of graph.edges) {
+      const a = first.nodes.get(e.from.node)!;
+      const b = first.nodes.get(e.to.node)!;
+      expect(b.x).toBeGreaterThan(a.x + a.w);
     }
   });
 });

@@ -70,7 +70,12 @@ import {
   resolveOverlap,
   snapConnections,
 } from "./core/pack.js";
-import { layoutGraph, type LayoutOptions } from "./core/layout.js";
+import {
+  layoutDenseGraph,
+  layoutGraph,
+  type DenseLayoutOptions,
+  type LayoutOptions,
+} from "./core/layout.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
 import {
   resolveTheme,
@@ -325,11 +330,12 @@ export interface Rgui {
    */
   rescaleNode(nodeId: string, scale: number): void;
   /**
-   * auto-layout by connection optimization (layered + barycenter). Pinned
-   * nodes stay put. Animates ~300ms, then fires onNodeMoveEnd per moved node
-   so hosts can broadcast the new positions.
+   * Auto-layout by connection optimization. The default layered mode keeps
+   * pinned nodes fixed. Dense mode contracts direct chains, snaps positions
+   * AND sizes, and relayouts the whole workflow. Animates ~300ms, then fires
+   * persistence callbacks for every changed position/size.
    */
-  autoLayout(opts?: LayoutOptions & { animate?: boolean }): void;
+  autoLayout(opts?: AutoLayoutOptions): void;
   /**
    * snap every node — POSITION and SIZE — to the MAIN visible grid at the
    * current scale; one call makes a generated/imported graph obey the snap
@@ -360,6 +366,13 @@ export interface Rgui {
   invalidate(): void;
   destroy(): void;
 }
+
+export type AutoLayoutOptions =
+  & { animate?: boolean }
+  & (
+    | ({ mode?: "layered" } & LayoutOptions)
+    | ({ mode: "dense" } & DenseLayoutOptions)
+  );
 
 type Hit =
   | { type: "node"; node: GraphNode }
@@ -2527,19 +2540,47 @@ export function createRgui(
       }
       invalidate();
     },
-    autoLayout(opts?: LayoutOptions & { animate?: boolean }) {
-      const target = layoutGraph(graph, opts);
+    autoLayout(opts?: AutoLayoutOptions) {
+      const dense = opts?.mode === "dense";
+      const target = dense
+        ? layoutDenseGraph(graph, {
+            ...opts,
+            gridStep:
+              opts.gridStep ?? gridLevels(view.k, rule.minGridPx, rule.radix)[0]!.step,
+          }).nodes
+        : new Map(
+            [...layoutGraph(graph, opts)].map(([id, p]) => {
+              const n = graph.nodes.find((m) => m.id === id)!;
+              return [id, { ...p, w: n.w, h: nodeHeight(n) }] as const;
+            }),
+          );
       const moved = [...target].filter(([id, p]) => {
         const n = graph.nodes.find((m) => m.id === id);
-        return n && (n.x !== p.x || n.y !== p.y);
+        return n && (n.x !== p.x || n.y !== p.y || n.w !== p.w || nodeHeight(n) !== p.h);
       });
       if (!moved.length) return;
+      const resizedIds = new Set(
+        moved
+          .filter(([id, p]) => {
+            const n = graph.nodes.find((m) => m.id === id)!;
+            return n.w !== p.w || nodeHeight(n) !== p.h;
+          })
+          .map(([id]) => id),
+      );
       const finish = () => {
         for (const [id, p] of moved) {
           const n = graph.nodes.find((m) => m.id === id)!;
           n.x = p.x;
           n.y = p.y;
+          n.w = p.w;
+          n.h = p.h;
           options.onNodeMoveEnd?.(id, p);
+          if (resizedIds.has(id))
+            options.onNodeResizeEnd?.(id, {
+              w: p.w,
+              h: p.h,
+              scale: contentScale(n),
+            });
         }
         invalidate();
       };
@@ -2547,7 +2588,7 @@ export function createRgui(
       const start = new Map(
         moved.map(([id]) => {
           const n = graph.nodes.find((m) => m.id === id)!;
-          return [id, { x: n.x, y: n.y }] as const;
+          return [id, { x: n.x, y: n.y, w: n.w, h: nodeHeight(n) }] as const;
         }),
       );
       const t0 = performance.now();
@@ -2560,6 +2601,8 @@ export function createRgui(
           const s0 = start.get(id)!;
           n.x = s0.x + (p.x - s0.x) * e;
           n.y = s0.y + (p.y - s0.y) * e;
+          n.w = s0.w + (p.w - s0.w) * e;
+          n.h = s0.h + (p.h - s0.h) * e;
         }
         invalidate();
         if (u < 1) requestAnimationFrame(stepFrame);
