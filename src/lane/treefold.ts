@@ -136,23 +136,25 @@ export type TreeFoldMode =
 
 /**
  * pick the finest readable representation for `childCount` entries in a
- * band of `bandPx` × `widthPx`. `remPx` is the readability unit — callers
- * apply hysteresis by scaling it (0.8 to stay in the current mode, 1.25 to
- * enter a finer one). `minShare` is the smallest child's fraction of the
- * band (defaults to equal shares): list mode requires the SMALLEST child
- * row to stay readable, not just the average.
+ * band of `bandPx` × `widthPx`. Each boundary has its own readability
+ * unit so callers can apply hysteresis PER BOUNDARY (0.8×rem to stay in
+ * the current mode, 1.25×rem to enter a finer one — list↔grid and
+ * grid↔strip flap independently otherwise). `minShare` is the smallest
+ * child's fraction of the band (defaults to equal shares): list mode
+ * requires the SMALLEST child row readable, not the average.
  */
 export function chooseTreeFold(
   childCount: number,
   bandPx: number,
   widthPx: number,
-  remPx: number,
+  listUnitPx: number,
   minShare = childCount > 0 ? 1 / childCount : 0,
+  gridUnitPx = listUnitPx,
 ): TreeFoldMode {
   if (childCount <= 0) return { mode: "strip" };
-  if (bandPx * minShare >= remPx) return { mode: "list" };
-  const rowsAvail = Math.floor(bandPx / remPx);
-  if (rowsAvail >= 1 && widthPx >= KIND_ORDER.length * remPx) {
+  if (bandPx * minShare >= listUnitPx) return { mode: "list" };
+  const rowsAvail = Math.floor(bandPx / gridUnitPx);
+  if (rowsAvail >= 1 && widthPx >= KIND_ORDER.length * gridUnitPx) {
     return { mode: "grid", rows: Math.min(rowsAvail, childCount) };
   }
   return { mode: "strip" };

@@ -124,6 +124,20 @@ describe("tree source — mutations & locality", () => {
     expect(z1).toBeGreaterThanOrEqual(z0);
   });
 
+  test("loaded real lines REPLACE an inflated size estimate in the zoom clamp", () => {
+    const bloated = createTreeSource({
+      name: "root",
+      children: [{ name: "sparse.bin", size: 45 * 100000 }], // est ~100k lines
+    });
+    const real = createTreeSource({
+      name: "root",
+      // same file but its actual content is 20 lines
+      children: [{ name: "sparse.bin", size: 45 * 100000, content: Array(20).fill("x").join("\n") }],
+    });
+    // with content present, the clamp must be SHALLOWER than the estimate's
+    expect(real.maxZoom!).toBeLessThan(bloated.maxZoom!);
+  });
+
   test("aggregates refresh along the ancestor chain", () => {
     const src = createTreeSource(structuredClone(ROOT));
     src.applyFsEvent("docs/new.md", { name: "new.md", size: 2048 });

@@ -124,6 +124,14 @@ describe("chooseTreeFold", () => {
     // …but a 5% runt child (0.5rem) forces the fold
     expect(chooseTreeFold(4, 10 * REM, W, REM, 0.05).mode).toBe("grid");
   });
+  test("per-boundary hysteresis: grid↔strip has its own asymmetric unit", () => {
+    const band = 1.0 * REM; // exactly one nominal grid row
+    const minShare = 0.001; // list is out of reach either way
+    // previous grid (gridUnit 0.8rem): one 1rem row still affords grid
+    expect(chooseTreeFold(500, band, W, REM * 1.25, minShare, REM * 0.8).mode).toBe("grid");
+    // previous strip (gridUnit 1.25rem): the same geometry stays strip
+    expect(chooseTreeFold(500, band, W, REM * 1.25, minShare, REM * 1.25).mode).toBe("strip");
+  });
 });
 
 describe("bucketWeight", () => {
