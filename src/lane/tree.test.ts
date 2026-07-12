@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { createTreeSource, type FileNode } from "./tree.js";
+import { describe, expect, spyOn, test } from "bun:test";
+import { createLazyTreeSource, createTreeSource, type FileNode } from "./tree.js";
+import type { TreeProvider, TreeProviderEntry } from "./treeprovider.js";
 import type { LaneView } from "./view.js";
 import { worldToScreenY } from "./view.js";
 
@@ -103,15 +104,39 @@ describe("tree source — mutations & locality", () => {
       for (let y = 30; y < 590; y += 4) out.push(`${y}:${src.hudLine!(v, y)}`);
       return out.filter((s) => !s.includes("/src")); // everything outside src
     };
-    const before = probe();
-    src.applyFsEvent("src/huge.ts", { name: "huge.ts", size: 45 * 5000 });
-    // settle the glide: probe far in the future by faking time via repeated calls
-    const t0 = performance.now();
-    while (performance.now() - t0 < 300) {
-      /* wait out GLIDE_MS so displayed == target */
+    const nowSpy = spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      const before = probe();
+      src.applyFsEvent("src/huge.ts", { name: "huge.ts", size: 45 * 5000 });
+      nowSpy.mockReturnValue(2_000); // past GLIDE_MS: displayed == target
+      const after = probe();
+      expect(after).toEqual(before);
+    } finally {
+      nowSpy.mockRestore();
     }
-    const after = probe();
-    expect(after).toEqual(before);
+  });
+
+  test("deletion tombstones: the row shrinks over the glide instead of vanishing", () => {
+    const src = createTreeSource(structuredClone(ROOT));
+    const v = view();
+    const nowSpy = spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      const sweep = () => {
+        const seen = new Set<string>();
+        for (let y = 24; y < 596; y += 2) seen.add(src.hudLine!(v, y) ?? "");
+        return seen;
+      };
+      expect([...sweep()].some((s) => s.includes("docs"))).toBe(true);
+      src.applyFsEvent("docs", null);
+      nowSpy.mockReturnValue(1_100); // mid-glide: tombstone still on screen
+      expect([...sweep()].some((s) => s.includes("docs"))).toBe(true);
+      nowSpy.mockReturnValue(2_000); // settled: reaped
+      expect([...sweep()].some((s) => s.includes("docs"))).toBe(false);
+      // and it is gone from the model, not just hidden
+      expect(src.applyFsEvent("docs", null)).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   test("adaptive maxZoom deepens when finer content arrives", () => {
@@ -144,5 +169,112 @@ describe("tree source — mutations & locality", () => {
     const v = view();
     // root header line still resolves; docs gained a file (smoke via hud)
     expect(src.hudLine!(v, 300)).toBeTruthy();
+  });
+});
+
+describe("lazy tree source — provider integration", () => {
+  // in-memory provider over a FileNode tree, paginated `pageSize` at a time
+  function memoryProvider(root: FileNode, pageSize = 2): TreeProvider & { calls: string[] } {
+    const find = (path: string): FileNode | null => {
+      if (!path) return root;
+      let cur: FileNode | undefined = root;
+      for (const seg of path.split("/")) {
+        cur = cur?.children?.find((c) => c.name === seg);
+        if (!cur) return null;
+      }
+      return cur ?? null;
+    };
+    const calls: string[] = [];
+    return {
+      calls,
+      async list(path, { cursor, limit }) {
+        calls.push(path);
+        const dir = find(path);
+        if (!dir?.children) throw new Error(`not a dir: ${path}`);
+        const entries: TreeProviderEntry[] = dir.children.map((c) => ({
+          name: c.name,
+          kind: c.children ? ("directory" as const) : ("file" as const),
+          size: c.size,
+        }));
+        const start = cursor ? parseInt(cursor, 10) : 0;
+        const n = Math.min(limit ?? pageSize, pageSize);
+        const end = Math.min(entries.length, start + n);
+        return {
+          entries: entries.slice(start, end),
+          cursor: end < entries.length ? String(end) : undefined,
+          complete: end >= entries.length,
+          version: 1,
+        };
+      },
+      async read(path) {
+        return find(path)?.content ?? null;
+      },
+    };
+  }
+
+  const DATA: FileNode = {
+    name: "lazy-root",
+    children: [
+      {
+        name: "src",
+        children: [
+          { name: "a.ts", size: 4500 },
+          { name: "b.ts", size: 4500 },
+        ],
+      },
+      { name: "docs", children: [] }, // complete-EMPTY, not unknown
+      { name: "package.json", size: 450 },
+      { name: "README.md", size: 900 },
+    ],
+  };
+
+  const view = (height = 600, zoomY = 600, scrollY = 0): LaneView =>
+    ({ height, zoomY, scrollY, width: 800 } as unknown as LaneView);
+
+  test("nothing is known before the first listing", () => {
+    const src = createLazyTreeSource(memoryProvider(structuredClone(DATA)), { rootName: "root" });
+    const v = view();
+    for (let y = 30; y < 590; y += 40) {
+      expect(src.hudLine!(v, y)).toBe("root");
+    }
+  });
+
+  test("paginated listings materialize children incrementally", async () => {
+    const provider = memoryProvider(structuredClone(DATA), 2);
+    const src = createLazyTreeSource(provider, { rootName: "root" });
+    const v = view();
+    await src.ensureListed(""); // page 1: src, docs
+    const sweep = () => {
+      const s = new Set<string>();
+      for (let y = 24; y < 596; y += 2) s.add(src.hudLine!(v, y) ?? "");
+      return [...s].join("|");
+    };
+    const nowSpy = spyOn(performance, "now").mockReturnValue(10_000);
+    try {
+      expect(sweep()).toContain("src");
+      expect(sweep()).not.toContain("README");
+      await src.ensureListed(""); // page 2: package.json, README.md → complete
+      nowSpy.mockReturnValue(20_000);
+      expect(sweep()).toContain("README.md");
+      // nested listing materializes grandchildren
+      await src.ensureListed("src");
+      nowSpy.mockReturnValue(30_000);
+      expect(sweep()).toContain("a.ts");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("provider errors resolve (not reject) and leave the tree intact", async () => {
+    const provider = memoryProvider(structuredClone(DATA));
+    const src = createLazyTreeSource(provider, { rootName: "root" });
+    await src.ensureListed("no/such/dir"); // provider throws inside
+    expect(src.hudLine!(view(), 300)).toBe("root");
+  });
+
+  test("eager sources treat ensureListed as a no-op", async () => {
+    const src = createTreeSource(structuredClone(DATA));
+    await src.ensureListed();
+    expect(src.hudLine!(view(), 300)).toBeTruthy();
   });
 });

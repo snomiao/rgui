@@ -8,7 +8,8 @@ import { createTimelineSource } from "./lane/timeline.js";
 import type { TimelineFold, TimelineSource } from "./lane/timeline.js";
 import { FOLD_PERIOD_MS } from "./lane/temporal.js";
 import { createSeriesSource } from "./lane/timeseries.js";
-import { createTreeSource, type FileNode } from "./lane/tree.js";
+import { createLazyTreeSource, createTreeSource, type FileNode } from "./lane/tree.js";
+import type { TreeProvider, TreeProviderEntry } from "./lane/treeprovider.js";
 
 // ── network monitor: show every external fetch in the debug panel ─────────
 const netEl = document.querySelector<HTMLDivElement>("#net")!;
@@ -234,13 +235,58 @@ const buildSeries = () =>
 
 const timeSource: TimelineSource = createTimelineSource();
 const treeSource = createTreeSource(genTree(0x51a1));
+
+// ── lazy provider demo: the same generated repo behind a paginated, ────────
+// artificially slow TreeProvider — exercises viewport-driven listing,
+// unknown-vs-empty rendering, and the ≥-tiered aggregates.
+function demoProvider(root: FileNode): TreeProvider {
+  const find = (path: string): FileNode | null => {
+    if (!path) return root;
+    let cur: FileNode | undefined = root;
+    for (const seg of path.split("/")) {
+      cur = cur?.children?.find((c) => c.name === seg);
+      if (!cur) return null;
+    }
+    return cur ?? null;
+  };
+  let rng = 0x9e3779b9;
+  const rnd = () => ((rng = (rng * 1103515245 + 12345) & 0x7fffffff), rng / 0x7fffffff);
+  return {
+    async list(path, { cursor, limit, signal }) {
+      await new Promise((r) => setTimeout(r, 120 + rnd() * 380)); // network-ish
+      if (signal.aborted) throw signal.reason;
+      const dir = find(path);
+      if (!dir?.children) throw new Error(`not a directory: ${path}`);
+      const entries: TreeProviderEntry[] = dir.children.map((c) => ({
+        name: c.name,
+        kind: c.children ? "directory" : "file",
+        size: c.size,
+      }));
+      const start = cursor ? parseInt(cursor, 10) : 0;
+      const end = Math.min(entries.length, start + (limit ?? 32));
+      return {
+        entries: entries.slice(start, end),
+        cursor: end < entries.length ? String(end) : undefined,
+        complete: end >= entries.length,
+        version: 1, // static demo snapshot
+      };
+    },
+    read: async (path) => find(path)?.content ?? null,
+  };
+}
+const lazyTreeSource = createLazyTreeSource(demoProvider(genTree(0x51a1)), {
+  rootName: "rgui/",
+  pageLimit: 32,
+});
+
 const sources: Record<string, LaneSource> = {
   tree: treeSource,
   time: timeSource,
   series: buildSeries(),
 };
-// the demo tree mutates (live-mutation pref, glide re-deals) — repaint on change
+// the demo trees mutate/materialize asynchronously — repaint on change
 treeSource.setOnUpdate(() => lane.invalidate());
+lazyTreeSource.setOnUpdate(() => lane.invalidate());
 // ── URL-hash deep links (#src=…&y=scrollY&z=zoomY) ────────────────────────
 function parseHash() {
   const p = new URLSearchParams(location.hash.slice(1));
@@ -322,8 +368,20 @@ const foldBtn = document.querySelector<HTMLButtonElement>("#fold");
 // empty scroll is OFF by default (taku: it fought users more than blank
 // stretches did) and opt-in; animation/heat default on.
 const PREFS_KEY = "lane-prefs";
-type LanePrefs = { autoZoomOut: boolean; glide: boolean; heat: boolean; treeLive: boolean };
-const prefs: LanePrefs = { autoZoomOut: false, glide: true, heat: true, treeLive: false };
+type LanePrefs = {
+  autoZoomOut: boolean;
+  glide: boolean;
+  heat: boolean;
+  treeLive: boolean;
+  treeLazy: boolean;
+};
+const prefs: LanePrefs = {
+  autoZoomOut: false,
+  glide: true,
+  heat: true,
+  treeLive: false,
+  treeLazy: false,
+};
 try {
   Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}"));
 } catch { /* corrupted prefs → defaults */ }
@@ -372,6 +430,13 @@ function applyPrefs() {
   timeSource.setGlide(prefs.glide);
   timeSource.setHeatCells(prefs.heat);
   setTreeLive(prefs.treeLive);
+  // lazy demo swaps which source backs the "tree" slot (GitHub-loaded trees
+  // installed via the repo box override this until the pref is re-toggled)
+  const wantTree = prefs.treeLazy ? lazyTreeSource : treeSource;
+  if (sources.tree !== wantTree) {
+    sources.tree = wantTree;
+    if (current === "tree") lane.setSource(wantTree);
+  }
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* private mode */ }
 }
 const prefsBtn = document.querySelector<HTMLButtonElement>("#prefs");
@@ -394,6 +459,7 @@ bindPref("#prefAutoZoomOut", "autoZoomOut");
 bindPref("#prefGlide", "glide");
 bindPref("#prefHeat", "heat");
 bindPref("#prefTreeLive", "treeLive");
+bindPref("#prefTreeLazy", "treeLazy");
 function refreshChrome() {
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
@@ -851,8 +917,15 @@ async function translateNew() {
     }
   } finally {
     translating = false;
-    // a switch happened while this pass ran → kick a pass for the new language
-    if (gen !== langGen && translator) void translateNew();
+    // re-kick when a switch happened mid-pass OR new strings arrived while
+    // this pass ran (they were filtered out of `todo` at entry); failures
+    // cache as identity, so this converges instead of spinning
+    if (
+      translator &&
+      (gen !== langGen || timeSource.strings().some((s) => !trCache.has(s)))
+    ) {
+      void translateNew();
+    }
   }
 }
 // language switcher: "auto" follows the browser; anything else is explicit.

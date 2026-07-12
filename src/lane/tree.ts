@@ -34,6 +34,12 @@ import {
   srgbToOklch,
   type TreeFoldMode,
 } from "./treefold.js";
+import {
+  TreeListingStore,
+  type TreeListingSnapshot,
+  type TreeListingStatus,
+  type TreeProvider,
+} from "./treeprovider.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
 /** host-supplied file/folder node. Folders have `children`; files have `size`. */
@@ -63,6 +69,14 @@ export interface TreeOptions {
    * provider must keep unlisted dirs at 1 or pagination churns shares).
    */
   dirWeight?: "flat" | "child-count";
+}
+
+/** options for {@link createLazyTreeSource} */
+export interface LazyTreeOptions extends TreeOptions {
+  /** display name of the root directory (default "/") */
+  rootName?: string;
+  /** entries requested per list page (default 64) */
+  pageLimit?: number;
 }
 
 /** cap on lazily-loaded content lines kept per file */
@@ -97,6 +111,20 @@ interface TNode {
   share: number;
   shareFrom: number; // glide origin when the share was last re-dealt
   shareT0: number; // glide start timestamp (0 = settled)
+  /**
+   * tombstone: deleted but still gliding to share 0 so siblings expand
+   * smoothly instead of snapping to full width. Excluded from every
+   * aggregate/mode decision; reaped once its glide settles.
+   */
+  dying?: boolean;
+  /**
+   * lazy-provider listing state for dirs (undefined = eager tree, which is
+   * complete by construction). unknown+[] means NOT LISTED; complete+[]
+   * means known-empty — the two must never render alike.
+   */
+  listing?: TreeListingStatus;
+  /** any dir below (or self) is still unknown/partial → aggregates are lower bounds */
+  aggLower?: boolean;
 }
 
 const PAD_X = 10;
@@ -258,6 +286,12 @@ export interface TreeSource extends LaneSource {
    * parent only (with a glide) — nothing outside its interval moves.
    */
   applyFsEvent(path: string, node: FileNode | null): boolean;
+  /**
+   * lazy sources: request one listing page for `path` ("" = root) outside
+   * the viewport-driven scheduler — hosts/tests use it to prime a subtree.
+   * Resolves after the page settles; no-op on eager sources.
+   */
+  ensureListed(path?: string): Promise<void>;
 }
 
 const TEXT_EXT = new Set([
@@ -280,9 +314,43 @@ export function createTreeSource(
   root: FileNode,
   opts: TreeOptions = {},
 ): TreeSource {
+  return createTreeSourceImpl(root, opts, null);
+}
+
+/**
+ * lazy tree source: nothing is known up front; listings materialize from a
+ * {@link TreeProvider} driven by the viewport (a dir lists only once its
+ * band affords an expansion, pages continue only while it stays on screen).
+ * The provider is a host-supplied hook like fetchContent — the lib itself
+ * still performs no transport.
+ */
+export function createLazyTreeSource(
+  provider: TreeProvider,
+  opts: LazyTreeOptions = {},
+): TreeSource {
+  return createTreeSourceImpl(
+    { name: opts.rootName ?? "/", children: [] },
+    opts,
+    provider,
+  );
+}
+
+function createTreeSourceImpl(
+  root: FileNode,
+  opts: LazyTreeOptions,
+  provider: TreeProvider | null,
+): TreeSource {
   const dirCount = opts.dirWeight === "child-count";
   const tree = build(root, 0, dirCount);
-  const fetchContent = opts.fetchContent;
+  if (provider) tree.listing = "unknown"; // built empty ≠ known-empty
+  const fetchContent =
+    opts.fetchContent ??
+    (provider?.read
+      ? async (path: string) => {
+          const r = await provider.read!(path, { signal: new AbortController().signal });
+          return typeof r === "string" ? r : r ? new TextDecoder().decode(r) : null;
+        }
+      : undefined);
   let onUpdate: () => void = opts.onUpdate ?? (() => {});
 
   // Fetch a file's text on demand, capped so only a few load at once — combined
@@ -326,8 +394,18 @@ export function createTreeSource(
     return s;
   }
 
+  /** reap settled tombstones — a splice here is visually a no-op because
+   * the dead child's displayed share already reached 0 */
+  function reapDying(t: TNode) {
+    for (let i = t.children.length - 1; i >= 0; i--) {
+      const c = t.children[i]!;
+      if (c.dying && !c.shareT0) t.children.splice(i, 1);
+    }
+  }
+
   /** screen bands for an expanded dir's children: [child, a, b] */
   function layoutChildren(t: TNode, top: number, inner: number): Array<[TNode, number, number]> {
+    reapDying(t);
     let total = 0;
     for (const c of t.children) total += shareNow(c);
     const bounds: Array<[TNode, number, number]> = [];
@@ -360,14 +438,18 @@ export function createTreeSource(
     const bandH = sy1 - sy0;
     const headerB = sy0 + Math.min(HEADER_PX, bandH);
     const contentH = sy1 - headerB;
-    const n = t.children.length;
-    if (!n) return { mode: "strip", headerB, bounds: [], gridRows: 0 };
+    // mode decisions and counts consider LIVE children only; tombstones
+    // still occupy screen space mid-glide but are already "not there"
+    let n = 0;
     let total = 0;
     let min = Infinity;
     for (const c of t.children) {
+      if (c.dying) continue;
+      n++;
       total += c.share;
       if (c.share < min) min = c.share;
     }
+    if (!n) return { mode: "strip", headerB, bounds: [], gridRows: 0 };
     const minShare = total > 0 ? min / total : 1 / n;
     // first sight starts from the COARSEST mode so entering list/grid pays
     // the full 1.25×rem re-entry price — defaulting to "list" would let a
@@ -383,6 +465,13 @@ export function createTreeSource(
     const gridContentH = Math.max(0, contentH - GRID_HEADER_PX);
     const m = chooseTreeFold(n, contentH, gridW, listUnit, minShare, gridUnit, gridContentH);
     modeCache.set(t, m.mode);
+    if (m.mode !== "list") {
+      // grid/strip have no per-child bands to glide — drop tombstones now
+      // so rows/counts/hit prefixes all see the same live set
+      for (let i = t.children.length - 1; i >= 0; i--) {
+        if (t.children[i]!.dying) t.children.splice(i, 1);
+      }
+    }
     return {
       mode: m.mode,
       headerB,
@@ -398,9 +487,11 @@ export function createTreeSource(
 
     frameNow = performance.now();
     gliding = false;
+    wantList.length = 0;
     const sy0 = worldToScreenY(view, 0);
     const sy1 = worldToScreenY(view, 1);
     drawNode(ctx, tree, sy0, sy1, view, env, H);
+    flushListQueue();
     // shares still easing → schedule another frame through the host
     if (gliding) requestAnimationFrame(() => onUpdate());
   }
@@ -424,6 +515,12 @@ export function createTreeSource(
     if (bandH < env.rule.collapsePx) {
       drawFolderSummary(ctx, t, sy0, sy1, env, false);
       return;
+    }
+
+    // expanded and lazily backed → this dir has earned a listing request
+    // (band ≥ collapsePx is the I/O gate, same discipline as loadContent)
+    if (store && (t.listing === "unknown" || t.listing === "partial")) {
+      wantList.push(t.path);
     }
 
     // expanded: fixed readable header, children fill the remainder in the
@@ -688,11 +785,18 @@ export function createTreeSource(
     }
     ctx.closePath();
     ctx.fill();
-    // aggregate right-aligned
+    // aggregate right-aligned — tiered by listing knowledge: exact for a
+    // fully known subtree, "≥" lower bounds while listing, bare ellipsis
+    // when nothing is known yet (never a fabricated exact count)
     ctx.font = "10px ui-monospace, Menlo, monospace";
     ctx.textAlign = "right";
     ctx.fillStyle = theme.textDim;
-    const agg = `${fmtCount(t.fileCount)} · ${fmtBytes(t.totalSize)}`;
+    const listed = t.listing === undefined || t.listing === "complete";
+    const agg = !listed && t.fileCount === 0
+      ? "listing…"
+      : t.aggLower || !listed
+        ? `≥${fmtCount(t.fileCount)} · ≥${fmtBytes(t.totalSize)}${listed ? "" : " …"}`
+        : `${fmtCount(t.fileCount)} · ${fmtBytes(t.totalSize)}`;
     ctx.fillText(agg, right - 6, mid);
     const aggW = ctx.measureText(agg).width + 12;
     // name
@@ -779,9 +883,18 @@ export function createTreeSource(
       // row, never a fabricated count. (Unknown/partial dirs get an
       // unknown-presence tint once a lazy TreeProvider exists.)
       const counts: Record<string, number> = {};
+      let rowUnknown = false; // any member's contents not fully known
       for (let k = row.start; k < row.end; k++) {
         const n = run[k]!;
+        if (n.dying) continue;
         if (n.isDir) {
+          if (n.listing !== undefined && n.listing !== "complete") {
+            rowUnknown = true;
+            // a visible grid row NEEDS its members' immediate contents
+            // (one readdir deep) — queue it through the same viewport
+            // budget expanded dirs use
+            if (store) wantList.push(n.path);
+          }
           for (const c of n.children) {
             const kb = kindOf(c.name, c.isDir);
             counts[kb] = (counts[kb] ?? 0) + 1;
@@ -809,6 +922,12 @@ export function createTreeSource(
           ctx.fillStyle = withAlpha(theme.textFaint, 0.05);
           ctx.fillRect(cx, ry, colW, rowH);
         }
+      }
+      // unknown-presence wash: members whose contents aren't fully listed
+      // exist here, but their density is unknown — tint, never fabricate
+      if (rowUnknown) {
+        ctx.fillStyle = withAlpha(theme.textFaint, 0.1);
+        ctx.fillRect(gx, ry, right - gx, rowH);
       }
       // chunk label in the left gutter
       if (rowH >= 10) {
@@ -951,7 +1070,7 @@ export function createTreeSource(
     zoomDirty = false;
     let minLine = Infinity; // world height of the finest line
     const walk = (t: TNode, len: number) => {
-      if (len <= 0) return;
+      if (len <= 0 || t.dying) return;
       if (!t.isDir) {
         // weight is a layout bucket, not a line count — zoom depth targets
         // real loaded lines when present (loaded data REPLACES the byte
@@ -994,8 +1113,12 @@ export function createTreeSource(
     const idx = parent.children.findIndex((c) => c.name === name);
     const now = performance.now();
     if (node == null) {
-      if (idx < 0) return false;
-      parent.children.splice(idx, 1);
+      if (idx < 0 || parent.children[idx]!.dying) return false;
+      // tombstone: glide to zero share, reaped by layout once settled —
+      // splicing here would re-normalize siblings to full width instantly
+      const dead = parent.children[idx]!;
+      dead.dying = true;
+      dead.weight = 0;
     } else {
       const built = build(node, parent.depth + 1, dirCount);
       if (idx < 0) {
@@ -1012,21 +1135,145 @@ export function createTreeSource(
       }
     }
     assignShares(parent.children, now);
-    // ancestor refresh: weights stay LOCAL (1 + own child count — only the
-    // direct parent's can change); counts/sizes are display decoration
-    for (let i = chain.length - 1; i >= 0; i--) {
-      const d = chain[i]!;
-      d.weight = localWeight(true, d.children.length, 0, dirCount);
-      d.fileCount = 0;
-      d.totalSize = 0;
-      for (const c of d.children) {
-        d.fileCount += c.fileCount;
-        d.totalSize += c.totalSize;
-      }
-    }
+    refreshAggregates(chain);
     zoomDirty = true;
     onUpdate();
     return true;
+  }
+
+  /** ancestor refresh: weights stay LOCAL (own child count — only the
+   * direct parent's can change); counts/sizes are display decoration and
+   * become LOWER BOUNDS (aggLower) while any dir below is un/partially
+   * listed. Tombstones are already gone from every aggregate. */
+  function refreshAggregates(chain: TNode[]) {
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const d = chain[i]!;
+      d.fileCount = 0;
+      d.totalSize = 0;
+      let alive = 0;
+      let lower = d.listing !== undefined && d.listing !== "complete";
+      for (const c of d.children) {
+        if (c.dying) continue;
+        alive++;
+        d.fileCount += c.fileCount;
+        d.totalSize += c.totalSize;
+        if (c.isDir && (c.aggLower || (c.listing !== undefined && c.listing !== "complete"))) {
+          lower = true;
+        }
+      }
+      d.aggLower = lower;
+      d.weight = localWeight(
+        true,
+        alive,
+        0,
+        dirCount && (d.listing === undefined || d.listing === "complete"),
+      );
+    }
+  }
+
+  // ── lazy provider integration ──────────────────────────────────────────
+  // The listing store (codex's pure core) owns request lifecycle; this side
+  // owns WHEN to ask (viewport-driven: drawNode queues expanded dirs whose
+  // listing is unknown/partial, draw() flushes top-down = screen-first,
+  // capped) and HOW a snapshot becomes TNodes (upsert + tombstone deltas,
+  // share glide, weight stays 1 until the listing completes).
+  const LIST_CONCURRENCY = 4;
+  const LIST_RETRY_MS = 5000;
+  const PAGE_LIMIT = opts.pageLimit ?? 64;
+  let listInflight = 0;
+  const listErrorAt = new Map<string, number>();
+  const wantList: string[] = []; // rebuilt every draw, in paint order
+  const store = provider
+    ? new TreeListingStore(provider, (snap) => {
+        materialize(snap);
+        onUpdate();
+      })
+    : null;
+
+  /** walk a slash path of dir names from the root; "" → [root] */
+  function walkDir(path: string): TNode[] | null {
+    const chain = [tree];
+    if (!path) return chain;
+    let cur = tree;
+    for (const seg of path.split("/")) {
+      const nx = cur.children.find((c) => c.name === seg && c.isDir);
+      if (!nx) return null;
+      cur = nx;
+      chain.push(nx);
+    }
+    return chain;
+  }
+
+  function materialize(snap: TreeListingSnapshot) {
+    const chain = walkDir(snap.path);
+    const t = chain?.[chain.length - 1];
+    if (!chain || !t) return;
+    t.listing = snap.status;
+    const now = performance.now();
+    const present = new Set<string>();
+    for (const e of snap.entries) {
+      present.add(e.name);
+      const childPath = t.path ? `${t.path}/${e.name}` : e.name;
+      const idx = t.children.findIndex((c) => c.name === e.name);
+      if (idx < 0) {
+        const built = build(
+          e.kind === "directory"
+            ? { name: e.name, children: [], path: e.path ?? childPath }
+            : { name: e.name, size: e.size, path: e.path ?? childPath },
+          t.depth + 1,
+          dirCount,
+        );
+        if (e.kind === "directory") built.listing = "unknown";
+        built.share = 0; // grows in from nothing
+        built.shareFrom = 0;
+        t.children.push(built);
+      } else {
+        const c = t.children[idx]!;
+        c.dying = false; // re-listed = resurrected
+        if (!c.isDir && e.size != null && e.size !== c.totalSize) {
+          c.totalSize = e.size;
+          c.weight = localWeight(false, 0, e.size, dirCount);
+        }
+      }
+    }
+    // deletions are knowable only from a COMPLETE listing
+    if (snap.status === "complete") {
+      for (const c of t.children) {
+        if (!present.has(c.name) && !c.dying) {
+          c.dying = true;
+          c.weight = 0;
+        }
+      }
+    }
+    assignShares(t.children, now);
+    refreshAggregates(chain);
+    zoomDirty = true;
+  }
+
+  /** fire queued listings, screen-first, within the concurrency budget */
+  function flushListQueue() {
+    if (!store) return;
+    for (const path of wantList) {
+      if (listInflight >= LIST_CONCURRENCY) break;
+      const snap = store.snapshot(path);
+      if (snap.loading) continue;
+      if (snap.status === "complete" && !snap.restartRequired) continue;
+      const errAt = listErrorAt.get(path);
+      if (errAt !== undefined && performance.now() - errAt < LIST_RETRY_MS) continue;
+      listInflight++;
+      const ctrl = new AbortController();
+      void store
+        .load(path, { signal: ctrl.signal, limit: PAGE_LIMIT })
+        .then((s) => {
+          if (s.error !== undefined) listErrorAt.set(path, performance.now());
+          else listErrorAt.delete(path);
+        })
+        .finally(() => {
+          listInflight--;
+          onUpdate(); // pick up follow-up pages / newly visible dirs
+        });
+    }
+    wantList.length = 0;
   }
 
   return {
@@ -1054,5 +1301,12 @@ export function createTreeSource(
       onUpdate = fn;
     },
     applyFsEvent,
+    ensureListed(path = "") {
+      if (!store) return Promise.resolve();
+      const ctrl = new AbortController();
+      return store
+        .load(path, { signal: ctrl.signal, limit: PAGE_LIMIT })
+        .then(() => undefined);
+    },
   };
 }

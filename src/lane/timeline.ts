@@ -37,6 +37,7 @@ import {
   foldYearProjector,
   FOLD_PERIOD_MS,
 } from "./temporal.js";
+import { heatRampColor, srgbToOklch } from "./treefold.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
 /** "now" — present reference (Unix seconds, ~2026-07). */
@@ -1682,35 +1683,10 @@ export function createTimelineSource(
   // Counts bucket on a fixed log2 ladder (1,2,4,8,16+) so scrolling never
   // re-normalizes colors. Sparse cells (≤3) keep their dots; dense cells
   // suppress dots and label the count when the cell affords it.
-  const srgbToOklch = (() => {
-    const cache = new Map<string, { L: number; C: number; H: number }>();
-    return (hex: string) => {
-      let v = cache.get(hex);
-      if (v) return v;
-      const n = parseInt(hex.slice(1), 16);
-      const lin = (u: number) => (u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4));
-      const r = lin(((n >> 16) & 255) / 255);
-      const g = lin(((n >> 8) & 255) / 255);
-      const b = lin((n & 255) / 255);
-      const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-      const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-      const s2 = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-      const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s2;
-      const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s2;
-      const bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s2;
-      v = { L, C: Math.hypot(a, bb), H: ((Math.atan2(bb, a) * 180) / Math.PI + 360) % 360 };
-      cache.set(hex, v);
-      return v;
-    };
-  })();
+  // (Conversion + ramp shared with the tree fold — treefold.ts owns them.)
   /** cell fill for `count` events in a category cell, per theme surface */
-  const heatCellColor = (cat: Cat, count: number, darkTheme: boolean): string => {
-    const { C, H } = srgbToOklch(CAT_COLOR[cat]);
-    const step = Math.min(4, Math.log2(1 + count)); // 1,2,4,8,16+ buckets
-    const L = darkTheme ? 0.3 + 0.115 * step : 0.93 - 0.1 * step;
-    const c = Math.min(0.11, C) * (0.55 + 0.11 * step);
-    return `oklch(${L.toFixed(3)} ${c.toFixed(3)} ${H.toFixed(1)})`;
-  };
+  const heatCellColor = (cat: Cat, count: number, darkTheme: boolean): string =>
+    heatRampColor(CAT_COLOR[cat], count, darkTheme);
   // ── precision-aware LOD: point → interval → tint ──────────────────────────
   // An event whose precision window outgrows the view stops being a point:
   // ~a cell wide → interval (row fragments); beyond the viewport → tint
