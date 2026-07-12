@@ -1394,7 +1394,7 @@ function render() {
   requestAnimationFrame(render);
 }
 
-function pickedCellHit(clientX: number, clientY: number): { cellId: number; point: THREE.Vector3 } | undefined {
+function pickedCell(clientX: number, clientY: number): number | undefined {
   const rect = canvas.getBoundingClientRect();
   const x = clientX - rect.left;
   const y = clientY - rect.top;
@@ -1421,37 +1421,10 @@ function pickedCellHit(clientX: number, clientY: number): { cellId: number; poin
     const cellId = ids?.[hit.instanceId];
     if (cellId === undefined) continue;
     if (focusDepth === undefined || cellFocusStrength(cellId) >= 0.24) {
-      return { cellId, point: hit.point.clone() };
+      return cellId;
     }
   }
   return undefined;
-}
-
-function pickedCell(clientX: number, clientY: number): number | undefined {
-  return pickedCellHit(clientX, clientY)?.cellId;
-}
-
-function setOrbitPivot(pivot: THREE.Vector3) {
-  updateCamera();
-  const offset = camera.position.clone().sub(pivot);
-  const distance = Math.max(0.001, offset.length());
-  yaw = Math.atan2(offset.x, offset.z);
-  pitch = Math.asin(THREE.MathUtils.clamp(offset.y / distance, -1, 1));
-  cameraDistance = THREE.MathUtils.clamp(distance / frameMultiplier, 6.4, 15);
-  cameraTarget.copy(pivot);
-  updateCamera();
-}
-
-function pointerFocusPoint(clientX: number, clientY: number, cellId?: number) {
-  const rect = canvas.getBoundingClientRect();
-  const halfWidth = rect.width / 2;
-  const eyeX = clientX - rect.left < halfWidth
-    ? clientX - rect.left
-    : clientX - rect.left - halfWidth;
-  const x = THREE.MathUtils.clamp(eyeX / halfWidth, 0, 1);
-  const y = THREE.MathUtils.clamp((clientY - rect.top) / rect.height, 0, 1);
-  const depth = focusDepth ?? (cellId === undefined ? 0.5 : cellViewDepths.get(cellId) ?? 0.5);
-  return spatialCursorWorldPoint(x, y, depth);
 }
 
 function updateHover(clientX: number, clientY: number) {
@@ -1540,10 +1513,6 @@ canvas.addEventListener("pointerdown", (event) => {
   canvas.setPointerCapture(event.pointerId);
   pointers.set(event.pointerId, new THREE.Vector2(event.clientX, event.clientY));
   if (pointers.size === 1) {
-    if (event.button === 2) {
-      const pivotHit = pickedCellHit(event.clientX, event.clientY);
-      setOrbitPivot(pointerFocusPoint(event.clientX, event.clientY, pivotHit?.cellId));
-    }
     const grabbedCellId = event.button === 2
       ? undefined
       : pickedCell(event.clientX, event.clientY);
