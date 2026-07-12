@@ -28,10 +28,14 @@ import {
   chooseTreeFold,
   chunkRows,
   contentLevels,
+  detectSchema,
   discloseLevel,
   heatRampColor,
   kindOf,
   srgbToOklch,
+  updateSchemaRegistry,
+  type SchemaRegistry,
+  type SchemaRegistryColumn,
   type TreeFoldMode,
 } from "./treefold.js";
 import {
@@ -132,6 +136,10 @@ interface TNode {
    * isomorphic to display paths — nodeByListKey maps them back.
    */
   listKey?: string;
+  /** bumped whenever this dir's children change (schema re-detection key) */
+  childEpoch?: number;
+  /** the listing version this dir's children came from (schema epoch bound) */
+  listVersion?: unknown;
   /** any dir below (or self) is still unknown/partial → aggregates are lower bounds */
   aggLower?: boolean;
 }
@@ -552,7 +560,7 @@ function createTreeSourceImpl(
         drawNode(ctx, c, a, b, view, env, H);
       }
     } else if (L.mode === "grid") {
-      drawFoldGrid(ctx, t.children, L.headerB, sy1, t.depth + 1, env, L.gridRows);
+      drawFoldGrid(ctx, t, t.children, L.headerB, sy1, t.depth + 1, env, L.gridRows);
     } else {
       drawAggStrip(ctx, L.headerB, sy1, t.depth + 1, t.children.length, t.fileCount, t.totalSize, env);
     }
@@ -822,6 +830,48 @@ function createTreeSourceImpl(
     ctx.fillText(fit(ctx, t.name, right - (x + 18) - aggW), x + 18, mid);
   }
 
+  // ── schema fold: shared child names as columns (node_modules/<pkg>) ────
+  // Detection + ordering are codex's pure core (detectSchema / registry);
+  // this side owns caching (re-detect when the dir's children change),
+  // epochs (ghost columns retire when the dir's own listing VERSION
+  // changes), and the fit test (every column ≥1rem plus the '·' rest).
+  interface SchemaState {
+    key: string; // childEpoch + column budget
+    version: unknown;
+    registry: SchemaRegistry | null;
+  }
+  const schemaCache = new WeakMap<TNode, SchemaState>();
+  const SCHEMA_MIN_SUPPORT = 0.6;
+  const SCHEMA_MIN_MEMBERS = 3;
+
+  function schemaFor(t: TNode, gridW: number): readonly SchemaRegistryColumn[] | null {
+    const maxColumns = Math.floor(gridW / REM_PX) - 1; // reserve the '·' rest
+    if (maxColumns < 2) return null;
+    const key = `${t.childEpoch ?? 0}:${maxColumns}`;
+    const cached = schemaCache.get(t);
+    if (cached && cached.key === key) return cached.registry?.columns ?? null;
+    const members = t.children
+      .filter((c) => c.isDir && !c.dying)
+      .map((c) => ({
+        name: c.name,
+        complete: c.listing === undefined || c.listing === "complete",
+        children: c.children.filter((k) => !k.dying),
+      }));
+    const detected = detectSchema(members, {
+      maxColumns,
+      minSupport: SCHEMA_MIN_SUPPORT,
+      minMembers: SCHEMA_MIN_MEMBERS,
+    });
+    let registry: SchemaRegistry | null = null;
+    if (detected) {
+      // same listing version → same epoch → order persists, ghosts retained
+      const prev = cached && cached.version === t.listVersion ? cached.registry : null;
+      registry = updateSchemaRegistry(prev, detected);
+    }
+    schemaCache.set(t, { key, version: t.listVersion, registry });
+    return registry?.columns ?? null;
+  }
+
   /**
    * Fold a run of sub-readable siblings into a grid: rows = contiguous
    * index chunks of the run (each row therefore covers a contiguous world
@@ -829,6 +879,11 @@ function createTreeSourceImpl(
    * = the fixed kind buckets, cells = OKLCH heat by count. Empty cells stay
    * as ghost placeholders so columns align across rows — the tree analog of
    * the 28-day month's blank grid cells.
+   *
+   * When the rows' members share child structure, columns switch to the
+   * SHARED CHILD NAMES (schema fold): each cell counts the chunk's members
+   * having that child, tinted by that child's kind, with a trailing '·'
+   * column for members carrying anything outside the schema.
    *
    * NOTE v1: focusAt/hudLine still use the pure-world mapping, which the
    * Row geometry comes from gridLayout — the same function hitTest uses,
@@ -851,6 +906,7 @@ function createTreeSourceImpl(
 
   function drawFoldGrid(
     ctx: CanvasRenderingContext2D,
+    parent: TNode,
     run: TNode[],
     sy0: number,
     sy1: number,
@@ -869,9 +925,46 @@ function createTreeSourceImpl(
     ctx.fillStyle = withAlpha(theme.nodeBg, 0.2);
     ctx.fillRect(x, ca, right - x, cb - ca);
 
-    // header strip: kind captions over their columns
+    // columns: shared child names when the members expose a schema, else
+    // the fixed kind buckets. Each column carries its caption + base hue.
     const gx = x + GRID_GUTTER_PX;
-    const cols = KIND_ORDER.length;
+    interface GridCol {
+      caption: string;
+      color: string;
+      ghost: boolean;
+      childName?: string; // set = schema column; unset = kind bucket
+      kind?: (typeof KIND_ORDER)[number];
+    }
+    const schema = schemaFor(parent, right - gx);
+    let gridCols: GridCol[];
+    if (schema && schema.length >= 2) {
+      const colorOf = (name: string): string => {
+        for (const m of run) {
+          if (!m.isDir || m.dying) continue;
+          const c = m.children.find((k) => k.name === name && !k.dying);
+          if (c) return KIND_COLOR[kindOf(c.name, c.isDir)];
+        }
+        return KIND_COLOR.other;
+      };
+      gridCols = [
+        ...schema.map((sc) => ({
+          caption: sc.name,
+          color: colorOf(sc.name),
+          ghost: sc.ghost,
+          childName: sc.name,
+        })),
+        // members carrying anything OUTSIDE the schema land here
+        { caption: "·", color: KIND_COLOR.other, ghost: false },
+      ];
+    } else {
+      gridCols = KIND_ORDER.map((kb) => ({
+        caption: KIND_LABEL[kb],
+        color: KIND_COLOR[kb],
+        ghost: false,
+        kind: kb,
+      }));
+    }
+    const cols = gridCols.length;
     const colW = (right - gx) / cols;
     // rows come from the run's TRUE span (gridSpan), not the clipped one —
     // otherwise rows re-flow as the viewport edge slides across the run
@@ -881,10 +974,16 @@ function createTreeSourceImpl(
       ctx.font = "9px ui-monospace, Menlo, monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = theme.textMuted;
       for (let c = 0; c < cols; c++) {
-        ctx.fillText(KIND_LABEL[KIND_ORDER[c]!], gx + (c + 0.5) * colW, sy0 + GRID_HEADER_PX / 2);
+        const col = gridCols[c]!;
+        ctx.fillStyle = col.ghost ? withAlpha(theme.textFaint, 0.7) : theme.textMuted;
+        ctx.fillText(
+          fit(ctx, col.caption, colW - 6),
+          gx + (c + 0.5) * colW,
+          sy0 + GRID_HEADER_PX / 2,
+        );
       }
+      ctx.textAlign = "left";
     }
 
     ctx.textBaseline = "middle";
@@ -900,17 +999,34 @@ function createTreeSourceImpl(
       // unknown-presence tint once a lazy TreeProvider exists.)
       const counts: Record<string, number> = {};
       let rowUnknown = false; // any member's contents not fully known
+      const schemaNames = schema && gridCols[0]!.childName !== undefined
+        ? new Set(schema.map((sc) => sc.name))
+        : null;
       for (let k = row.start; k < row.end; k++) {
         const n = run[k]!;
         if (n.dying) continue;
-        if (n.isDir) {
-          if (n.listing !== undefined && n.listing !== "complete") {
-            rowUnknown = true;
-            // a visible grid row NEEDS its members' immediate contents
-            // (one readdir deep) — queue it through the same viewport
-            // budget expanded dirs use
-            if (store && n.listKey !== undefined) wantList.push(n.listKey);
+        if (n.isDir && n.listing !== undefined && n.listing !== "complete") {
+          rowUnknown = true;
+          // a visible grid row NEEDS its members' immediate contents
+          // (one readdir deep) — queue it through the same viewport
+          // budget expanded dirs use
+          if (store && n.listKey !== undefined) wantList.push(n.listKey);
+        }
+        if (schemaNames) {
+          // schema cells count MEMBERS: does this member carry the child?
+          // A file member (no structure) and any unmatched child land on '·'
+          if (!n.isDir) {
+            counts["·"] = (counts["·"] ?? 0) + 1;
+            continue;
           }
+          let other = false;
+          for (const c of n.children) {
+            if (c.dying) continue;
+            if (schemaNames.has(c.name)) counts[c.name] = (counts[c.name] ?? 0) + 1;
+            else other = true;
+          }
+          if (other) counts["·"] = (counts["·"] ?? 0) + 1;
+        } else if (n.isDir) {
           for (const c of n.children) {
             const kb = kindOf(c.name, c.isDir);
             counts[kb] = (counts[kb] ?? 0) + 1;
@@ -921,11 +1037,11 @@ function createTreeSourceImpl(
         }
       }
       for (let c = 0; c < cols; c++) {
-        const kb = KIND_ORDER[c]!;
-        const cnt = counts[kb] ?? 0;
+        const col = gridCols[c]!;
+        const cnt = counts[col.childName ?? col.kind ?? col.caption] ?? 0;
         const cx = gx + c * colW;
         if (cnt > 0) {
-          ctx.fillStyle = heatRampColor(KIND_COLOR[kb], cnt, dark);
+          ctx.fillStyle = heatRampColor(col.color, cnt, dark);
           ctx.fillRect(cx, ry, colW, rowH);
           if (cnt > 1 && colW >= 24 && rowH >= 12) {
             ctx.font = "9px ui-monospace, Menlo, monospace";
@@ -1152,6 +1268,7 @@ function createTreeSourceImpl(
     }
     assignShares(parent.children, now);
     refreshAggregates(chain);
+    parent.childEpoch = (parent.childEpoch ?? 0) + 1;
     zoomDirty = true;
     onUpdate();
     return true;
@@ -1325,6 +1442,8 @@ function createTreeSourceImpl(
     }
     assignShares(t.children, now);
     refreshAggregates(chainOf(t));
+    t.childEpoch = (t.childEpoch ?? 0) + 1;
+    t.listVersion = snap.version;
     zoomDirty = true;
     // provider invalidations re-list through the store (ping → unknown →
     // the viewport scheduler picks it up again)
