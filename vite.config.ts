@@ -8,6 +8,10 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   appType: "mpa",
+  server: {
+    host: true,
+    allowedHosts: true,
+  },
   build: {
     rollupOptions: {
       input: {
