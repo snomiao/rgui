@@ -207,6 +207,19 @@ export {
   type TerminalPreview,
 } from "./render/terminalPreview.js";
 export {
+  TreeListingStore,
+  type TreeProvider,
+  type TreeProviderEntry,
+  type TreeListOptions,
+  type TreeListPage,
+  type TreeListingStatus,
+  type TreeListingSnapshot,
+  type TreeLoadOptions,
+  type TreeStat,
+  type TreeVersion,
+  type TreeWatchEvent,
+} from "./lane/treeprovider.js";
+export {
   newGraphCrdt,
   crdtAddNode,
   crdtSetFields,
