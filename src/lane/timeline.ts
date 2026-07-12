@@ -537,6 +537,49 @@ export function createTimelineSource(
   }
   reindex();
 
+  // ── adaptive zoom-in limit ────────────────────────────────────────────────
+  // The clamp is the rg-merge readability rule applied to zoom: stop where
+  // the FINEST precision window in the loaded data stretches to ~4rem —
+  // past that, zoom adds pixels but no information. Lazily rescanned when
+  // datasets stream in (ingesting minute-precision commits deepens the
+  // limit), and axis-aware: on the symlog axis a window's world width
+  // depends on how deep in time it sits, so the binding event is the
+  // fine-precision one FARTHEST from now.
+  const ZOOM_WIN_PX = 64; // the finest window may stretch to ~4rem
+  const ZOOM_CEIL = 1e12; // float-safety / runaway-wheel ceiling
+  const ZOOM_FALLBACK = 5e6; // no precision data loaded (legacy fixed clamp)
+  let zoomScanLen = -1;
+  let minLinYr = Infinity; // linear axis: min precision window, in years
+  let minLogRatio = Infinity; // log axis: min of window / (LIN + |yBP|)
+  function scanZoomPrecision() {
+    if (points.length === zoomScanLen) return;
+    zoomScanLen = points.length;
+    minLinYr = Infinity;
+    minLogRatio = Infinity;
+    for (const e of points) {
+      const win = e.precision?.kind === "calendar" ? precisionWindow(e) : null;
+      if (!win) continue;
+      const wYr = (win[1] - win[0]) / (SPY * 1000);
+      if (!(wYr > 0)) continue;
+      if (wYr < minLinYr) minLinYr = wYr;
+      const r = wYr / (LIN + Math.abs(e.y));
+      if (r < minLogRatio) minLogRatio = r;
+    }
+  }
+  function adaptiveMaxZoom(): number {
+    scanZoomPrecision();
+    // px(window) = zoom·w/(ln10·(LIN+|y|)) on symlog, zoom·w on linear —
+    // solve each for the zoom putting the tightest window at ZOOM_WIN_PX
+    const need = logAxis
+      ? minLogRatio === Infinity
+        ? ZOOM_FALLBACK
+        : (ZOOM_WIN_PX * Math.LN10) / minLogRatio
+      : minLinYr === Infinity
+        ? ZOOM_FALLBACK
+        : ZOOM_WIN_PX / minLinYr;
+    return Math.min(ZOOM_CEIL, need);
+  }
+
   // ── lazy web fetch: open datasets pulled in at their matching zoom scale ──
   let onUpdate: () => void = () => {};
   const fetchedKeys = new Set<string>();
@@ -2172,7 +2215,9 @@ export function createTimelineSource(
         max: logAxis ? 2.5 : 0,
       };
     },
-    maxZoom: 5e6,
+    get maxZoom() {
+      return adaptiveMaxZoom();
+    },
     // viewport emptiness (target-density): 1 when a void, 0 once ≥ TARGET
     // in-scale events are on screen — drives scroll-into-void auto-zoom-out
     emptiness: (view) => {
