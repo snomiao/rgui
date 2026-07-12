@@ -845,21 +845,41 @@ async function translateNew() {
   translating = false;
   timeSource.setTranslate((s) => trCache.get(s) ?? s); // redraw with new text
 }
-async function initI18n() {
-  const lang = (navigator.language || "en").split("-")[0];
-  if (lang === "en") return;
+// language switcher: "auto" follows the browser; anything else is explicit.
+// Switching tears the old translator down, reverts to English immediately,
+// then swaps translations in as the new model delivers them.
+const LANG_KEY = "lane-lang";
+let langGen = 0;
+async function setLang(choice: string) {
+  const gen = ++langGen;
+  translator = null;
+  trCache.clear();
+  timeSource.setTranslate((s) => s); // English right away; translations follow
+  const target = choice === "auto" ? (navigator.language || "en").split("-")[0]! : choice;
+  if (target === "en") return;
   const T = (globalThis as unknown as { Translator?: any }).Translator;
   if (!T?.create) return;
   try {
-    const avail = await T.availability?.({ sourceLanguage: "en", targetLanguage: lang });
+    const avail = await T.availability?.({ sourceLanguage: "en", targetLanguage: target });
     if (avail === "unavailable") return;
-    translator = await T.create({ sourceLanguage: "en", targetLanguage: lang });
+    const tr = await T.create({ sourceLanguage: "en", targetLanguage: target });
+    if (gen !== langGen) return; // user switched again while the model loaded
+    translator = tr;
     await translateNew();
   } catch {
     /* Translator API unavailable — stay English */
   }
 }
-void initI18n();
+const langSel = document.querySelector<HTMLSelectElement>("#lang");
+const savedLang = localStorage.getItem(LANG_KEY) ?? "auto";
+if (langSel) {
+  langSel.value = savedLang;
+  langSel.addEventListener("change", () => {
+    try { localStorage.setItem(LANG_KEY, langSel.value); } catch { /* private mode */ }
+    void setLang(langSel.value);
+  });
+}
+void setLang(savedLang);
 
 // initial preference application — after ALL module state (incl. the i18n
 // `translator` binding) exists, so no callback lands in a TDZ
