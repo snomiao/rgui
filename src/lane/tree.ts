@@ -19,6 +19,15 @@
 import type { RgTheme } from "../core/theme.js";
 import { withAlpha } from "../core/theme.js";
 import type { LaneEnv, LaneSource } from "./lane.js";
+import {
+  KIND_COLOR,
+  KIND_LABEL,
+  KIND_ORDER,
+  chunkRows,
+  heatRampColor,
+  kindOf,
+  srgbToOklch,
+} from "./treefold.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
 /** host-supplied file/folder node. Folders have `children`; files have `size`. */
@@ -72,6 +81,10 @@ const MAX_INDENT_DEPTH = 12; // clamp indent so deep trees keep row width
 const HEADER_PX = 22; // fixed readable folder header when expanded
 const MIN_ROW = 6; // runs of thinner siblings fold into an aggregate strip
 const CULL = 24; // off-screen margin (px)
+const REM_PX = 16; // readability unit for the fold grid (≥1rem rule)
+const GRID_MIN_PX = 2 * REM_PX; // a thin run this tall folds into a grid
+const GRID_HEADER_PX = 12; // kind-column caption strip (like SMTWTFS)
+const GRID_GUTTER_PX = 42; // left gutter for chunk row labels
 
 const EXT_COLOR: Record<string, string> = {
   ts: "#60a5fa",
@@ -284,21 +297,27 @@ export function createTreeSource(
         drawNode(ctx, c, a, b, view, env, H);
         i++;
       } else {
-        // fold a contiguous run of thin siblings into one aggregate strip
+        // fold a contiguous run of thin siblings: a tall-enough run becomes
+        // a kind×chunk heat grid (the tree auto-fold), a sliver stays a strip
         let files = 0;
         let size = 0;
-        let cnt = 0;
+        const run: TNode[] = [];
         const rStart = a;
         let end = b;
         let j = i;
         while (j < bounds.length && bounds[j]![2] - bounds[j]![1] < MIN_ROW) {
           files += bounds[j]![0].fileCount;
           size += bounds[j]![0].totalSize;
-          cnt++;
+          run.push(bounds[j]![0]);
           end = bounds[j]![2];
           j++;
         }
-        drawAggStrip(ctx, rStart, end, t.depth + 1, cnt, files, size, env);
+        const gridW = env.size.width - PAD_X - indentX(t.depth + 1) - GRID_GUTTER_PX;
+        if (end - rStart >= GRID_MIN_PX && gridW >= KIND_ORDER.length * REM_PX) {
+          drawFoldGrid(ctx, run, rStart, end, t.depth + 1, env);
+        } else {
+          drawAggStrip(ctx, rStart, end, t.depth + 1, run.length, files, size, env);
+        }
         i = j;
       }
     }
@@ -518,6 +537,120 @@ export function createTreeSource(
     ctx.textAlign = "left";
     ctx.fillStyle = theme.text;
     ctx.fillText(fit(ctx, t.name, right - (x + 18) - aggW), x + 18, mid);
+  }
+
+  /**
+   * Fold a run of sub-readable siblings into a grid: rows = contiguous
+   * index chunks of the run (each row therefore covers a contiguous world
+   * span, keeping the world↔screen mapping monotone for hit-tests), columns
+   * = the fixed kind buckets, cells = OKLCH heat by count. Empty cells stay
+   * as ghost placeholders so columns align across rows — the tree analog of
+   * the 28-day month's blank grid cells.
+   *
+   * NOTE v1: focusAt/hudLine still use the pure-world mapping, which the
+   * grid re-projects only per-row (same approximation class as HEADER_PX
+   * stealing screen space). The shared treeFoldPos choke point lands with
+   * the dynamic-space slice.
+   */
+  function drawFoldGrid(
+    ctx: CanvasRenderingContext2D,
+    run: TNode[],
+    sy0: number,
+    sy1: number,
+    depth: number,
+    env: LaneEnv,
+  ) {
+    const { theme } = env;
+    const x = indentX(depth);
+    const right = env.size.width - PAD_X;
+    const [ca, cb] = rowClip(sy0, sy1, env.size.height);
+    const h = cb - ca;
+    if (h <= 0) return;
+    const dark = srgbToOklch(theme.background as string).L < 0.5;
+
+    ctx.fillStyle = withAlpha(theme.nodeBg, 0.2);
+    ctx.fillRect(x, ca, right - x, h);
+
+    // header strip: kind captions over their columns
+    const gx = x + GRID_GUTTER_PX;
+    const cols = KIND_ORDER.length;
+    const colW = (right - gx) / cols;
+    let top = ca;
+    if (h >= GRID_MIN_PX + GRID_HEADER_PX) {
+      ctx.font = "9px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = theme.textMuted;
+      for (let c = 0; c < cols; c++) {
+        ctx.fillText(KIND_LABEL[KIND_ORDER[c]!], gx + (c + 0.5) * colW, ca + GRID_HEADER_PX / 2);
+      }
+      top = ca + GRID_HEADER_PX;
+    }
+
+    const gridH = cb - top;
+    const rows = chunkRows(
+      run.map((n) => n.name),
+      Math.max(1, Math.floor(gridH / REM_PX)),
+    );
+    if (!rows.length) return;
+    const rowH = gridH / rows.length;
+
+    ctx.textBaseline = "middle";
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r]!;
+      const ry = top + r * rowH;
+      // per-kind counts over this chunk: a file counts itself, a dir counts
+      // its immediate children (one readdir deep — the design's "直下 1 階層";
+      // deeper totals stay async decoration, never a layout input)
+      const counts: Record<string, number> = {};
+      for (let k = row.start; k < row.end; k++) {
+        const n = run[k]!;
+        if (n.isDir && n.children.length) {
+          for (const c of n.children) {
+            const kb = kindOf(c.name, c.isDir);
+            counts[kb] = (counts[kb] ?? 0) + 1;
+          }
+        } else {
+          const kb = kindOf(n.name, n.isDir);
+          counts[kb] = (counts[kb] ?? 0) + 1;
+        }
+      }
+      for (let c = 0; c < cols; c++) {
+        const kb = KIND_ORDER[c]!;
+        const cnt = counts[kb] ?? 0;
+        const cx = gx + c * colW;
+        if (cnt > 0) {
+          ctx.fillStyle = heatRampColor(KIND_COLOR[kb], cnt, dark);
+          ctx.fillRect(cx, ry, colW, rowH);
+          if (cnt > 1 && colW >= 24 && rowH >= 12) {
+            ctx.font = "9px ui-monospace, Menlo, monospace";
+            ctx.textAlign = "center";
+            ctx.fillStyle = dark ? theme.text : theme.textDim;
+            ctx.fillText(String(cnt), cx + colW / 2, ry + rowH / 2);
+          }
+        } else {
+          // ghost placeholder keeps the column aligned
+          ctx.fillStyle = withAlpha(theme.textFaint, 0.05);
+          ctx.fillRect(cx, ry, colW, rowH);
+        }
+      }
+      // chunk label in the left gutter
+      if (rowH >= 10) {
+        ctx.font = "9px ui-monospace, Menlo, monospace";
+        ctx.textAlign = "left";
+        ctx.fillStyle = theme.textMuted;
+        ctx.fillText(fit(ctx, row.label, GRID_GUTTER_PX - 8), x + 2, ry + rowH / 2);
+      }
+      // 1px row separator
+      ctx.fillStyle = withAlpha(theme.textFaint, 0.25);
+      ctx.fillRect(gx, ry, right - gx, 1);
+    }
+    // 1px column separators (drawn last so they sit above cell fills)
+    ctx.fillStyle = withAlpha(theme.textFaint, 0.25);
+    for (let c = 0; c <= cols; c++) {
+      ctx.fillRect(gx + c * colW, top, 1, cb - top);
+    }
+    ctx.textAlign = "left";
   }
 
   function drawAggStrip(
