@@ -473,6 +473,63 @@ view がその精度を超えて zoom した時、点として描くのは偽の
   tooltip に精度を明記(「dated to year: 1994」)。偽の点 hit を返さない。
 - v1 では crossfade・深時間 fold 一般化・range-difference 最適化を後回しにする。
 
+### folder tree の auto-fold — 動的空間の fold 規則 (claude 起草・自己批評済み, codex レビュー待ち)
+
+time demo の auto-fold は空間が静的・事前計算可能なことに依存していた。folder tree は
+動的で(entry の増減・サイズ変動)、さらに実 FS では subtree 集計(合計サイズ・子孫数)が
+取得不能または高価な場合がある。この制約を前提に space と fold 規則を定義する。
+
+- **fold = 商の一般化**: temporal fold は 1D 軸を周期で割る商(row=周回, phase=周期内位置)
+  だった。tree では directory ごとに division ladder を fine→coarse に持ち、
+  `chooseDivision` と同じ「slot 幅 ≥ 1rem を満たす最も細かいもの」規則で選ぶ:
+  1. **schema fold** — 兄弟 dir が子構成を共有する場合(`node_modules/<pkg>` 等)、
+     列 = 共有される子名(`package.json`, `src`, `dist`, …)。欠ける子は blank/ghost cell
+     (month の 28/31 日 placeholder と同型)。
+  2. **kind fold** — 常に可能な fallback。列 = 拡張子/種別 bucket(dir/ts/json/md/img/other ≈ 6)。
+     cell は OKLCH heat(`heatCellColor` 再利用)で count/size 密度を示す。
+  3. **chunk fold** — 巨大 dir。行 = アルファベット/index の 10・100 単位 chunk("a–c" 等)。
+     decimal fold(decade/century)の tree 版。
+  per-directory かつ再帰的で global mode は持たない(per-track fold と同じ構図)。
+- **space = 区間分割座標**: 累積 weight(現行 `tree.ts` の方式)は lazy 判明のたび extent が
+  伸びて後続兄弟が全域でズレる。代わりに root=[0,1) とし、dir が自区間を子へ分配する
+  (stick-breaking)。局所性が構造上保証され(dir 内の変化は自区間に閉じる)、extent は
+  ms 軸同様に永久固定。分配は readdir の子数による等分から始め、実測サイズが stream で
+  届いたら path-key glide 付きで再分配。深い file の区間は微小だが zoom は乗法的に効く。
+- **layout 入力は cheap な局所情報のみ**: 直下 readdir と自身の stat。subtree 集計は
+  async な装飾であり layout 入力にしない。summary は 3 段階:
+  確定 `128 files · 4.2 MB` → 部分 `≥128 files (counting…)` → 不明(非表示)。
+  未知の密度は count でなく不確定 tint(精度対応 rendering の「偽精度を製造しない」原則)。
+- **I/O は viewport 駆動**(lazy `loadContent` と同じ規律):
+  band < collapsePx → readdir 不要 / band ≥ collapsePx → 直下のみ readdir /
+  schema 列検出は画面内の grid 候補 dir に限り孫名を 1 階層 fetch /
+  巨大 dir は先頭 N 件 + has-more で打ち切り chunk fold が吸収 /
+  background walker が並列上限・画面内優先の予算で集計を充填、fs-watch/mutation で invalidate。
+  コストは可視要素数に比例し、tree 全体サイズに比例しない。
+- **単一 choke point**: `treeFoldPos(node)` が draw / hit-test / heat 集計の position+level を
+  一元解決(`trackFoldPos` の移植)。「座標系 A で計算した状態を B で消費」する P0 系統の予防。
+- **epoch と安定性**: layout は `(tree snapshot, version)` の純関数。weight は log bucket で
+  量子化し微小変動で動かさない。fold 判定は enter/exit = 1.25/0.8 hysteresis。
+  列順は epoch 間で安定維持(新列は末尾追加 + glide)。
+- **v1 の決定(自己批評による解決)**:
+  - schema fold は v2 へ後送。孫 fetch + 類似検出の複雑さに対し v1 価値が低い。
+    v1 の ladder は list → kind fold → chunk fold → summary。
+  - kind fold の cell 集計は「直下 1 階層」のみ: 行 = 子 dir(+ 直下 file をまとめる 1 行)、
+    cell = その dir の直下エントリの kind 別 count(readdir 1 回・viewport 駆動)。
+    深部の量は presence-unknown tint とし background walker が確定値で置換。
+  - fold trigger: band < collapsePx → summary / 子が 1rem 行 list で収まる → list(最細)/
+    収まらず grid cell ≥ 1rem² が可能 → grid(kind → chunk)/ どれも不可 → agg strip。
+  - 浮動小数点: [0,1) 正規化区間は demo 規模(~1e4 files, line 区間 ≈ 1e-8)で double の
+    15–16 桁内。超深部 zoom は (anchorPath, localY) への view re-basing として v2。
+  - `TemporalProjector` の interface は流用しない(入力が ms でなく node)。
+    FoldProjection の出力形({rowKey, rowIndex, rowLabel, phase0/1, ghost})だけ共有し、
+    glide / heat の consumer を再利用可能にする。
+  - I/O 抽象: lib は host 供給の `TreeProvider`(list/stat/watch hook — 既存 `fetchContent`
+    と同じ前例)のみを知る。scope guard(transport 禁止)と整合。
+    QA は demo 側の決定論的 synthetic mutator(seed 付き add/remove/grow)。
+- open questions(codex レビューで確認): 等分 vs log-size 分配の churn 許容度 /
+  列順安定化の具体則(末尾追加 + glide で足りるか)/ HEADER_PX(screen)と区間(world)の
+  投影を drawNode 再帰に残す方針の妥当性 / schema fold v2 の類似検出 heuristic。
+
 ## Inbox (from otoji-agent)
 
 <!-- otoji-agent はここに追記 -->
