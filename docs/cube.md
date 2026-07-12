@@ -38,6 +38,11 @@ asymmetry
 - `Ctrl`/`Command` + wheel, keyboard `+`/`-`, or a touch pinch moves through
   the RG levels. `PARALLAX` changes eye separation and `GHOST` changes
   voxel-surface opacity.
+- `H`/`J`/`K`/`L` moves the focused cell in projected screen space; `U`/`I`
+  moves it farther or nearer in view depth. `Enter` tests the focused cell.
+- Dragging a cell pans the camera on that cell's camera-space depth plane, so
+  the grabbed cell follows the pointer with depth-correct world motion. Dragging
+  empty space retains orbit control around the current camera target.
 - Click `peek` to lock both digits into both eye images, or hold it for a
   temporary accessible check.
 - `PARALLEL / CROSS` changes the free-viewing method. Cross-eye mode swaps the

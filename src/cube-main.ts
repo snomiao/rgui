@@ -25,6 +25,7 @@ import {
   type NativeTextTranslator,
 } from "./i18n/browserTranslator.js";
 import { stereoPanelCameras, updateStereoCameras } from "./stereo/rig.js";
+import { depthPlanePanScale, directionalFocusTarget, type FocusDirection } from "./cube/navigation.js";
 
 type Theme = "dark" | "light";
 type ThemeChoice = Theme | "auto";
@@ -64,6 +65,8 @@ interface DragState {
   lastX: number;
   lastY: number;
   moved: boolean;
+  mode: "orbit" | "depth-pan";
+  depth: number;
 }
 
 const required = <T extends Element>(selector: string): T => {
@@ -239,6 +242,7 @@ let focusDepth: number | undefined;
 let yaw = Math.PI / 4;
 let pitch = 0.34;
 let cameraDistance = 9.6;
+const cameraTarget = new THREE.Vector3();
 let frameMultiplier = 1;
 let currentPuzzle: CubePuzzle;
 let currentRepresentation: CubeRepresentation;
@@ -1212,8 +1216,8 @@ function updateCamera() {
     Math.sin(yaw) * horizontal,
     Math.sin(pitch) * distance,
     Math.cos(yaw) * horizontal,
-  );
-  camera.lookAt(0, 0, 0);
+  ).add(cameraTarget);
+  camera.lookAt(cameraTarget);
   camera.focus = distance;
   camera.updateMatrixWorld(true);
 
@@ -1229,6 +1233,7 @@ function resetView() {
   yaw = Math.PI / 4;
   pitch = 0.34;
   cameraDistance = 9.6;
+  cameraTarget.set(0, 0, 0);
   focusDepth = undefined;
   updateFocusControl();
   updateCamera();
@@ -1319,6 +1324,10 @@ function pickedCell(clientX: number, clientY: number): number | undefined {
 
 function updateHover(clientX: number, clientY: number) {
   const cellId = pickedCell(clientX, clientY);
+  setFocusedCell(cellId);
+}
+
+function setFocusedCell(cellId: number | undefined) {
   if (cellId === hoveredCellId) return;
   hoveredCellId = cellId;
   if (cellId === undefined) delete canvas.dataset.hoveredCell;
@@ -1336,6 +1345,28 @@ function updateHover(clientX: number, clientY: number) {
       size.z / (CELL_SIZE + 0.08),
     );
   }
+}
+
+function moveKeyboardFocus(direction: FocusDirection) {
+  updateCamera();
+  updateCellViewDepths();
+  camera.updateMatrixWorld(true);
+  cubeRoot.updateMatrixWorld(true);
+  const candidates = currentRepresentation.cells.map((cell) => {
+    const projected = latticePosition(cell.center)
+      .applyMatrix4(cubeRoot.matrixWorld)
+      .project(camera);
+    return {
+      id: cell.id,
+      x: projected.x,
+      y: projected.y,
+      depth: cellViewDepths.get(cell.id) ?? 0.5,
+    };
+  });
+  const nextId = directionalFocusTarget(candidates, hoveredCellId, direction);
+  if (nextId === undefined) return;
+  setFocusedCell(nextId);
+  setFocusDepth(cellViewDepths.get(nextId) ?? 0.5);
 }
 
 function setRgLevel(nextLevel: number, announce = false) {
@@ -1377,6 +1408,18 @@ canvas.addEventListener("pointerdown", (event) => {
   canvas.setPointerCapture(event.pointerId);
   pointers.set(event.pointerId, new THREE.Vector2(event.clientX, event.clientY));
   if (pointers.size === 1) {
+    const grabbedCellId = pickedCell(event.clientX, event.clientY);
+    if (grabbedCellId !== undefined) setFocusedCell(grabbedCellId);
+    const grabbedCell = grabbedCellId === undefined
+      ? undefined
+      : currentRepresentation.cells[grabbedCellId];
+    const grabbedPoint = grabbedCell
+      ? latticePosition(grabbedCell.center).applyMatrix4(cubeRoot.matrixWorld)
+      : undefined;
+    const cameraForward = camera.getWorldDirection(new THREE.Vector3());
+    const grabbedDepth = grabbedPoint
+      ? grabbedPoint.clone().sub(camera.position).dot(cameraForward)
+      : 0;
     drag = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -1384,6 +1427,8 @@ canvas.addEventListener("pointerdown", (event) => {
       lastX: event.clientX,
       lastY: event.clientY,
       moved: false,
+      mode: grabbedDepth > 0 ? "depth-pan" : "orbit",
+      depth: grabbedDepth,
     };
   } else {
     pinchDistance = pointerPairDistance();
@@ -1415,8 +1460,20 @@ canvas.addEventListener("pointermove", (event) => {
   if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4) {
     drag.moved = true;
   }
-  yaw -= dx * 0.006;
-  pitch = THREE.MathUtils.clamp(pitch + dy * 0.005, -1.08, 1.08);
+  if (drag.mode === "depth-pan") {
+    const scale = depthPlanePanScale(
+      drag.depth,
+      THREE.MathUtils.degToRad(camera.fov),
+      canvas.clientHeight,
+    );
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    cameraTarget.addScaledVector(right, -dx * scale);
+    cameraTarget.addScaledVector(up, dy * scale);
+  } else {
+    yaw -= dx * 0.006;
+    pitch = THREE.MathUtils.clamp(pitch + dy * 0.005, -1.08, 1.08);
+  }
   updateCamera();
 });
 
@@ -1446,6 +1503,8 @@ function finishPointer(event: PointerEvent) {
       lastX: point.x,
       lastY: point.y,
       moved: true,
+      mode: "orbit",
+      depth: 0,
     };
     pinchDistance = undefined;
   }
@@ -1477,7 +1536,19 @@ canvas.addEventListener(
 
 canvas.addEventListener("keydown", (event) => {
   const step = event.shiftKey ? 0.16 : 0.08;
-  if (event.key === "ArrowLeft") yaw += step;
+  const key = event.key.toLowerCase();
+  const focusDirection = ({
+    h: "left",
+    l: "right",
+    k: "up",
+    j: "down",
+    u: "far",
+    i: "near",
+  } as const)[key as "h" | "l" | "k" | "j" | "u" | "i"];
+  if (focusDirection) moveKeyboardFocus(focusDirection);
+  else if (event.key === "Enter" && hoveredCellId !== undefined) {
+    selectCell(hoveredCellId);
+  } else if (event.key === "ArrowLeft") yaw += step;
   else if (event.key === "ArrowRight") yaw -= step;
   else if (event.key === "ArrowUp") pitch = Math.min(1.08, pitch - step);
   else if (event.key === "ArrowDown") pitch = Math.max(-1.08, pitch + step);
@@ -1485,10 +1556,10 @@ canvas.addEventListener("keydown", (event) => {
     applyZoomDistance(cameraDistance * 0.9);
   } else if (event.key === "-" || event.key === "_") {
     applyZoomDistance(cameraDistance * 1.1);
-  } else if (event.key.toLowerCase() === "r") resetView();
+  } else if (key === "r") resetView();
   else return;
   event.preventDefault();
-  if (!event.key.match(/^[+=_-]$/)) updateCamera();
+  if (!focusDirection && !event.key.match(/^[+=_-]$/)) updateCamera();
 });
 
 labelEncodingSelect.addEventListener("change", () => {
