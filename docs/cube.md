@@ -166,6 +166,8 @@ A hand-relative 2D pinch gates actions while calibrated joints provide motion.
 A short pinch selects the focused cell; a sustained or moving pinch pans at the
 current focus depth. Mouse, wheel, keyboard, and finger input remain available
 together. Low-confidence or lost tracking cancels the gesture without selecting.
+Right-button dragging always orbits the cube and suppresses the browser context
+menu, including when the drag begins over a cell.
 
 BroadcastChannel is same-origin only. Cross-origin otoji/rgui deployments need
 a `postMessage` or WebRTC relay that forwards the same v1 envelope.

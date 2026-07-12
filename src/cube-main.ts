@@ -66,6 +66,7 @@ interface StereoChromePair {
 
 interface DragState {
   pointerId: number;
+  button: number;
   startX: number;
   startY: number;
   lastX: number;
@@ -1512,7 +1513,9 @@ canvas.addEventListener("pointerdown", (event) => {
   canvas.setPointerCapture(event.pointerId);
   pointers.set(event.pointerId, new THREE.Vector2(event.clientX, event.clientY));
   if (pointers.size === 1) {
-    const grabbedCellId = pickedCell(event.clientX, event.clientY);
+    const grabbedCellId = event.button === 2
+      ? undefined
+      : pickedCell(event.clientX, event.clientY);
     if (grabbedCellId !== undefined) setFocusedCell(grabbedCellId);
     const grabbedCell = grabbedCellId === undefined
       ? undefined
@@ -1526,6 +1529,7 @@ canvas.addEventListener("pointerdown", (event) => {
       : 0;
     drag = {
       pointerId: event.pointerId,
+      button: event.button,
       startX: event.clientX,
       startY: event.clientY,
       lastX: event.clientX,
@@ -1586,6 +1590,7 @@ function finishPointer(event: PointerEvent) {
   const wasClick =
     pointers.size === 1 &&
     drag?.pointerId === event.pointerId &&
+    drag.button === 0 &&
     !drag.moved;
   pointers.delete(event.pointerId);
   if (wasClick) {
@@ -1603,6 +1608,7 @@ function finishPointer(event: PointerEvent) {
     ];
     drag = {
       pointerId,
+      button: -1,
       startX: point.x,
       startY: point.y,
       lastX: point.x,
@@ -1617,6 +1623,7 @@ function finishPointer(event: PointerEvent) {
 
 canvas.addEventListener("pointerup", finishPointer);
 canvas.addEventListener("pointercancel", finishPointer);
+canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 canvas.addEventListener("pointerleave", () => {
   if (pointers.size === 0) {
     hoveredCellId = undefined;
