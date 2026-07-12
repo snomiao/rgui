@@ -154,3 +154,18 @@ inverse RG operation.
 - A fourth axis remains explicit time or another domain dimension until the
   application defines its adjacency and reducer; it is not silently folded
   into z.
+
+## Spatial finger input
+
+The cube listens for the versioned otoji spatial cursor contract on
+`BroadcastChannel("otoji-spatial")`. Stable tracking engages a relative 3D
+cursor: fingertip x/y moves across the view and metric z moves the focus plane.
+The same world cursor is projected through both stereo eye cameras.
+
+A hand-relative 2D pinch gates actions while calibrated joints provide motion.
+A short pinch selects the focused cell; a sustained or moving pinch pans at the
+current focus depth. Mouse, wheel, keyboard, and finger input remain available
+together. Low-confidence or lost tracking cancels the gesture without selecting.
+
+BroadcastChannel is same-origin only. Cross-origin otoji/rgui deployments need
+a `postMessage` or WebRTC relay that forwards the same v1 envelope.

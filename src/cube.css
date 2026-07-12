@@ -97,6 +97,24 @@ input[type="range"] {
   will-change: transform;
 }
 
+#cube-app.spatial-tracking .stereo-cursor {
+  border-color: #65e6bb;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #65e6bb 28%, transparent);
+}
+
+.finger-status {
+  min-width: 7.5rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: center;
+}
+
+.finger-status[data-state="tracking"] {
+  color: #65e6bb;
+}
+
 .stereo-cursor::before,
 .stereo-cursor::after {
   position: absolute;

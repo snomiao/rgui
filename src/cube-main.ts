@@ -26,6 +26,12 @@ import {
 } from "./i18n/browserTranslator.js";
 import { stereoPanelCameras, updateStereoCameras } from "./stereo/rig.js";
 import { depthPlanePanScale, directionalFocusTarget, type FocusDirection } from "./cube/navigation.js";
+import {
+  createSpatialCursorChannel,
+  createSpatialCursorState,
+  reduceSpatialCursor,
+  type SpatialCursorIntent,
+} from "./cube/spatialCursor.js";
 
 type Theme = "dark" | "light";
 type ThemeChoice = Theme | "auto";
@@ -110,6 +116,7 @@ const rightEyeLabel = required<HTMLElement>("#right-eye-label");
 const topbar = required<HTMLElement>(".topbar");
 const rgbar = required<HTMLElement>(".rgbar");
 const controlbar = required<HTMLElement>(".controlbar");
+const fingerStatus = required<HTMLOutputElement>("#finger-status");
 const stereoModeButtons = [...document.querySelectorAll<HTMLButtonElement>(
   "[data-stereo-mode]",
 )];
@@ -265,6 +272,8 @@ let pinchDistance: number | undefined;
 let toastMirror: HTMLElement | undefined;
 let stereoChromeSyncFrame: number | undefined;
 let syncingChromeScroll = false;
+let spatialCursorState = createSpatialCursorState();
+let spatialPinch: { startX: number; startY: number; lastX: number; lastY: number; moved: boolean; cellId?: number } | undefined;
 const pointers = new Map<number, THREE.Vector2>();
 const cellViewDepths = new Map<number, number>();
 const stereoChromePairs: StereoChromePair[] = [];
@@ -273,6 +282,7 @@ const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 
 function updateStereoCursors(clientX: number, clientY: number) {
+  if (cubeApp.classList.contains("spatial-tracking")) return;
   const rect = cubeApp.getBoundingClientRect();
   const x = clientX - rect.left;
   const y = clientY - rect.top;
@@ -285,6 +295,100 @@ function updateStereoCursors(clientX: number, clientY: number) {
   leftStereoCursor.style.transform = `translate3d(${eyeX - 9}px, ${y - 9}px, 0)`;
   rightStereoCursor.style.transform = `translate3d(${halfWidth + eyeX - 9}px, ${y - 9}px, 0)`;
   cubeApp.classList.add("cursor-paired");
+}
+
+function positionStereoCursor(element: HTMLElement, x: number, y: number) {
+  element.style.transform = `translate3d(${x - 9}px, ${y - 9}px, 0)`;
+}
+
+function cellDistanceRange() {
+  camera.updateMatrixWorld(true);
+  cubeRoot.updateMatrixWorld(true);
+  const forward = camera.getWorldDirection(new THREE.Vector3());
+  const distances = currentRepresentation.cells.map((cell) =>
+    latticePosition(cell.center).applyMatrix4(cubeRoot.matrixWorld).sub(camera.position).dot(forward),
+  );
+  return { near: Math.min(...distances), far: Math.max(...distances) };
+}
+
+function spatialCursorWorldPoint(x: number, y: number, depth: number) {
+  updateCamera();
+  pointerNdc.set(x * 2 - 1, 1 - y * 2);
+  raycaster.setFromCamera(pointerNdc, camera);
+  const range = cellDistanceRange();
+  const planeDistance = THREE.MathUtils.lerp(range.near, range.far, depth);
+  const forward = camera.getWorldDirection(new THREE.Vector3());
+  const denominator = Math.max(0.05, raycaster.ray.direction.dot(forward));
+  return raycaster.ray.at(planeDistance / denominator, new THREE.Vector3());
+}
+
+function updateSpatialStereoCursor(x: number, y: number, depth: number) {
+  const point = spatialCursorWorldPoint(x, y, depth);
+  updateStereoCameras(stereoCamera, camera);
+  const [leftCamera, rightCamera] = stereoPanelCameras(stereoCamera, stereoMode);
+  const rect = cubeApp.getBoundingClientRect();
+  const halfWidth = rect.width / 2;
+  const project = (eye: THREE.Camera, offset: number, element: HTMLElement) => {
+    const ndc = point.clone().project(eye);
+    positionStereoCursor(element, offset + (ndc.x * 0.5 + 0.5) * halfWidth, (-ndc.y * 0.5 + 0.5) * rect.height);
+  };
+  project(leftCamera, 0, leftStereoCursor);
+  project(rightCamera, halfWidth, rightStereoCursor);
+  cubeApp.classList.add("cursor-paired", "spatial-tracking");
+  setFocusDepth(depth);
+  updateHover(rect.left + x * halfWidth, rect.top + y * rect.height);
+}
+
+function setFingerStatus(state: "waiting" | "tracking" | "pinch") {
+  fingerStatus.dataset.state = state === "waiting" ? "" : "tracking";
+  fingerStatus.value = state === "waiting" ? "HAND · WAITING" : state === "pinch" ? "HAND · PINCH" : "HAND · TRACKING";
+  scheduleStereoChromeSync();
+}
+
+function applySpatialIntent(intent: SpatialCursorIntent) {
+  if (intent.kind === "rest") {
+    spatialPinch = undefined;
+    cubeApp.classList.remove("spatial-tracking", "cursor-pressed");
+    setFingerStatus("waiting");
+    return;
+  }
+  updateSpatialStereoCursor(intent.x, intent.y, intent.depth);
+  if (intent.kind === "engage") setFingerStatus("tracking");
+  if (intent.kind === "pinch-start") {
+    spatialPinch = {
+      startX: intent.x,
+      startY: intent.y,
+      lastX: intent.x,
+      lastY: intent.y,
+      moved: false,
+      cellId: hoveredCellId,
+    };
+    cubeApp.classList.add("cursor-pressed");
+    setFingerStatus("pinch");
+    return;
+  }
+  if (intent.kind === "move" && spatialPinch) {
+    const width = canvas.clientWidth / 2;
+    const dx = (intent.x - spatialPinch.lastX) * width;
+    const dy = (intent.y - spatialPinch.lastY) * canvas.clientHeight;
+    spatialPinch.lastX = intent.x;
+    spatialPinch.lastY = intent.y;
+    if (Math.hypot((intent.x - spatialPinch.startX) * width, (intent.y - spatialPinch.startY) * canvas.clientHeight) > 24) spatialPinch.moved = true;
+    const range = cellDistanceRange();
+    const distance = THREE.MathUtils.lerp(range.near, range.far, intent.depth);
+    const scale = depthPlanePanScale(distance, THREE.MathUtils.degToRad(camera.fov), canvas.clientHeight);
+    cameraTarget.addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion), -dx * scale);
+    cameraTarget.addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion), dy * scale);
+    updateCamera();
+  }
+  if (intent.kind === "pinch-end") {
+    if (spatialPinch && !spatialPinch.moved && intent.durationMs <= 250 && spatialPinch.cellId !== undefined) {
+      selectCell(spatialPinch.cellId);
+    }
+    spatialPinch = undefined;
+    cubeApp.classList.remove("cursor-pressed");
+    setFingerStatus("tracking");
+  }
 }
 
 cubeApp.addEventListener("pointermove", (event) => {
@@ -1438,6 +1542,7 @@ canvas.addEventListener("pointerdown", (event) => {
 
 canvas.addEventListener("pointermove", (event) => {
   if (!pointers.has(event.pointerId)) {
+    if (cubeApp.classList.contains("spatial-tracking")) return;
     updateHover(event.clientX, event.clientY);
     return;
   }
@@ -1958,5 +2063,11 @@ applyTheme();
 resetView();
 setupStereoChrome();
 void setupNativeTranslation();
+const spatialCursorChannel = createSpatialCursorChannel((frame) => {
+  const result = reduceSpatialCursor(spatialCursorState, frame);
+  spatialCursorState = result.state;
+  for (const intent of result.intents) applySpatialIntent(intent);
+});
+window.addEventListener("pagehide", () => spatialCursorChannel?.close(), { once: true });
 if (!localStorage.getItem(HELP_SEEN_KEY)) requestAnimationFrame(openHelp);
 requestAnimationFrame(render);
