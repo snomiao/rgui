@@ -409,7 +409,10 @@ function createTreeSourceImpl(
   function reapDying(t: TNode) {
     for (let i = t.children.length - 1; i >= 0; i--) {
       const c = t.children[i]!;
-      if (c.dying && !c.shareT0) t.children.splice(i, 1);
+      if (c.dying && !c.shareT0) {
+        retireSubtree(c); // final: stop watchers, drop list keys
+        t.children.splice(i, 1);
+      }
     }
   }
 
@@ -479,7 +482,10 @@ function createTreeSourceImpl(
       // grid/strip have no per-child bands to glide — drop tombstones now
       // so rows/counts/hit prefixes all see the same live set
       for (let i = t.children.length - 1; i >= 0; i--) {
-        if (t.children[i]!.dying) t.children.splice(i, 1);
+        if (t.children[i]!.dying) {
+          retireSubtree(t.children[i]!);
+          t.children.splice(i, 1);
+        }
       }
     }
     return {
@@ -1210,6 +1216,19 @@ function createTreeSourceImpl(
       })
     : null;
 
+  /** stop watchers and drop list-key mappings for a node AND its subtree —
+   * called when a node is finally reaped or replaced by another kind. The
+   * ===-guard protects a replacement that re-registered the same key. */
+  function retireSubtree(t: TNode) {
+    if (!t.isDir) return;
+    if (t.listKey !== undefined) {
+      if (nodeByListKey.get(t.listKey) === t) nodeByListKey.delete(t.listKey);
+      unwatchers.get(t.listKey)?.();
+      unwatchers.delete(t.listKey);
+    }
+    for (const c of t.children) retireSubtree(c);
+  }
+
   /** ancestor chain (root-first) via parent links, for aggregate refresh */
   function chainOf(t: TNode): TNode[] {
     const chain = [t];
@@ -1254,14 +1273,10 @@ function createTreeSourceImpl(
         const c = t.children[idx]!;
         if ((e.kind === "directory") !== c.isDir) {
           // same name, different KIND (file replaced by dir or vice versa):
-          // the node is a different thing — replace it wholesale, inherit
-          // only the displayed share/glide, and retire the old dir's
-          // listing bookkeeping (listKey mapping, watcher, children)
-          if (c.isDir && c.listKey !== undefined) {
-            nodeByListKey.delete(c.listKey);
-            unwatchers.get(c.listKey)?.();
-            unwatchers.delete(c.listKey);
-          }
+          // the node is a different thing — replace it wholesale and retire
+          // the old incarnation's ENTIRE listing bookkeeping (its own and
+          // every descendant's listKey mapping and watcher)
+          retireSubtree(c);
           const built = build(
             e.kind === "directory"
               ? { name: e.name, children: [], path: e.path ?? logicalPath }
@@ -1274,9 +1289,13 @@ function createTreeSourceImpl(
             built.listKey = e.path ?? logicalPath;
             nodeByListKey.set(built.listKey, built);
           }
-          built.share = c.share;
-          built.shareFrom = dispShare(c, now);
-          built.shareT0 = c.shareT0;
+          // resume from the currently DISPLAYED share, settled — the
+          // assignShares below starts one clean glide to the new target
+          // (inheriting old shareT0 double-applied the easing)
+          const disp = dispShare(c, now);
+          built.share = disp;
+          built.shareFrom = disp;
+          built.shareT0 = 0;
           parentOf.set(built, t);
           t.children[idx] = built;
           continue;

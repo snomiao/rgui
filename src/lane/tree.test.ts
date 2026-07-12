@@ -432,3 +432,56 @@ describe("lazy tree source — review regressions", () => {
     }
   });
 });
+
+describe("lazy tree source — retirement lifecycle", () => {
+  const view = (height = 600, zoomY = 600, scrollY = 0): LaneView =>
+    ({ height, zoomY, scrollY, width: 800 } as unknown as LaneView);
+
+  test("kind replacement retires DESCENDANT watchers and list keys too", async () => {
+    let phase: "dir" | "file" = "dir";
+    const stopped: string[] = [];
+    let invalidateRoot: (() => void) | null = null;
+    const provider: TreeProvider = {
+      async list(path) {
+        if (path === "") {
+          return {
+            entries: [{ name: "thing", kind: phase === "dir" ? ("directory" as const) : ("file" as const), size: 900 }],
+            complete: true,
+            version: phase,
+          };
+        }
+        if (path === "thing") {
+          return {
+            entries: [{ name: "sub", kind: "directory" as const }],
+            complete: true,
+            version: 1,
+          };
+        }
+        return { entries: [], complete: true, version: 1 }; // thing/sub: empty
+      },
+      watch(path, cb) {
+        if (path === "") invalidateRoot = () => cb({ path: "" });
+        return () => stopped.push(path);
+      },
+    };
+    const src = createLazyTreeSource(provider, { rootName: "root" });
+    await src.ensureListed();
+    await src.ensureListed("thing");
+    await src.ensureListed("thing/sub");
+    expect(stopped).toEqual([]); // all three watchers alive
+    phase = "file"; // dir → file: thing AND thing/sub must retire
+    invalidateRoot!();
+    await src.ensureListed();
+    expect(stopped.sort()).toEqual(["thing", "thing/sub"]);
+    // the file incarnation still renders
+    const v = view();
+    const nowSpy = spyOn(performance, "now").mockReturnValue(10_000);
+    try {
+      const seen = new Set<string>();
+      for (let y = 24; y < 596; y += 2) seen.add(src.hudLine!(v, y) ?? "");
+      expect([...seen].join("|")).toContain("thing");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
