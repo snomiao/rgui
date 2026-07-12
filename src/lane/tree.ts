@@ -75,6 +75,9 @@ export interface TreeOptions {
 export interface LazyTreeOptions extends TreeOptions {
   /** display name of the root directory (default "/") */
   rootName?: string;
+  /** provider key of the root listing (default "") — providers whose paths
+   * aren't display-name joins (ids, absolute paths) anchor here */
+  rootPath?: string;
   /** entries requested per list page (default 64) */
   pageLimit?: number;
 }
@@ -123,6 +126,12 @@ interface TNode {
    * means known-empty — the two must never render alike.
    */
   listing?: TreeListingStatus;
+  /**
+   * the PROVIDER's key for listing this dir (TreeProviderEntry.path when
+   * given, else the display-name join). Provider paths need not be
+   * isomorphic to display paths — nodeByListKey maps them back.
+   */
+  listKey?: string;
   /** any dir below (or self) is still unknown/partial → aggregates are lower bounds */
   aggLower?: boolean;
 }
@@ -287,9 +296,10 @@ export interface TreeSource extends LaneSource {
    */
   applyFsEvent(path: string, node: FileNode | null): boolean;
   /**
-   * lazy sources: request one listing page for `path` ("" = root) outside
-   * the viewport-driven scheduler — hosts/tests use it to prime a subtree.
-   * Resolves after the page settles; no-op on eager sources.
+   * lazy sources: request one listing page for a PROVIDER list key
+   * (default: the root's key) outside the viewport-driven scheduler —
+   * hosts/tests use it to prime a subtree. Resolves after the page
+   * settles; no-op on eager sources.
    */
   ensureListed(path?: string): Promise<void>;
 }
@@ -519,8 +529,8 @@ function createTreeSourceImpl(
 
     // expanded and lazily backed → this dir has earned a listing request
     // (band ≥ collapsePx is the I/O gate, same discipline as loadContent)
-    if (store && (t.listing === "unknown" || t.listing === "partial")) {
-      wantList.push(t.path);
+    if (store && t.listKey !== undefined && (t.listing === "unknown" || t.listing === "partial")) {
+      wantList.push(t.listKey);
     }
 
     // expanded: fixed readable header, children fill the remainder in the
@@ -893,7 +903,7 @@ function createTreeSourceImpl(
             // a visible grid row NEEDS its members' immediate contents
             // (one readdir deep) — queue it through the same viewport
             // budget expanded dirs use
-            if (store) wantList.push(n.path);
+            if (store && n.listKey !== undefined) wantList.push(n.listKey);
           }
           for (const c of n.children) {
             const kb = kindOf(c.name, c.isDir);
@@ -1180,9 +1190,19 @@ function createTreeSourceImpl(
   const LIST_CONCURRENCY = 4;
   const LIST_RETRY_MS = 5000;
   const PAGE_LIMIT = opts.pageLimit ?? 64;
-  let listInflight = 0;
+  const ROOT_LIST_KEY = opts.rootPath ?? "";
   const listErrorAt = new Map<string, number>();
   const wantList: string[] = []; // rebuilt every draw, in paint order
+  /** in-flight listings by provider key — aborted when they leave the viewport */
+  const activeList = new Map<string, AbortController>();
+  /** provider list key → materialized dir (provider paths need not mirror names) */
+  const nodeByListKey = new Map<string, TNode>();
+  const parentOf = new WeakMap<TNode, TNode>();
+  const watched = new Set<string>();
+  if (provider) {
+    tree.listKey = ROOT_LIST_KEY;
+    nodeByListKey.set(ROOT_LIST_KEY, tree);
+  }
   const store = provider
     ? new TreeListingStore(provider, (snap) => {
         materialize(snap);
@@ -1190,49 +1210,59 @@ function createTreeSourceImpl(
       })
     : null;
 
-  /** walk a slash path of dir names from the root; "" → [root] */
-  function walkDir(path: string): TNode[] | null {
-    const chain = [tree];
-    if (!path) return chain;
-    let cur = tree;
-    for (const seg of path.split("/")) {
-      const nx = cur.children.find((c) => c.name === seg && c.isDir);
-      if (!nx) return null;
-      cur = nx;
-      chain.push(nx);
+  /** ancestor chain (root-first) via parent links, for aggregate refresh */
+  function chainOf(t: TNode): TNode[] {
+    const chain = [t];
+    let cur = t;
+    for (;;) {
+      const p = parentOf.get(cur);
+      if (!p) break;
+      chain.unshift(p);
+      cur = p;
     }
     return chain;
   }
 
   function materialize(snap: TreeListingSnapshot) {
-    const chain = walkDir(snap.path);
-    const t = chain?.[chain.length - 1];
-    if (!chain || !t) return;
+    const t = nodeByListKey.get(snap.path);
+    if (!t || !t.isDir) return;
     t.listing = snap.status;
     const now = performance.now();
     const present = new Set<string>();
     for (const e of snap.entries) {
       present.add(e.name);
-      const childPath = t.path ? `${t.path}/${e.name}` : e.name;
+      const logicalPath = t.path ? `${t.path}/${e.name}` : e.name;
       const idx = t.children.findIndex((c) => c.name === e.name);
       if (idx < 0) {
         const built = build(
           e.kind === "directory"
-            ? { name: e.name, children: [], path: e.path ?? childPath }
-            : { name: e.name, size: e.size, path: e.path ?? childPath },
+            ? { name: e.name, children: [], path: e.path ?? logicalPath }
+            : { name: e.name, size: e.size, path: e.path ?? logicalPath },
           t.depth + 1,
           dirCount,
         );
-        if (e.kind === "directory") built.listing = "unknown";
+        if (e.kind === "directory") {
+          built.listing = "unknown";
+          built.listKey = e.path ?? logicalPath;
+          nodeByListKey.set(built.listKey, built);
+        }
         built.share = 0; // grows in from nothing
         built.shareFrom = 0;
+        parentOf.set(built, t);
         t.children.push(built);
       } else {
         const c = t.children[idx]!;
-        c.dying = false; // re-listed = resurrected
-        if (!c.isDir && e.size != null && e.size !== c.totalSize) {
-          c.totalSize = e.size;
-          c.weight = localWeight(false, 0, e.size, dirCount);
+        const wasDying = c.dying === true;
+        c.dying = false; // re-listed = resurrected…
+        if (!c.isDir) {
+          if (e.size != null) c.totalSize = e.size;
+          // …with its weight restored (death zeroed it)
+          if (wasDying || e.size != null) {
+            c.weight = localWeight(false, 0, c.totalSize, dirCount);
+          }
+        } else if (wasDying) {
+          const alive = c.children.filter((k) => !k.dying).length;
+          c.weight = localWeight(true, alive, 0, dirCount && c.listing === "complete");
         }
       }
     }
@@ -1246,22 +1276,34 @@ function createTreeSourceImpl(
       }
     }
     assignShares(t.children, now);
-    refreshAggregates(chain);
+    refreshAggregates(chainOf(t));
     zoomDirty = true;
+    // provider invalidations re-list through the store (ping → unknown →
+    // the viewport scheduler picks it up again)
+    if (store && provider?.watch && !watched.has(snap.path)) {
+      watched.add(snap.path);
+      store.watch(snap.path);
+    }
   }
 
-  /** fire queued listings, screen-first, within the concurrency budget */
+  /** fire queued listings, screen-first, within the concurrency budget;
+   * abort in-flight listings whose dir left the viewport this frame */
   function flushListQueue() {
     if (!store) return;
+    const wanted = new Set(wantList);
+    for (const [path, ctrl] of activeList) {
+      if (!wanted.has(path)) ctrl.abort(); // slot back; finally cleans up
+    }
     for (const path of wantList) {
-      if (listInflight >= LIST_CONCURRENCY) break;
+      if (activeList.size >= LIST_CONCURRENCY) break;
+      if (activeList.has(path)) continue;
       const snap = store.snapshot(path);
       if (snap.loading) continue;
       if (snap.status === "complete" && !snap.restartRequired) continue;
       const errAt = listErrorAt.get(path);
       if (errAt !== undefined && performance.now() - errAt < LIST_RETRY_MS) continue;
-      listInflight++;
       const ctrl = new AbortController();
+      activeList.set(path, ctrl);
       void store
         .load(path, { signal: ctrl.signal, limit: PAGE_LIMIT })
         .then((s) => {
@@ -1269,7 +1311,7 @@ function createTreeSourceImpl(
           else listErrorAt.delete(path);
         })
         .finally(() => {
-          listInflight--;
+          activeList.delete(path);
           onUpdate(); // pick up follow-up pages / newly visible dirs
         });
     }
@@ -1301,11 +1343,11 @@ function createTreeSourceImpl(
       onUpdate = fn;
     },
     applyFsEvent,
-    ensureListed(path = "") {
+    ensureListed(path?: string) {
       if (!store) return Promise.resolve();
       const ctrl = new AbortController();
       return store
-        .load(path, { signal: ctrl.signal, limit: PAGE_LIMIT })
+        .load(path ?? ROOT_LIST_KEY, { signal: ctrl.signal, limit: PAGE_LIMIT })
         .then(() => undefined);
     },
   };

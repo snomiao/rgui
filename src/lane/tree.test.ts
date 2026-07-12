@@ -278,3 +278,94 @@ describe("lazy tree source — provider integration", () => {
     expect(src.hudLine!(view(), 300)).toBeTruthy();
   });
 });
+
+describe("lazy tree source — review regressions", () => {
+  const view = (height = 600, zoomY = 600, scrollY = 0): LaneView =>
+    ({ height, zoomY, scrollY, width: 800 } as unknown as LaneView);
+
+  test("tombstoned entries resurrect with their weight restored", async () => {
+    // mutable provider with a watch hook: delete b.ts, re-list, restore it
+    let names = ["a.ts", "b.ts", "c.ts"];
+    let invalidate: (() => void) | null = null;
+    const provider: TreeProvider = {
+      async list() {
+        return {
+          entries: names.map((name) => ({ name, kind: "file" as const, size: 4500 })),
+          complete: true,
+          version: names.join(","),
+        };
+      },
+      watch(_path, cb) {
+        invalidate = () => cb({ path: "" });
+        return () => {};
+      },
+    };
+    const src = createLazyTreeSource(provider, { rootName: "root" });
+    const v = view();
+    const nowSpy = spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      await src.ensureListed();
+      nowSpy.mockReturnValue(2_000);
+      const sweep = () => {
+        const s = new Set<string>();
+        for (let y = 24; y < 596; y += 2) s.add(src.hudLine!(v, y) ?? "");
+        return [...s].join("|");
+      };
+      expect(sweep()).toContain("b.ts");
+      names = ["a.ts", "c.ts"]; // delete
+      invalidate!();
+      await src.ensureListed();
+      nowSpy.mockReturnValue(3_000); // glide out + reap
+      expect(sweep()).not.toContain("b.ts");
+      names = ["a.ts", "b.ts", "c.ts"]; // resurrect
+      invalidate!();
+      await src.ensureListed();
+      nowSpy.mockReturnValue(4_000); // settle
+      // a weight-0 resurrection would leave b.ts at share 0 → invisible
+      expect(sweep()).toContain("b.ts");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("provider paths that aren't display-name joins still materialize", async () => {
+    // provider keys look like opaque ids, nothing like "src/a.ts"
+    const provider: TreeProvider = {
+      async list(path) {
+        if (path === "id:root") {
+          return {
+            entries: [
+              { name: "src", kind: "directory" as const, path: "id:42" },
+              { name: "readme.md", kind: "file" as const, size: 900 },
+            ],
+            complete: true,
+            version: 1,
+          };
+        }
+        if (path === "id:42") {
+          return {
+            entries: [{ name: "deep.ts", kind: "file" as const, size: 4500 }],
+            complete: true,
+            version: 1,
+          };
+        }
+        throw new Error(`unknown key ${path}`);
+      },
+    };
+    const src = createLazyTreeSource(provider, { rootName: "root", rootPath: "id:root" });
+    const v = view();
+    const nowSpy = spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      await src.ensureListed(); // root by its provider key
+      await src.ensureListed("id:42"); // the dir by ITS provider key
+      nowSpy.mockReturnValue(2_000);
+      const seen = new Set<string>();
+      for (let y = 24; y < 596; y += 2) seen.add(src.hudLine!(v, y) ?? "");
+      const all = [...seen].join("|");
+      expect(all).toContain("src");
+      expect(all).toContain("deep.ts"); // grandchild materialized under id:42
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
