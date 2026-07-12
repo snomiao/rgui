@@ -485,3 +485,56 @@ describe("lazy tree source — retirement lifecycle", () => {
     }
   });
 });
+
+describe("schema-state transitions (nextSchemaState)", () => {
+  const detect = (names: string[][]) =>
+    // three members sharing the given child names, via the real detector
+    (require("./treefold.js") as typeof import("./treefold.js")).detectSchema(
+      names.map((children, i) => ({
+        name: `m${i}`,
+        complete: true,
+        children: children.map((n) => ({ name: n, isDir: false })),
+      })),
+      { maxColumns: 8, minSupport: 0.6, minMembers: 3 },
+    );
+  const { nextSchemaState } = require("./tree.js") as typeof import("./tree.js");
+
+  test("transient detection failure keeps the same-version registry, inactive", () => {
+    const d1 = detect([["a", "b"], ["a", "b"], ["a", "b"]])!;
+    const s1 = nextSchemaState(null, d1, "v1", 8, "k1");
+    expect(s1.active).toBe(true);
+    // members dip below quorum → null detection, SAME version
+    const s2 = nextSchemaState(s1, null, "v1", 8, "k2");
+    expect(s2.active).toBe(false);
+    expect(s2.registry).toBe(s1.registry); // order/ghosts survive the wobble
+    // detection recovers → same registry lineage continues (append-only)
+    const d3 = detect([["b", "c"], ["b", "c"], ["b", "c"]])!;
+    const s3 = nextSchemaState(s2, d3, "v1", 8, "k3");
+    expect(s3.active).toBe(true);
+    expect(s3.registry!.columns.map((c) => c.name)).toEqual(["a", "b", "c"]);
+    expect(s3.registry!.columns.map((c) => c.ghost)).toEqual([true, false, false]);
+  });
+
+  test("a new listing version starts a fresh epoch (ghosts retired)", () => {
+    const d1 = detect([["a", "b"], ["a", "b"], ["a", "b"]])!;
+    const s1 = nextSchemaState(null, d1, "v1", 8, "k1");
+    const d2 = detect([["b", "c"], ["b", "c"], ["b", "c"]])!;
+    const s2 = nextSchemaState(s1, d2, "v2", 8, "k2");
+    expect(s2.registry!.columns.map((c) => c.name)).toEqual(["b", "c"]); // no ghost of a
+  });
+
+  test("registry over the column budget deactivates but persists", () => {
+    const d1 = detect([["a", "b", "c"], ["a", "b", "c"], ["a", "b", "c"]])!;
+    const s1 = nextSchemaState(null, d1, "v1", 3, "k1");
+    expect(s1.active).toBe(true);
+    // ghosts accumulate past the budget: register d,e while a,b,c ghost
+    const d2 = detect([["d", "e"], ["d", "e"], ["d", "e"]])!;
+    const s2 = nextSchemaState(s1, d2, "v1", 3, "k2");
+    expect(s2.registry!.columns.length).toBe(5); // a,b,c(ghost) + d,e
+    expect(s2.active).toBe(false); // over budget → kind fallback
+    // widening the grid re-activates the SAME registry
+    const s3 = nextSchemaState(s2, d2, "v1", 8, "k3");
+    expect(s3.active).toBe(true);
+    expect(s3.registry!.columns.map((c) => c.name)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+});

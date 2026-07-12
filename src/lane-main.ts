@@ -996,4 +996,4 @@ void setLang(savedLang);
 applyPrefs();
 
 // expose for host debugging / e2e
-Object.assign(window as object, { lane, timeSource, treeSource });
+Object.assign(window as object, { lane, timeSource, treeSource, lazyTreeSource });

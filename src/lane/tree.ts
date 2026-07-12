@@ -294,6 +294,42 @@ function fit(ctx: CanvasRenderingContext2D, text: string, maxW: number): string 
 const indentX = (depth: number) =>
   PAD_X + Math.min(depth, MAX_INDENT_DEPTH) * INDENT;
 
+/** cached schema-fold state for one directory (see nextSchemaState) */
+export interface SchemaState {
+  key: string; // childEpoch + column budget
+  version: unknown; // the dir's listing version the registry belongs to
+  registry: SchemaRegistry | null;
+  /** render schema columns? false = kind fallback while registry persists */
+  active: boolean;
+}
+
+/**
+ * schema-state transition — the single choke point for the three coupled
+ * rules (pure, exported for tests):
+ * - a NEW listing version starts a fresh epoch (prev registry dropped,
+ *   ghosts retired); within one version the registry is append-only.
+ * - a transient detection failure (members dipped below quorum, listings
+ *   went partial) KEEPS the same-version registry but deactivates — column
+ *   order and ghost history must survive the wobble.
+ * - the registry is active only while ALL its columns (ghosts included)
+ *   plus the '·' rest fit the column budget; over budget → kind fallback
+ *   with the registry intact, so re-widening restores the same order.
+ */
+export function nextSchemaState(
+  prev: SchemaState | null,
+  detected: ReturnType<typeof detectSchema>,
+  version: unknown,
+  maxColumns: number,
+  key: string,
+): SchemaState {
+  const sameEpoch = prev !== null && prev.version === version;
+  const carried = sameEpoch ? prev.registry : null;
+  const registry = detected ? updateSchemaRegistry(carried, detected) : carried;
+  const active =
+    detected !== null && registry !== null && registry.columns.length <= maxColumns;
+  return { key, version, registry, active };
+}
+
 /** tree source with an optional lazy content loader (host wires setOnUpdate) */
 export interface TreeSource extends LaneSource {
   setOnUpdate(fn: () => void): void;
@@ -832,44 +868,45 @@ function createTreeSourceImpl(
 
   // ── schema fold: shared child names as columns (node_modules/<pkg>) ────
   // Detection + ordering are codex's pure core (detectSchema / registry);
-  // this side owns caching (re-detect when the dir's children change),
-  // epochs (ghost columns retire when the dir's own listing VERSION
-  // changes), and the fit test (every column ≥1rem plus the '·' rest).
-  interface SchemaState {
-    key: string; // childEpoch + column budget
-    version: unknown;
-    registry: SchemaRegistry | null;
-  }
+  // this side owns caching (re-detect when the dir's children — or a
+  // MEMBER's children — change), epochs (ghost columns retire when the
+  // dir's own listing VERSION changes), and activation (schema renders
+  // only while the FULL registry incl. ghosts fits the column budget; a
+  // transient detection failure keeps the registry but falls back to
+  // kinds, so column order and ghost history survive the wobble).
   const schemaCache = new WeakMap<TNode, SchemaState>();
   const SCHEMA_MIN_SUPPORT = 0.6;
   const SCHEMA_MIN_MEMBERS = 3;
 
   function schemaFor(t: TNode, gridW: number): readonly SchemaRegistryColumn[] | null {
     const maxColumns = Math.floor(gridW / REM_PX) - 1; // reserve the '·' rest
-    if (maxColumns < 2) return null;
     const key = `${t.childEpoch ?? 0}:${maxColumns}`;
     const cached = schemaCache.get(t);
-    if (cached && cached.key === key) return cached.registry?.columns ?? null;
-    const members = t.children
-      .filter((c) => c.isDir && !c.dying)
-      .map((c) => ({
-        name: c.name,
-        complete: c.listing === undefined || c.listing === "complete",
-        children: c.children.filter((k) => !k.dying),
-      }));
-    const detected = detectSchema(members, {
-      maxColumns,
-      minSupport: SCHEMA_MIN_SUPPORT,
-      minMembers: SCHEMA_MIN_MEMBERS,
-    });
-    let registry: SchemaRegistry | null = null;
-    if (detected) {
-      // same listing version → same epoch → order persists, ghosts retained
-      const prev = cached && cached.version === t.listVersion ? cached.registry : null;
-      registry = updateSchemaRegistry(prev, detected);
+    if (cached && cached.key === key) {
+      return cached.active ? cached.registry!.columns : null;
     }
-    schemaCache.set(t, { key, version: t.listVersion, registry });
-    return registry?.columns ?? null;
+    const detected =
+      maxColumns < 2
+        ? null
+        : detectSchema(
+            t.children
+              .filter((c) => c.isDir && !c.dying)
+              .map((c) => ({
+                name: c.name,
+                complete: c.listing === undefined || c.listing === "complete",
+                children: c.children.filter((k) => !k.dying),
+              })),
+            { maxColumns, minSupport: SCHEMA_MIN_SUPPORT, minMembers: SCHEMA_MIN_MEMBERS },
+          );
+    const next = nextSchemaState(
+      cached ?? null,
+      detected,
+      t.listVersion,
+      maxColumns,
+      key,
+    );
+    schemaCache.set(t, next);
+    return next.active ? next.registry!.columns : null;
   }
 
   /**
@@ -1269,6 +1306,10 @@ function createTreeSourceImpl(
     assignShares(parent.children, now);
     refreshAggregates(chain);
     parent.childEpoch = (parent.childEpoch ?? 0) + 1;
+    // the grandparent's schema treats `parent` as a member whose children
+    // just changed — invalidate its detection too
+    const grand = chain[chain.length - 2];
+    if (grand) grand.childEpoch = (grand.childEpoch ?? 0) + 1;
     zoomDirty = true;
     onUpdate();
     return true;
@@ -1444,6 +1485,10 @@ function createTreeSourceImpl(
     refreshAggregates(chainOf(t));
     t.childEpoch = (t.childEpoch ?? 0) + 1;
     t.listVersion = snap.version;
+    // this dir is a MEMBER of its parent's schema — the parent's columns
+    // depend on OUR children, so its detection must re-run too
+    const up = parentOf.get(t);
+    if (up) up.childEpoch = (up.childEpoch ?? 0) + 1;
     zoomDirty = true;
     // provider invalidations re-list through the store (ping → unknown →
     // the viewport scheduler picks it up again)
