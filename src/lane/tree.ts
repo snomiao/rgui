@@ -1198,7 +1198,7 @@ function createTreeSourceImpl(
   /** provider list key → materialized dir (provider paths need not mirror names) */
   const nodeByListKey = new Map<string, TNode>();
   const parentOf = new WeakMap<TNode, TNode>();
-  const watched = new Set<string>();
+  const unwatchers = new Map<string, () => void>();
   if (provider) {
     tree.listKey = ROOT_LIST_KEY;
     nodeByListKey.set(ROOT_LIST_KEY, tree);
@@ -1252,6 +1252,35 @@ function createTreeSourceImpl(
         t.children.push(built);
       } else {
         const c = t.children[idx]!;
+        if ((e.kind === "directory") !== c.isDir) {
+          // same name, different KIND (file replaced by dir or vice versa):
+          // the node is a different thing — replace it wholesale, inherit
+          // only the displayed share/glide, and retire the old dir's
+          // listing bookkeeping (listKey mapping, watcher, children)
+          if (c.isDir && c.listKey !== undefined) {
+            nodeByListKey.delete(c.listKey);
+            unwatchers.get(c.listKey)?.();
+            unwatchers.delete(c.listKey);
+          }
+          const built = build(
+            e.kind === "directory"
+              ? { name: e.name, children: [], path: e.path ?? logicalPath }
+              : { name: e.name, size: e.size, path: e.path ?? logicalPath },
+            t.depth + 1,
+            dirCount,
+          );
+          if (e.kind === "directory") {
+            built.listing = "unknown";
+            built.listKey = e.path ?? logicalPath;
+            nodeByListKey.set(built.listKey, built);
+          }
+          built.share = c.share;
+          built.shareFrom = dispShare(c, now);
+          built.shareT0 = c.shareT0;
+          parentOf.set(built, t);
+          t.children[idx] = built;
+          continue;
+        }
         const wasDying = c.dying === true;
         c.dying = false; // re-listed = resurrected…
         if (!c.isDir) {
@@ -1280,9 +1309,8 @@ function createTreeSourceImpl(
     zoomDirty = true;
     // provider invalidations re-list through the store (ping → unknown →
     // the viewport scheduler picks it up again)
-    if (store && provider?.watch && !watched.has(snap.path)) {
-      watched.add(snap.path);
-      store.watch(snap.path);
+    if (store && provider?.watch && !unwatchers.has(snap.path)) {
+      unwatchers.set(snap.path, store.watch(snap.path));
     }
   }
 

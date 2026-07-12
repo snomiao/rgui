@@ -314,15 +314,78 @@ describe("lazy tree source — review regressions", () => {
       expect(sweep()).toContain("b.ts");
       names = ["a.ts", "c.ts"]; // delete
       invalidate!();
-      await src.ensureListed();
-      nowSpy.mockReturnValue(3_000); // glide out + reap
-      expect(sweep()).not.toContain("b.ts");
-      names = ["a.ts", "b.ts", "c.ts"]; // resurrect
+      await src.ensureListed(); // tombstone starts gliding at t=2000
+      nowSpy.mockReturnValue(2_100); // MID-GLIDE: not reaped yet, so the
+      names = ["a.ts", "b.ts", "c.ts"]; // re-add hits the wasDying branch
       invalidate!();
       await src.ensureListed();
       nowSpy.mockReturnValue(4_000); // settle
       // a weight-0 resurrection would leave b.ts at share 0 → invisible
       expect(sweep()).toContain("b.ts");
+      // and a real delete still completes when left alone
+      names = ["a.ts", "c.ts"];
+      invalidate!();
+      await src.ensureListed();
+      nowSpy.mockReturnValue(6_000);
+      expect(sweep()).not.toContain("b.ts");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("a same-name entry that changes kind is replaced, both directions", async () => {
+    // "thing" flips file → directory → file across listings
+    let phase: "file" | "dir" | "file2" = "file";
+    let invalidate: (() => void) | null = null;
+    const provider: TreeProvider = {
+      async list(path) {
+        if (path === "") {
+          return {
+            entries: [
+              { name: "thing", kind: phase === "dir" ? ("directory" as const) : ("file" as const), size: 4500 },
+              { name: "anchor.ts", kind: "file" as const, size: 4500 },
+            ],
+            complete: true,
+            version: phase,
+          };
+        }
+        // the directory incarnation's contents
+        return {
+          entries: [{ name: "inner.ts", kind: "file" as const, size: 900 }],
+          complete: true,
+          version: 1,
+        };
+      },
+      watch(_p, cb) {
+        invalidate ??= () => cb({ path: "" });
+        return () => {};
+      },
+    };
+    const src = createLazyTreeSource(provider, { rootName: "root" });
+    const v = view();
+    const nowSpy = spyOn(performance, "now").mockReturnValue(1_000);
+    try {
+      await src.ensureListed();
+      nowSpy.mockReturnValue(2_000);
+      const sweep = () => {
+        const s = new Set<string>();
+        for (let y = 24; y < 596; y += 2) s.add(src.hudLine!(v, y) ?? "");
+        return [...s].join("|");
+      };
+      expect(sweep()).toContain("thing");
+      phase = "dir"; // file → directory
+      invalidate!();
+      await src.ensureListed();
+      await src.ensureListed("thing"); // list the NEW dir by its key
+      nowSpy.mockReturnValue(3_000);
+      expect(sweep()).toContain("inner.ts"); // stale file kind would never list
+      phase = "file2"; // directory → file
+      invalidate!();
+      await src.ensureListed();
+      nowSpy.mockReturnValue(4_000);
+      const after = sweep();
+      expect(after).toContain("thing");
+      expect(after).not.toContain("inner.ts"); // dir children retired with it
     } finally {
       nowSpy.mockRestore();
     }
