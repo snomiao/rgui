@@ -273,6 +273,7 @@ let pinchDistance: number | undefined;
 let toastMirror: HTMLElement | undefined;
 let stereoChromeSyncFrame: number | undefined;
 let syncingChromeScroll = false;
+let lastRenderTime = performance.now();
 let spatialCursorState = createSpatialCursorState();
 let spatialPinch: { startX: number; startY: number; lastX: number; lastY: number; moved: boolean; cellId?: number } | undefined;
 const pointers = new Map<number, THREE.Vector2>();
@@ -1356,10 +1357,17 @@ function resizeRenderer() {
 }
 
 function render() {
+  const now = performance.now();
+  const elapsed = Math.min(50, now - lastRenderTime);
+  lastRenderTime = now;
+  if (!drag && !spatialPinch && pointers.size === 0 && !helpDialog.open) {
+    yaw += elapsed * 0.00003;
+    updateCamera();
+  }
   resizeRenderer();
   if (contentGroup && contentGroup.scale.x < 0.999) {
     const progress = THREE.MathUtils.clamp(
-      (performance.now() - representationTransitionStart) / 260,
+      (now - representationTransitionStart) / 260,
       0,
       1,
     );

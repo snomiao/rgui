@@ -168,6 +168,8 @@ current focus depth. Mouse, wheel, keyboard, and finger input remain available
 together. Low-confidence or lost tracking cancels the gesture without selecting.
 Right-button dragging always orbits the cube and suppresses the browser context
 menu, including when the drag begins over a cell.
+When no pointer or finger grab is active, the view rotates slowly around its
+center. Rotation pauses while the help panel is open.
 
 BroadcastChannel is same-origin only. Cross-origin otoji/rgui deployments need
 a `postMessage` or WebRTC relay that forwards the same v1 envelope.
