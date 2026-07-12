@@ -6,12 +6,14 @@ import {
   chooseTreeFold,
   chunkRows,
   contentLevels,
+  detectSchema,
   discloseLevel,
   heatRampColor,
   kindCounts,
   kindOf,
   shareIntervals,
   srgbToOklch,
+  updateSchemaRegistry,
 } from "./treefold.js";
 
 const REM = 16;
@@ -53,6 +55,98 @@ describe("kindCounts", () => {
     expect(c.code).toBe(2);
     expect(c.data).toBe(1);
     expect(c.doc + c.media + c.other).toBe(0);
+  });
+});
+
+describe("schema fold", () => {
+  const member = (name: string, children: readonly string[], complete = true) => ({
+    name,
+    complete,
+    children: children.map((child) => ({ name: child, isDir: child === "src" })),
+  });
+  const options = { maxColumns: 8, minSupport: 0.6, minMembers: 3 };
+
+  test("detects supported names from a Jaccard cluster", () => {
+    const schema = detectSchema([
+      member("a", ["package.json", "src", "README.md"]),
+      member("b", ["package.json", "src", "dist"]),
+      member("c", ["package.json", "src"]),
+    ], options);
+    expect(schema?.memberCount).toBe(3);
+    expect(schema?.columns.map((c) => [c.name, c.votes])).toEqual([
+      ["package.json", 3],
+      ["src", 3],
+    ]);
+  });
+
+  test("unknown and partial members do not dilute support", () => {
+    const schema = detectSchema([
+      member("a", ["package.json", "src"]),
+      member("b", ["package.json", "src"]),
+      member("c", ["package.json", "src"]),
+      member("partial", [], false),
+      member("unknown", ["untrusted"], false),
+    ], options);
+    expect(schema?.memberCount).toBe(3);
+    expect(schema?.columns.every((c) => c.support === 1)).toBe(true);
+  });
+
+  test("requires enough complete, structurally similar members", () => {
+    expect(detectSchema([
+      member("a", ["package.json"]),
+      member("b", ["package.json"]),
+    ], options)).toBeNull();
+    expect(detectSchema([
+      member("a", ["a"]),
+      member("b", ["b"]),
+      member("c", ["c"]),
+    ], options)).toBeNull();
+  });
+
+  test("maxColumns truncates by support rank with stable ties", () => {
+    const schema = detectSchema([
+      member("a", ["always", "often", "tie-a", "tie-b"]),
+      member("b", ["always", "often", "tie-a", "tie-b"]),
+      member("c", ["always", "often"]),
+      member("d", ["always"]),
+    ], { ...options, maxColumns: 3, minSupport: 0.5 });
+    expect(schema?.columns.map((c) => c.name)).toEqual(["always", "often", "tie-a"]);
+  });
+
+  test("registry is append-only and marks vanished columns as ghosts", () => {
+    const first = detectSchema([
+      member("a", ["package.json", "src"]),
+      member("b", ["package.json", "src"]),
+      member("c", ["package.json", "src"]),
+    ], options)!;
+    const r1 = updateSchemaRegistry(null, first);
+    const second = detectSchema([
+      member("a", ["src", "dist"]),
+      member("b", ["src", "dist"]),
+      member("c", ["src", "dist"]),
+    ], options)!;
+    const r2 = updateSchemaRegistry(r1, second);
+    expect(r2.columns.map((c) => c.name)).toEqual(["package.json", "src", "dist"]);
+    expect(r2.columns.map((c) => c.ghost)).toEqual([true, false, false]);
+  });
+
+  test("starting a new epoch retires old ghosts", () => {
+    const srcOnly = {
+      memberCount: 3,
+      columns: [{ name: "src", support: 1, votes: 3 }],
+    };
+    const oldEpoch = updateSchemaRegistry(
+      updateSchemaRegistry(null, {
+        memberCount: 3,
+        columns: [{ name: "package.json", support: 1, votes: 3 }],
+      }),
+      srcOnly,
+    );
+    expect(oldEpoch.columns[0]?.ghost).toBe(true);
+    const newEpoch = updateSchemaRegistry(null, srcOnly);
+    expect(newEpoch.columns).toEqual([
+      { name: "src", support: 1, votes: 3, ghost: false },
+    ]);
   });
 });
 

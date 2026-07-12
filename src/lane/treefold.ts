@@ -95,6 +95,163 @@ export function kindCounts(
 
 // ── chunk rows (grid rows) ──────────────────────────────────────────────
 
+// Schema folding uses complete directory listings only. Rendering recomputes
+// per-cell presence/kind from live children, so this core returns columns only.
+export interface SchemaMember {
+  name: string;
+  complete: boolean;
+  children: readonly { name: string; isDir: boolean }[];
+}
+
+export interface SchemaColumn {
+  name: string;
+  support: number;
+  votes: number;
+}
+
+export interface SchemaColumns {
+  columns: readonly SchemaColumn[];
+  memberCount: number;
+}
+
+export interface SchemaRegistryColumn extends SchemaColumn {
+  ghost: boolean;
+}
+
+export interface SchemaRegistry {
+  columns: readonly SchemaRegistryColumn[];
+  memberCount: number;
+}
+
+export interface DetectSchemaOptions {
+  maxColumns: number;
+  minSupport: number;
+  minMembers: number;
+}
+
+const jaccard = (a: ReadonlySet<string>, b: ReadonlySet<string>): number => {
+  if (a.size === 0 && b.size === 0) return 1;
+  let intersection = 0;
+  for (const name of a) if (b.has(name)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+};
+
+/** Detect a deterministic Jaccard cluster and its supported child names. */
+export function detectSchema(
+  members: readonly SchemaMember[],
+  options: DetectSchemaOptions,
+): SchemaColumns | null {
+  const minMembers = Math.max(1, Math.ceil(options.minMembers));
+  const maxColumns = Math.max(0, Math.floor(options.maxColumns));
+  const minSupport = Math.min(1, Math.max(0, options.minSupport));
+  const complete = members
+    .map((member, inputIndex) => ({
+      member,
+      inputIndex,
+      names: new Set(member.children.map((child) => child.name)),
+    }))
+    .filter(({ member }) => member.complete);
+  if (complete.length < minMembers || maxColumns === 0) return null;
+
+  const links = complete.map(() => [] as number[]);
+  const similarity = complete.map(() => complete.map(() => 0));
+  for (let i = 0; i < complete.length; i++) {
+    similarity[i]![i] = 1;
+    for (let k = i + 1; k < complete.length; k++) {
+      const score = jaccard(complete[i]!.names, complete[k]!.names);
+      similarity[i]![k] = similarity[k]![i] = score;
+      if (score >= minSupport) {
+        links[i]!.push(k);
+        links[k]!.push(i);
+      }
+    }
+  }
+
+  const seen = new Set<number>();
+  const components: number[][] = [];
+  for (let start = 0; start < complete.length; start++) {
+    if (seen.has(start)) continue;
+    const component: number[] = [];
+    const pending = [start];
+    seen.add(start);
+    while (pending.length) {
+      const at = pending.pop()!;
+      component.push(at);
+      for (const next of links[at]!) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        pending.push(next);
+      }
+    }
+    component.sort((a, b) => a - b);
+    if (component.length >= minMembers) components.push(component);
+  }
+  if (!components.length) return null;
+
+  const meanSimilarity = (component: readonly number[]): number => {
+    if (component.length < 2) return 1;
+    let total = 0;
+    let pairs = 0;
+    for (let i = 0; i < component.length; i++) {
+      for (let k = i + 1; k < component.length; k++) {
+        total += similarity[component[i]!]![component[k]!]!;
+        pairs++;
+      }
+    }
+    return total / pairs;
+  };
+  components.sort((a, b) =>
+    b.length - a.length ||
+    meanSimilarity(b) - meanSimilarity(a) ||
+    complete[a[0]!]!.inputIndex - complete[b[0]!]!.inputIndex
+  );
+  const cluster = components[0]!;
+
+  const stats = new Map<string, { votes: number; first: number }>();
+  let ordinal = 0;
+  for (const index of cluster) {
+    for (const name of complete[index]!.names) {
+      const stat = stats.get(name);
+      if (stat) stat.votes++;
+      else stats.set(name, { votes: 1, first: ordinal++ });
+    }
+  }
+  const required = Math.ceil(minSupport * cluster.length);
+  const columns = [...stats]
+    .filter(([, stat]) => stat.votes >= required)
+    .sort(([aName, a], [bName, b]) =>
+      b.votes - a.votes || a.first - b.first || aName.localeCompare(bName)
+    )
+    .slice(0, maxColumns)
+    .map(([name, stat]) => ({
+      name,
+      votes: stat.votes,
+      support: stat.votes / cluster.length,
+    }));
+  return columns.length ? { columns, memberCount: cluster.length } : null;
+}
+
+/** Append-only column ordering for one consumer-owned epoch. */
+export function updateSchemaRegistry(
+  prev: SchemaRegistry | null,
+  detected: SchemaColumns,
+): SchemaRegistry {
+  const latest = new Map(detected.columns.map((column) => [column.name, column]));
+  const columns: SchemaRegistryColumn[] = [];
+  const known = new Set<string>();
+  for (const old of prev?.columns ?? []) {
+    const current = latest.get(old.name);
+    columns.push(current
+      ? { ...current, ghost: false }
+      : { ...old, support: 0, votes: 0, ghost: true });
+    known.add(old.name);
+  }
+  for (const column of detected.columns) {
+    if (!known.has(column.name)) columns.push({ ...column, ghost: false });
+  }
+  return { columns, memberCount: detected.memberCount };
+}
+
 /**
  * one grid row covering entries [start, end) — indices into the CHILD
  * ORDER, so every row maps to a contiguous world span (hit-test relies
