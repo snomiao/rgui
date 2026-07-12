@@ -233,11 +233,14 @@ const buildSeries = () =>
   });
 
 const timeSource: TimelineSource = createTimelineSource();
+const treeSource = createTreeSource(genTree(0x51a1));
 const sources: Record<string, LaneSource> = {
-  tree: createTreeSource(genTree(0x51a1)),
+  tree: treeSource,
   time: timeSource,
   series: buildSeries(),
 };
+// the demo tree mutates (live-mutation pref, glide re-deals) — repaint on change
+treeSource.setOnUpdate(() => lane.invalidate());
 // ── URL-hash deep links (#src=…&y=scrollY&z=zoomY) ────────────────────────
 function parseHash() {
   const p = new URLSearchParams(location.hash.slice(1));
@@ -319,15 +322,56 @@ const foldBtn = document.querySelector<HTMLButtonElement>("#fold");
 // empty scroll is OFF by default (taku: it fought users more than blank
 // stretches did) and opt-in; animation/heat default on.
 const PREFS_KEY = "lane-prefs";
-type LanePrefs = { autoZoomOut: boolean; glide: boolean; heat: boolean };
-const prefs: LanePrefs = { autoZoomOut: false, glide: true, heat: true };
+type LanePrefs = { autoZoomOut: boolean; glide: boolean; heat: boolean; treeLive: boolean };
+const prefs: LanePrefs = { autoZoomOut: false, glide: true, heat: true, treeLive: false };
 try {
   Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}"));
 } catch { /* corrupted prefs → defaults */ }
+
+// ── tree demo: synthetic fs-watch mutator (deterministic, seeded) ──────────
+// Exercises the dynamic-space path: a `live/` dir at the root gains, grows
+// and loses generated files; shares re-deal within `live` only and glide.
+let liveTimer = 0;
+let liveN = 0;
+let liveMade = false;
+let liveRng = 0x2f6e2b1;
+const liveRnd = () => (liveRng = (liveRng * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+function setTreeLive(on: boolean) {
+  if (on && !liveTimer) {
+    if (!liveMade) {
+      treeSource.applyFsEvent("live", { name: "live", children: [] });
+      liveMade = true;
+    }
+    liveTimer = window.setInterval(() => {
+      const r = liveRnd();
+      if (r < 0.45 || liveN < 3) {
+        liveN++;
+        treeSource.applyFsEvent(`live/gen-${liveN}.ts`, {
+          name: `gen-${liveN}.ts`,
+          size: 500 + Math.floor(liveRnd() * 8000),
+        });
+      } else if (r < 0.8) {
+        const i = 1 + Math.floor(liveRnd() * liveN);
+        treeSource.applyFsEvent(`live/gen-${i}.ts`, {
+          name: `gen-${i}.ts`,
+          size: 500 + Math.floor(liveRnd() * 90000),
+        });
+      } else {
+        const i = 1 + Math.floor(liveRnd() * liveN);
+        treeSource.applyFsEvent(`live/gen-${i}.ts`, null);
+      }
+    }, 900);
+  } else if (!on && liveTimer) {
+    clearInterval(liveTimer);
+    liveTimer = 0;
+  }
+}
+
 function applyPrefs() {
   lane.setAutoZoomOut(prefs.autoZoomOut);
   timeSource.setGlide(prefs.glide);
   timeSource.setHeatCells(prefs.heat);
+  setTreeLive(prefs.treeLive);
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* private mode */ }
 }
 const prefsBtn = document.querySelector<HTMLButtonElement>("#prefs");
@@ -349,6 +393,7 @@ function bindPref(id: string, key: keyof LanePrefs) {
 bindPref("#prefAutoZoomOut", "autoZoomOut");
 bindPref("#prefGlide", "glide");
 bindPref("#prefHeat", "heat");
+bindPref("#prefTreeLive", "treeLive");
 function refreshChrome() {
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
@@ -570,7 +615,9 @@ logBtn?.addEventListener("click", () => {
   refreshChrome();
 });
 refreshChrome();
-applyPrefs();
+// NOTE: the initial applyPrefs() runs at the END of this module — its
+// setHeatCells → onUpdate → translateNew chain touches `let translator`,
+// which is declared further down and still in its TDZ at this point.
 
 // ── folder tree from any GitHub repo (default: torvalds/linux) ────────────
 interface GhEntry {
@@ -814,5 +861,9 @@ async function initI18n() {
 }
 void initI18n();
 
+// initial preference application — after ALL module state (incl. the i18n
+// `translator` binding) exists, so no callback lands in a TDZ
+applyPrefs();
+
 // expose for host debugging / e2e
-Object.assign(window as object, { lane, timeSource });
+Object.assign(window as object, { lane, timeSource, treeSource });

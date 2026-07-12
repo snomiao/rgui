@@ -73,6 +73,15 @@ interface TNode {
   path: string; // repo-relative path (for lazy content fetch)
   tried: boolean; // content load attempted?
   loading: boolean; // fetch in flight?
+  /**
+   * fraction of the PARENT's interval this node owns (stick-breaking
+   * coordinates — TODO.md「区間分割座標」). Derived from sibling weights,
+   * but only ever renormalized WITHIN one parent, so a mutation deep in
+   * the tree never shifts anything outside its parent's interval.
+   */
+  share: number;
+  shareFrom: number; // glide origin when the share was last re-dealt
+  shareT0: number; // glide start timestamp (0 = settled)
 }
 
 const PAD_X = 10;
@@ -85,6 +94,7 @@ const REM_PX = 16; // readability unit for the fold grid (≥1rem rule)
 const GRID_MIN_PX = 2 * REM_PX; // a thin run this tall folds into a grid
 const GRID_HEADER_PX = 12; // kind-column caption strip (like SMTWTFS)
 const GRID_GUTTER_PX = 42; // left gutter for chunk row labels
+const GLIDE_MS = 280; // share re-deal animation (matches timeline glide)
 
 const EXT_COLOR: Record<string, string> = {
   ts: "#60a5fa",
@@ -107,6 +117,33 @@ function extOf(name: string): string {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
+/** deal sibling shares from weights — the ONLY place shares are (re)set.
+ * `now` animates each sibling from its currently displayed share. */
+function assignShares(children: TNode[], now = 0) {
+  let total = 0;
+  for (const c of children) total += c.weight;
+  for (const c of children) {
+    const next = total > 0 ? c.weight / total : 1 / children.length;
+    if (now > 0 && Math.abs(next - c.share) > 1e-9) {
+      c.shareFrom = dispShare(c, now);
+      c.shareT0 = now;
+    }
+    c.share = next;
+  }
+}
+
+/** share currently on screen — eases toward the target over GLIDE_MS */
+function dispShare(t: TNode, now: number): number {
+  if (!t.shareT0) return t.share;
+  const p = (now - t.shareT0) / GLIDE_MS;
+  if (p >= 1) {
+    t.shareT0 = 0;
+    return t.share;
+  }
+  const e = 1 - Math.pow(1 - p, 3); // easeOutCubic
+  return t.shareFrom + (t.share - t.shareFrom) * e;
+}
+
 function build(node: FileNode, depth: number): TNode {
   if (node.children) {
     const children = node.children.map((c) => build(c, depth + 1));
@@ -118,6 +155,7 @@ function build(node: FileNode, depth: number): TNode {
       fileCount += c.fileCount;
       totalSize += c.totalSize;
     }
+    assignShares(children);
     return {
       name: node.name,
       ext: "",
@@ -131,6 +169,9 @@ function build(node: FileNode, depth: number): TNode {
       path: node.path ?? "",
       tried: true,
       loading: false,
+      share: 1,
+      shareFrom: 1,
+      shareT0: 0,
     };
   }
   const lines = node.content ? node.content.split("\n") : [];
@@ -150,6 +191,9 @@ function build(node: FileNode, depth: number): TNode {
     path: node.path ?? "",
     tried: !!node.content, // already have content → nothing to fetch
     loading: false,
+    share: 1,
+    shareFrom: 1,
+    shareT0: 0,
   };
 }
 
@@ -185,6 +229,12 @@ const indentX = (depth: number) =>
 /** tree source with an optional lazy content loader (host wires setOnUpdate) */
 export interface TreeSource extends LaneSource {
   setOnUpdate(fn: () => void): void;
+  /**
+   * fs-watch-style mutation: upsert (`node`) or delete (`null`) the entry at
+   * `path` (slash-separated, root name excluded). Re-deals shares within the
+   * parent only (with a glide) — nothing outside its interval moves.
+   */
+  applyFsEvent(path: string, node: FileNode | null): boolean;
 }
 
 const TEXT_EXT = new Set([
@@ -236,14 +286,89 @@ export function createTreeSource(
       });
   }
 
+  // ── shared layout (the treeFoldPos choke point) ───────────────────────
+  // Screen bands, fold-run grouping, and grid-vs-strip decisions all live
+  // here, consumed identically by draw() and hitTest() — never compute a
+  // position in one coordinate frame and consume it in another.
+  let frameNow = 0; // stamped once per draw; hitTest reuses the last stamp
+  let gliding = false; // any share still easing this frame → keep redrawing
+
+  function shareNow(c: TNode): number {
+    const s = dispShare(c, frameNow);
+    if (c.shareT0) gliding = true;
+    return s;
+  }
+
+  /** screen bands for an expanded dir's children: [child, a, b] */
+  function layoutChildren(t: TNode, top: number, inner: number): Array<[TNode, number, number]> {
+    let total = 0;
+    for (const c of t.children) total += shareNow(c);
+    const bounds: Array<[TNode, number, number]> = [];
+    let y = top;
+    for (const c of t.children) {
+      const b = y + (inner * shareNow(c)) / (total || 1);
+      bounds.push([c, y, b]);
+      y = b;
+    }
+    return bounds;
+  }
+
+  type Seg =
+    | { kind: "node"; c: TNode; a: number; b: number; i: number }
+    | {
+        kind: "run";
+        run: TNode[];
+        a: number;
+        b: number;
+        i0: number; // first child index of the run
+        files: number;
+        size: number;
+        grid: boolean;
+      };
+
+  /** group child bounds into readable rows and fold runs */
+  function segment(t: TNode, bounds: Array<[TNode, number, number]>, width: number): Seg[] {
+    const segs: Seg[] = [];
+    let i = 0;
+    while (i < bounds.length) {
+      const [c, a, b] = bounds[i]!;
+      if (b - a >= MIN_ROW) {
+        segs.push({ kind: "node", c, a, b, i });
+        i++;
+        continue;
+      }
+      let files = 0;
+      let size = 0;
+      const run: TNode[] = [];
+      const i0 = i;
+      const rStart = a;
+      let end = b;
+      while (i < bounds.length && bounds[i]![2] - bounds[i]![1] < MIN_ROW) {
+        files += bounds[i]![0].fileCount;
+        size += bounds[i]![0].totalSize;
+        run.push(bounds[i]![0]);
+        end = bounds[i]![2];
+        i++;
+      }
+      const gridW = width - PAD_X - indentX(t.depth + 1) - GRID_GUTTER_PX;
+      const grid = end - rStart >= GRID_MIN_PX && gridW >= KIND_ORDER.length * REM_PX;
+      segs.push({ kind: "run", run, a: rStart, b: end, i0, files, size, grid });
+    }
+    return segs;
+  }
+
   function draw(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
     const H = view.height;
     ctx.textBaseline = "middle";
     ctx.lineWidth = 1;
 
+    frameNow = performance.now();
+    gliding = false;
     const sy0 = worldToScreenY(view, 0);
-    const sy1 = worldToScreenY(view, tree.weight);
+    const sy1 = worldToScreenY(view, 1);
     drawNode(ctx, tree, sy0, sy1, view, env, H);
+    // shares still easing → schedule another frame through the host
+    if (gliding) requestAnimationFrame(() => onUpdate());
   }
 
   function drawNode(
@@ -270,55 +395,19 @@ export function createTreeSource(
     // expanded: fixed readable header, children subdivide the remainder
     const headerH = Math.min(HEADER_PX, bandH);
     drawFolderSummary(ctx, t, sy0, sy0 + headerH, env, true);
+    if (!t.children.length) return;
 
-    const childrenW = t.weight - 1;
-    if (childrenW <= 0) return;
     const top = sy0 + headerH;
-    const inner = sy1 - top;
-
-    // screen bands for each child: [child, a, b]
-    const bounds: Array<[TNode, number, number]> = [];
-    let y = top;
-    for (const c of t.children) {
-      const b = y + (inner * c.weight) / childrenW;
-      bounds.push([c, y, b]);
-      y = b;
-    }
-
-    let i = 0;
-    while (i < bounds.length) {
-      const [c, a, b] = bounds[i]!;
-      if (b < -CULL) {
-        i++;
-        continue; // above viewport
-      }
-      if (a > H + CULL) break; // below viewport; rest are lower still
-      if (b - a >= MIN_ROW) {
-        drawNode(ctx, c, a, b, view, env, H);
-        i++;
+    const bounds = layoutChildren(t, top, sy1 - top);
+    for (const s of segment(t, bounds, env.size.width)) {
+      if (s.b < -CULL) continue;
+      if (s.a > H + CULL) break;
+      if (s.kind === "node") {
+        drawNode(ctx, s.c, s.a, s.b, view, env, H);
+      } else if (s.grid) {
+        drawFoldGrid(ctx, s.run, s.a, s.b, t.depth + 1, env);
       } else {
-        // fold a contiguous run of thin siblings: a tall-enough run becomes
-        // a kind×chunk heat grid (the tree auto-fold), a sliver stays a strip
-        let files = 0;
-        let size = 0;
-        const run: TNode[] = [];
-        const rStart = a;
-        let end = b;
-        let j = i;
-        while (j < bounds.length && bounds[j]![2] - bounds[j]![1] < MIN_ROW) {
-          files += bounds[j]![0].fileCount;
-          size += bounds[j]![0].totalSize;
-          run.push(bounds[j]![0]);
-          end = bounds[j]![2];
-          j++;
-        }
-        const gridW = env.size.width - PAD_X - indentX(t.depth + 1) - GRID_GUTTER_PX;
-        if (end - rStart >= GRID_MIN_PX && gridW >= KIND_ORDER.length * REM_PX) {
-          drawFoldGrid(ctx, run, rStart, end, t.depth + 1, env);
-        } else {
-          drawAggStrip(ctx, rStart, end, t.depth + 1, run.length, files, size, env);
-        }
-        i = j;
+        drawAggStrip(ctx, s.a, s.b, t.depth + 1, s.run.length, s.files, s.size, env);
       }
     }
   }
@@ -548,10 +637,21 @@ export function createTreeSource(
    * the 28-day month's blank grid cells.
    *
    * NOTE v1: focusAt/hudLine still use the pure-world mapping, which the
-   * grid re-projects only per-row (same approximation class as HEADER_PX
-   * stealing screen space). The shared treeFoldPos choke point lands with
-   * the dynamic-space slice.
+   * Row geometry comes from gridLayout — the same function hitTest uses,
+   * so a hover/double-click lands on exactly the drawn row.
    */
+  function gridLayout(run: TNode[], sy0: number, sy1: number) {
+    const span = sy1 - sy0;
+    const hasHeader = span >= GRID_MIN_PX + GRID_HEADER_PX;
+    const top = sy0 + (hasHeader ? GRID_HEADER_PX : 0);
+    const gridH = sy1 - top;
+    const rows = chunkRows(
+      run.map((n) => n.name),
+      Math.max(1, Math.floor(gridH / REM_PX)),
+    );
+    return { top, rows, rowH: rows.length ? gridH / rows.length : 0 };
+  }
+
   function drawFoldGrid(
     ctx: CanvasRenderingContext2D,
     run: TNode[],
@@ -561,44 +661,40 @@ export function createTreeSource(
     env: LaneEnv,
   ) {
     const { theme } = env;
+    const H = env.size.height;
     const x = indentX(depth);
     const right = env.size.width - PAD_X;
-    const [ca, cb] = rowClip(sy0, sy1, env.size.height);
-    const h = cb - ca;
-    if (h <= 0) return;
+    const [ca, cb] = rowClip(sy0, sy1, H);
+    if (cb - ca <= 0) return;
     const dark = srgbToOklch(theme.background as string).L < 0.5;
 
     ctx.fillStyle = withAlpha(theme.nodeBg, 0.2);
-    ctx.fillRect(x, ca, right - x, h);
+    ctx.fillRect(x, ca, right - x, cb - ca);
 
     // header strip: kind captions over their columns
     const gx = x + GRID_GUTTER_PX;
     const cols = KIND_ORDER.length;
     const colW = (right - gx) / cols;
-    let top = ca;
-    if (h >= GRID_MIN_PX + GRID_HEADER_PX) {
+    // rows come from the run's TRUE span (gridSpan), not the clipped one —
+    // otherwise rows re-flow as the viewport edge slides across the run
+    const { top, rows, rowH } = gridLayout(run, sy0, sy1);
+    if (!rows.length) return;
+    if (top > sy0 && top > -2) {
       ctx.font = "9px ui-monospace, Menlo, monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillStyle = theme.textMuted;
       for (let c = 0; c < cols; c++) {
-        ctx.fillText(KIND_LABEL[KIND_ORDER[c]!], gx + (c + 0.5) * colW, ca + GRID_HEADER_PX / 2);
+        ctx.fillText(KIND_LABEL[KIND_ORDER[c]!], gx + (c + 0.5) * colW, sy0 + GRID_HEADER_PX / 2);
       }
-      top = ca + GRID_HEADER_PX;
     }
-
-    const gridH = cb - top;
-    const rows = chunkRows(
-      run.map((n) => n.name),
-      Math.max(1, Math.floor(gridH / REM_PX)),
-    );
-    if (!rows.length) return;
-    const rowH = gridH / rows.length;
 
     ctx.textBaseline = "middle";
     for (let r = 0; r < rows.length; r++) {
       const row = rows[r]!;
       const ry = top + r * rowH;
+      if (ry + rowH < -2) continue;
+      if (ry > H + 2) break;
       // per-kind counts over this chunk: a file counts itself, a dir counts
       // its immediate children (one readdir deep — the design's "直下 1 階層";
       // deeper totals stay async decoration, never a layout input)
@@ -646,9 +742,10 @@ export function createTreeSource(
       ctx.fillRect(gx, ry, right - gx, 1);
     }
     // 1px column separators (drawn last so they sit above cell fills)
+    const sepTop = Math.max(top, -2);
     ctx.fillStyle = withAlpha(theme.textFaint, 0.25);
     for (let c = 0; c <= cols; c++) {
-      ctx.fillRect(gx + c * colW, top, 1, cb - top);
+      ctx.fillRect(gx + c * colW, sepTop, 1, Math.max(0, cb - sepTop));
     }
     ctx.textAlign = "left";
   }
@@ -683,55 +780,188 @@ export function createTreeSource(
     ctx.textAlign = "left";
   }
 
-  // deepest node whose band contains world-y `wy`
-  function nodeAt(t: TNode, wy: number, base: number): { y0: number; weight: number } {
-    if (t.isDir) {
-      let cy = base + 1;
-      for (const c of t.children) {
-        if (wy >= cy && wy < cy + c.weight) return nodeAt(c, wy, cy);
-        cy += c.weight;
+  // ── hit-test: replay the SAME screen-space recursion draw() runs ────────
+  // Returns the deepest visible thing under screenY plus its world interval
+  // [wa, wb) (target shares — the settled state, so a focus zoom lands where
+  // the layout is heading, not mid-glide).
+  interface Hit {
+    trail: string[];
+    wa: number;
+    wb: number;
+  }
+  function hitTest(
+    t: TNode,
+    sy0: number,
+    sy1: number,
+    wa: number,
+    wb: number,
+    screenY: number,
+    view: LaneView,
+    width: number,
+    collapsePx: number,
+    trail: string[],
+  ): Hit {
+    trail.push(t.name);
+    const bandH = sy1 - sy0;
+    if (!t.isDir || bandH < collapsePx || !t.children.length) return { trail, wa, wb };
+    const headerH = Math.min(HEADER_PX, bandH);
+    if (screenY < sy0 + headerH) return { trail, wa, wb };
+
+    const top = sy0 + headerH;
+    const bounds = layoutChildren(t, top, sy1 - top);
+    // world offsets from TARGET shares, matching the settled layout
+    const prefix: number[] = [0];
+    for (const c of t.children) prefix.push(prefix[prefix.length - 1]! + c.share);
+    const worldAt = (i0: number, i1: number): [number, number] => [
+      wa + (wb - wa) * prefix[i0]!,
+      wa + (wb - wa) * prefix[i1]!,
+    ];
+    for (const s of segment(t, bounds, width)) {
+      if (screenY >= s.b) continue;
+      if (s.kind === "node") {
+        const [cwa, cwb] = worldAt(s.i, s.i + 1);
+        return hitTest(s.c, s.a, s.b, cwa, cwb, screenY, view, width, collapsePx, trail);
+      }
+      if (s.grid) {
+        // grid run: land on the chunk row under the cursor
+        const { top: gTop, rows, rowH } = gridLayout(s.run, s.a, s.b);
+        const r = Math.min(rows.length - 1, Math.max(0, Math.floor((screenY - gTop) / (rowH || 1))));
+        const row = rows[r];
+        if (row) {
+          const [cwa, cwb] = worldAt(s.i0 + row.start, s.i0 + row.end);
+          trail.push(row.label);
+          return { trail, wa: cwa, wb: cwb };
+        }
+      }
+      const [cwa, cwb] = worldAt(s.i0, s.i0 + s.run.length);
+      trail.push(`⋯ ${s.run.length} more`);
+      return { trail, wa: cwa, wb: cwb };
+    }
+    return { trail, wa, wb };
+  }
+
+  function hitAt(screenY: number, view: LaneView): Hit {
+    frameNow = performance.now();
+    return hitTest(
+      tree,
+      worldToScreenY(view, 0),
+      worldToScreenY(view, 1),
+      0,
+      1,
+      screenY,
+      view,
+      lastWidth,
+      lastCollapsePx,
+      [],
+    );
+  }
+  // segment()/layoutChildren need the env draw() saw — remember the last one
+  let lastWidth = 800;
+  let lastCollapsePx = 26;
+
+  // ── adaptive zoom-in limit: finest content line reaches ~1rem ──────────
+  // Same rule as the timeline's precision clamp: stop zooming where the
+  // finest thing the data can show (a file's line) is readable. Lazily
+  // recomputed after mutations; unknown subtrees deepen it when they list.
+  let zoomDirty = true;
+  let cachedMaxZoom = 240;
+  function maxZoomOf(): number {
+    if (!zoomDirty) return cachedMaxZoom;
+    zoomDirty = false;
+    let minLine = Infinity; // world height of the finest line
+    const walk = (t: TNode, len: number) => {
+      if (len <= 0) return;
+      if (!t.isDir) {
+        minLine = Math.min(minLine, len / Math.max(1, t.weight));
+        return;
+      }
+      for (const c of t.children) walk(c, len * c.share);
+    };
+    walk(tree, 1);
+    cachedMaxZoom =
+      minLine === Infinity ? 240 : Math.min(1e12, (REM_PX / Math.max(minLine, 1e-15)) * 4);
+    return cachedMaxZoom;
+  }
+
+  // ── mutations: fs-watch semantics, locality by construction ────────────
+  // Upsert (node) or delete (null) the entry at `path` (slash-separated,
+  // relative to the root, root name excluded). Shares are re-dealt within
+  // the parent only, with a glide from the currently displayed layout;
+  // ancestor aggregates (counts/sizes/weights) update as decoration without
+  // re-dealing their shares — nothing outside the parent's interval moves.
+  function applyFsEvent(path: string, node: FileNode | null): boolean {
+    const segs = path.split("/").filter(Boolean);
+    if (!segs.length) return false;
+    const chain: TNode[] = [tree];
+    let parent = tree;
+    for (let i = 0; i < segs.length - 1; i++) {
+      const nx = parent.children.find((c) => c.name === segs[i]);
+      if (!nx || !nx.isDir) return false;
+      parent = nx;
+      chain.push(nx);
+    }
+    const name = segs[segs.length - 1]!;
+    const idx = parent.children.findIndex((c) => c.name === name);
+    const now = performance.now();
+    if (node == null) {
+      if (idx < 0) return false;
+      parent.children.splice(idx, 1);
+    } else {
+      const built = build(node, parent.depth + 1);
+      if (idx < 0) {
+        built.share = 0; // grows in from nothing
+        built.shareFrom = 0;
+        parent.children.push(built);
+      } else {
+        const old = parent.children[idx]!;
+        built.share = old.share;
+        built.shareFrom = dispShare(old, now);
+        built.lines = built.lines.length ? built.lines : old.lines;
+        built.tried = built.tried || old.tried;
+        parent.children[idx] = built;
       }
     }
-    return { y0: base, weight: t.weight };
+    assignShares(parent.children, now);
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const d = chain[i]!;
+      d.weight = 1;
+      d.fileCount = 0;
+      d.totalSize = 0;
+      for (const c of d.children) {
+        d.weight += c.weight;
+        d.fileCount += c.fileCount;
+        d.totalSize += c.totalSize;
+      }
+    }
+    zoomDirty = true;
+    onUpdate();
+    return true;
   }
 
   return {
     title: "folder tree",
-    extent: () => ({ min: 0, max: tree.weight }),
-    draw,
-    // double-click → center the clicked node and zoom so it fills the viewport
-    focusAt: (screenY, view) => {
-      const wy = screenToWorldY(view, screenY);
-      if (wy < 0 || wy >= tree.weight) return null;
-      const n = nodeAt(tree, wy, 0);
-      return {
-        center: n.y0 + n.weight / 2,
-        zoom: (view.height / Math.max(1, n.weight)) * 0.9,
-      };
+    extent: () => ({ min: 0, max: 1 }),
+    get maxZoom() {
+      return maxZoomOf();
     },
-    hudLine: (view) => {
-      // report the node whose self-row is under the viewport center
-      const wy = screenToWorldY(view, view.height / 2);
-      const path = locate(tree, wy);
-      return path || null;
+    draw: (ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) => {
+      lastWidth = env.size.width;
+      lastCollapsePx = env.rule.collapsePx;
+      draw(ctx, view, env);
+    },
+    // double-click → center the clicked thing and zoom so it fills the view
+    focusAt: (screenY, view) => {
+      const { wa, wb } = hitAt(screenY, view);
+      const len = Math.max(wb - wa, 1e-12);
+      return { center: (wa + wb) / 2, zoom: (view.height / len) * 0.9 };
+    },
+    hudLine: (view, pointerY) => {
+      const { trail } = hitAt(pointerY ?? view.height / 2, view);
+      return trail.join("/") || null;
     },
     setOnUpdate(fn) {
       onUpdate = fn;
     },
+    applyFsEvent,
   };
-
-  // find the deepest node band containing world-y `wy`, as a path string
-  function locate(t: TNode, wy: number, base = 0): string {
-    if (wy < base || wy >= base + t.weight) return "";
-    if (!t.isDir) return t.name;
-    let cy = base + 1;
-    for (const c of t.children) {
-      if (wy < cy + c.weight) {
-        const sub = locate(c, wy, cy);
-        return sub ? `${t.name}/${sub}` : t.name;
-      }
-      cy += c.weight;
-    }
-    return t.name;
-  }
 }
