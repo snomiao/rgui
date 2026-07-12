@@ -1216,7 +1216,7 @@ function moveFocusByWheel(event: WheelEvent) {
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
         ? canvas.clientHeight
         : 1;
-  const delta = THREE.MathUtils.clamp((event.deltaY * unit) / 640, -0.16, 0.16);
+  const delta = THREE.MathUtils.clamp((-event.deltaY * unit) / 640, -0.16, 0.16);
   setFocusDepth((focusDepth ?? 0.5) + delta);
 }
 
