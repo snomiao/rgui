@@ -691,6 +691,45 @@ describe("containment", () => {
     expect(rg.nodes.length).toBe(0);
   });
 
+  test("absorbed sibling blocks hold their level while frames are readable", () => {
+    // two root-scope containers close enough that proximity WOULD merge
+    // them (48wu gap → 19.2px at k=0.4 < clusterGapPx 24). Their kids are
+    // unreadable (51px < 56) so each container absorbs into its own block,
+    // but the frames are still readable (205px) — the two team-level
+    // blocks must render, NOT one mega block that skips the middle level.
+    const nodes: GraphNode[] = [
+      { ...mkNode("c1", 0, 0, 512, 0), h: 512 },
+      { ...mkNode("c2", 560, 0, 512, 0), h: 512 },
+      { ...mkNode("a1", 32, 64, 128, 0), h: 128, parent: "c1" },
+      { ...mkNode("a2", 32, 256, 128, 0), h: 128, parent: "c1" },
+      { ...mkNode("b1", 592, 64, 128, 0), h: 128, parent: "c2" },
+      { ...mkNode("b2", 592, 256, 128, 0), h: 128, parent: "c2" },
+    ];
+    const rg = buildRenderGraph({ nodes, edges: [] }, 0.4);
+    expect(rg.pseudo.map((p) => p.title).sort()).toEqual(["c1", "c2"]);
+    // control: at a scale where the frames themselves are unreadable
+    // (512*0.05=25.6px < 56) the blocks are free to merge onward
+    const far = buildRenderGraph({ nodes, edges: [] }, 0.05);
+    expect(far.pseudo.length).toBe(1);
+  });
+
+  test("a block that swallowed outsiders must not wear a container's name", () => {
+    // container c (frame unreadable at k=0.3 → free to merge) + its kid,
+    // plus a loose outsider right next to it: all three end up in ONE
+    // cluster, so the block is NOT purely c's subtree — count title, not "c"
+    const nodes: GraphNode[] = [
+      { ...mkNode("c", 0, 0, 200, 0), h: 160 },
+      { ...mkNode("k1", 8, 48, 128, 0), h: 68, parent: "c" },
+      { ...mkNode("o", 220, 0, 200, 0), h: 68 },
+    ];
+    const rg = buildRenderGraph({ nodes, edges: [] }, 0.3);
+    expect(rg.pseudo.length).toBe(1);
+    const p = rg.pseudo[0]!;
+    expect(p.members.length).toBe(3);
+    expect(p.title).not.toBe("c");
+    expect(p.title).toMatch(/\+2$/);
+  });
+
   test("containment is a merge barrier: cousins never merge across teams", () => {
     // a and b sit 8 world units apart (4px at k=0.5) but belong to
     // DIFFERENT containers; each container also holds a big readable
