@@ -599,9 +599,13 @@ export function createTimelineSource(
       (r) => r?.l?.value && r?.d?.value && isFinite(Date.parse(r.d.value)),
     );
   }
-  // fetch once per key (dedup + attempted-marker so failures don't re-spam)
+  // fetch once per key (dedup + attempted-marker so failures don't re-spam);
+  // a small concurrency cap keeps us polite to the open endpoints — blocked
+  // fetches simply retry on a later frame via maybeFetch
+  const MAX_LAZY_INFLIGHT = 4;
   function lazyFetch(key: string, url: string, mapFn: (data: unknown) => Ev[]) {
     if (fetchedKeys.has(key) || inflightKeys.has(key)) return;
+    if (inflightKeys.size >= MAX_LAZY_INFLIGHT) return;
     fetchedKeys.add(key);
     inflightKeys.add(key);
     fetch(url)
@@ -675,7 +679,17 @@ export function createTimelineSource(
   const ceWindow = (view: LaneView) => {
     const { top, bot } = winYBP(view);
     const b = Math.max(0, bot);
-    return { top, b, y1: Math.max(1, Math.round(PRESENT_YEAR - top)), y2: Math.round(PRESENT_YEAR - b) + 1 };
+    const y1raw = Math.max(1, Math.round(PRESENT_YEAR - top));
+    const y2raw = Math.round(PRESENT_YEAR - b) + 1;
+    // QUANTIZE the window to a power-of-two year grid: a zoom/focus
+    // animation sweeps the view through dozens of raw windows, and since
+    // the fetch key derives from y1-y2, un-quantized windows once fired
+    // 100+ SPARQL requests in seconds. Snapped windows collapse a sweep
+    // into a handful of stable keys (and cached ranges get reused).
+    const step = Math.max(1, 2 ** Math.ceil(Math.log2(Math.max(1, (y2raw - y1raw) / 2))));
+    const y1 = Math.max(1, Math.floor(y1raw / step) * step);
+    const y2 = Math.min(PRESENT_YEAR + 2, Math.ceil(y2raw / step) * step);
+    return { top, b, y1, y2 };
   };
   // real dated historical events from Wikidata — broadened beyond battles/wars
   // to treaties, revolutions & massacres. Narrow windows keep SPARQL fast (the
@@ -702,10 +716,89 @@ export function createTimelineSource(
     );
   }
 
+  // inventions & discoveries (P575) — fills the Tech track across the CE
+  function fetchInventions(view: LaneView) {
+    if (!enabled.has("tech")) return;
+    const { top, b, y1, y2 } = ceWindow(view);
+    if (top < 0.5 || top > 1000 || top - b > 400 || y2 <= y1) return;
+    const q =
+      `SELECT ?l ?d WHERE { ?e wdt:P575 ?d ; rdfs:label ?l . FILTER(LANG(?l)="en") ` +
+      `FILTER(?d >= "${y1}-01-01T00:00:00Z"^^xsd:dateTime && ?d < "${y2}-01-01T00:00:00Z"^^xsd:dateTime) } LIMIT 60`;
+    lazyFetch(`wdi:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
+      wdRows(data).map((r) => ({
+        y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
+        tMs: Date.parse(r.d.value),
+        // P575 is usually year-grained; a Jan-1 timestamp is a giveaway
+        precision: {
+          kind: "calendar",
+          unit: r.d.value.startsWith(`${new Date(r.d.value).getUTCFullYear()}-01-01T00:00`)
+            ? "year"
+            : "day",
+        },
+        label: r.l.value.slice(0, 56),
+        detail: "💡 invented",
+        imp: 0.4,
+        cat: "tech" as Cat,
+        span: 0.5,
+      })),
+    );
+  }
+
+  // species first described — fills the Life track from Linnaeus on. The
+  // publication year rides as a QUALIFIER on the scientific name (p:P225 /
+  // pq:P574); the main-statement P574 is nearly empty (probed 2026-07).
+  function fetchSpecies(view: LaneView) {
+    if (!enabled.has("bio")) return;
+    const { top, b, y1, y2 } = ceWindow(view);
+    if (top < 0.5 || top > 280 || top - b > 30 || y2 <= y1 || y1 < 1750) return;
+    const q =
+      `SELECT ?l ?d WHERE { ?e p:P225 ?st . ?st pq:P574 ?d . ?e rdfs:label ?l . FILTER(LANG(?l)="en") ` +
+      `FILTER(?d >= "${y1}-01-01T00:00:00Z"^^xsd:dateTime && ?d < "${y2}-01-01T00:00:00Z"^^xsd:dateTime) } LIMIT 60`;
+    lazyFetch(`wds:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
+      wdRows(data).map((r) => ({
+        y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
+        tMs: Date.parse(r.d.value),
+        precision: { kind: "calendar", unit: "year" }, // P574 is a publication YEAR
+        label: r.l.value.slice(0, 56),
+        detail: "🧬 first described",
+        imp: 0.34,
+        cat: "bio" as Cat,
+        span: 0.5,
+      })),
+    );
+  }
+
+  // solar & lunar eclipses (P585) — 4-7 a year, day-precise: the Cosmos
+  // track's calendar-fold showpiece
+  function fetchEclipses(view: LaneView) {
+    if (!enabled.has("cosmic")) return;
+    const { top, b, y1, y2 } = ceWindow(view);
+    if (top < -40 || top > 3000 || top - b > 30 || y2 <= y1) return;
+    const q =
+      `SELECT ?l ?d WHERE { VALUES ?t { wd:Q3887 wd:Q1143154 wd:Q1142251 wd:Q1144073 wd:Q2685866 wd:Q2668072 } ` +
+      `?e wdt:P31 ?t ; wdt:P585 ?d ; rdfs:label ?l . FILTER(LANG(?l)="en") ` +
+      `FILTER(?d >= "${y1}-01-01T00:00:00Z"^^xsd:dateTime && ?d < "${y2}-01-01T00:00:00Z"^^xsd:dateTime) } LIMIT 250`;
+    lazyFetch(`wdc:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
+      wdRows(data).map((r) => ({
+        y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
+        tMs: Date.parse(r.d.value),
+        precision: { kind: "calendar", unit: "day" },
+        label: r.l.value.slice(0, 56),
+        detail: "🌘 eclipse",
+        imp: 0.3,
+        cat: "cosmic" as Cat,
+        span: 0.5,
+      })),
+    );
+  }
+
   function maybeFetch(view: LaneView) {
     fetchLinux(view);
     fetchLaunches(view);
     fetchWikidataEvents(view);
+    fetchInventions(view);
+    fetchSpecies(view);
+    fetchEclipses(view);
   }
 
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
