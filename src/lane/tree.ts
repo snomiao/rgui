@@ -277,7 +277,10 @@ export function createTreeSource(
     Promise.resolve(fetchContent(t.path))
       .then((text) => {
         t.tried = true;
-        if (text != null) t.lines = text.split("\n").slice(0, MAX_FILE_UNITS * 2);
+        if (text != null) {
+          t.lines = text.split("\n").slice(0, MAX_FILE_UNITS * 2);
+          zoomDirty = true; // real line count may be finer than the estimate
+        }
       })
       .catch(() => {
         t.tried = true;
@@ -564,10 +567,10 @@ export function createTreeSource(
           if (levels[i]! > L) continue;
           const ly = top + i * lineH;
           if (ly < lastBottom) continue; // declutter: keep top-most
-          const text = fit(ctx, lines[i]!.trim(), right - tx - 6);
+          const ix = tx + levels[i]! * 12; // indent mirrors the structure
+          const text = fit(ctx, lines[i]!.trim(), right - ix - 6);
           if (!text) continue;
           const w = ctx.measureText(text).width;
-          const ix = tx + levels[i]! * 12; // indent mirrors the structure
           // wash behind the label so it reads over the bars
           ctx.fillStyle = withAlpha(theme.background as string, 0.72);
           ctx.fillRect(ix - 2, ly - 5, w + 6, 12);
@@ -867,8 +870,14 @@ export function createTreeSource(
         return hitTest(s.c, s.a, s.b, cwa, cwb, screenY, view, width, collapsePx, trail);
       }
       if (s.grid) {
-        // grid run: land on the chunk row under the cursor
+        // grid run: land on the chunk row under the cursor; the caption
+        // header above the rows hits the whole run, not a fake first row
         const { top: gTop, rows, rowH } = gridLayout(s.run, s.a, s.b);
+        if (screenY < gTop) {
+          const [cwa, cwb] = worldAt(s.i0, s.i0 + s.run.length);
+          trail.push(`⋯ ${s.run.length} more`);
+          return { trail, wa: cwa, wb: cwb };
+        }
         const r = Math.min(rows.length - 1, Math.max(0, Math.floor((screenY - gTop) / (rowH || 1))));
         const row = rows[r];
         if (row) {
@@ -916,7 +925,9 @@ export function createTreeSource(
     const walk = (t: TNode, len: number) => {
       if (len <= 0) return;
       if (!t.isDir) {
-        minLine = Math.min(minLine, len / Math.max(1, t.weight));
+        // loaded content can be finer than the weight estimate (weight caps
+        // at MAX_FILE_UNITS; lines don't) — zoom must reach the real lines
+        minLine = Math.min(minLine, len / Math.max(1, t.weight, t.lines.length));
         return;
       }
       for (const c of t.children) walk(c, len * c.share);

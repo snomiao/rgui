@@ -831,19 +831,29 @@ let translator: { translate(s: string): Promise<string> } | null = null;
 const trCache = new Map<string, string>();
 let translating = false;
 async function translateNew() {
-  if (!translator || translating) return;
+  const gen = langGen; // language switches mid-flight invalidate this pass
+  const tr = translator;
+  if (!tr || translating) return;
   const todo = timeSource.strings().filter((s) => !trCache.has(s));
   if (!todo.length) return;
   translating = true;
-  for (const s of todo) {
-    try {
-      trCache.set(s, await translator.translate(s));
-    } catch {
-      trCache.set(s, s); // keep English on failure
+  try {
+    for (const s of todo) {
+      let out = s; // keep English on failure
+      try {
+        out = await tr.translate(s);
+      } catch { /* Translator hiccup — English stays */ }
+      if (gen !== langGen) return; // stale language: drop, don't pollute cache
+      trCache.set(s, out);
     }
+    if (gen === langGen) {
+      timeSource.setTranslate((s) => trCache.get(s) ?? s); // redraw with new text
+    }
+  } finally {
+    translating = false;
+    // a switch happened while this pass ran → kick a pass for the new language
+    if (gen !== langGen && translator) void translateNew();
   }
-  translating = false;
-  timeSource.setTranslate((s) => trCache.get(s) ?? s); // redraw with new text
 }
 // language switcher: "auto" follows the browser; anything else is explicit.
 // Switching tears the old translator down, reverts to English immediately,
