@@ -167,6 +167,16 @@ export function buildRenderGraph(
     for (let c = parentOf.get(id); c; c = parentOf.get(c)) d++;
     return d;
   };
+  // A container that absorbed its children HOLDS ITS LEVEL: it stays one
+  // block and refuses horizontal merges until its OWN frame is unreadable.
+  // Without this, absorption and the next-level merge fire in the same
+  // build (all siblings share one scope), so the intermediate blocks the
+  // hierarchy promises ("teams before the company") never render.
+  const holdsLevel = (id: string): boolean => {
+    if (!childIds.has(id)) return false;
+    const n = nodeById.get(id);
+    return !!n && nodeHeight(n) * kH >= rule.collapsePx;
+  };
   /** a block lives in the scope of its outermost member — an absorbed
    * team block acts at the level of the team node, not its people */
   const pseudoScope = (p: PseudoNode): string => {
@@ -284,7 +294,9 @@ export function buildRenderGraph(
     if (
       eligible.has(seg.a.id) &&
       eligible.has(seg.b.id) &&
-      scope(seg.a.id) === scope(seg.b.id)
+      scope(seg.a.id) === scope(seg.b.id) &&
+      !holdsLevel(seg.a.id) &&
+      !holdsLevel(seg.b.id)
     )
       union(seg.a.id, seg.b.id);
   // 1.5) CHAIN CONTRACTION: interior nodes of a linear chain (in-degree 1,
@@ -305,7 +317,9 @@ export function buildRenderGraph(
       isMiddle(e.to.node) &&
       eligible.has(e.from.node) &&
       eligible.has(e.to.node) &&
-      scope(e.from.node) === scope(e.to.node)
+      scope(e.from.node) === scope(e.to.node) &&
+      !holdsLevel(e.from.node) &&
+      !holdsLevel(e.to.node)
     )
       union(e.from.node, e.to.node);
   // 2) then proximity/connection with their pixel budgets
@@ -315,6 +329,7 @@ export function buildRenderGraph(
       const a = elig[i]!;
       const b = elig[j]!;
       if (scope(a.id) !== scope(b.id)) continue; // merge within scope only
+      if (holdsLevel(a.id) || holdsLevel(b.id)) continue; // blocks hold their level
       const wired = connected.has([a.id, b.id].sort().join("|"));
       const budget = wired ? rule.clusterGapConnectedPx : rule.clusterGapPx;
       if (rectGapView(a, b, px) < budget) union(a.id, b.id);
@@ -365,13 +380,16 @@ export function buildRenderGraph(
     const solo = members.length === 1;
     const isChainRun =
       members.length > 1 && members.every((n) => isMiddle(n.id));
-    // a container fully represented in the cluster NAMES the block — the
-    // outermost one wins ("Engineering", not "Aoi (EM) +3"). Ambiguous
-    // (two unrelated containers merged) falls back to the count title.
+    // a container NAMES the block only when it accounts for the WHOLE
+    // cluster (every member is the container or its descendant) — the
+    // outermost one wins ("Engineering", not "Aoi (EM) +3"). A cluster
+    // that also swallowed outsiders must not wear the container's name;
+    // it falls back to the count title.
     const idsIn = new Set(members.map((n) => n.id));
     const owners = members.filter((n) => {
       const kids = childIds.get(n.id);
-      return !!kids && kids.every((id) => idsIn.has(id));
+      if (!kids || !kids.every((id) => idsIn.has(id))) return false;
+      return members.every((m) => m === n || isAncestor(n.id, m.id));
     });
     const outermost = owners.filter(
       (o) => !owners.some((q) => q !== o && isAncestor(q.id, o.id)),
@@ -491,6 +509,12 @@ export function buildRenderGraph(
         // across scopes declutter pushes them apart instead, so the
         // hierarchy's abstractions never bleed into each other
         if (pseudoScope(rects[i]!.p) !== pseudoScope(rects[j]!.p)) continue;
+        // a block holding its level declutters away instead of merging
+        if (
+          rects[i]!.p.members.some((m) => holdsLevel(m.id)) ||
+          rects[j]!.p.members.some((m) => holdsLevel(m.id))
+        )
+          continue;
         if (hits(rects[i]!.r, rects[j]!.r)) {
           forcedPairs.push([
             rects[i]!.p.members[0]!.id,
@@ -504,6 +528,10 @@ export function buildRenderGraph(
         // that's containment, not a collision
         if (rects[i]!.p.members.every((m) => isAncestor(n.id, m.id))) continue;
         if (scope(n.id) !== pseudoScope(rects[i]!.p)) continue;
+        // a still-readable container frame never gets pulled into a block —
+        // declutter pushes the block out of it instead
+        if (holdsLevel(n.id) || rects[i]!.p.members.some((m) => holdsLevel(m.id)))
+          continue;
         const nr = { x: n.x, y: n.y, w: n.w, h: nodeHeight(n) };
         if (hits(rects[i]!.r, nr)) {
           extraEligible.add(n.id);
