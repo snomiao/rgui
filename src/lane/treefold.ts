@@ -150,10 +150,14 @@ export function chooseTreeFold(
   listUnitPx: number,
   minShare = childCount > 0 ? 1 / childCount : 0,
   gridUnitPx = listUnitPx,
+  gridBandPx = bandPx,
 ): TreeFoldMode {
   if (childCount <= 0) return { mode: "strip" };
   if (bandPx * minShare >= listUnitPx) return { mode: "list" };
-  const rowsAvail = Math.floor(bandPx / gridUnitPx);
+  // grid rows are budgeted on the band grid mode will ACTUALLY get — the
+  // caller subtracts any reserved chrome (caption header) up front, so a
+  // later header can never shrink rows below what was approved here
+  const rowsAvail = Math.floor(gridBandPx / gridUnitPx);
   if (rowsAvail >= 1 && widthPx >= KIND_ORDER.length * gridUnitPx) {
     return { mode: "grid", rows: Math.min(rowsAvail, childCount) };
   }

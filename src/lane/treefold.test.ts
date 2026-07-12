@@ -124,6 +124,13 @@ describe("chooseTreeFold", () => {
     // …but a 5% runt child (0.5rem) forces the fold
     expect(chooseTreeFold(4, 10 * REM, W, REM, 0.05).mode).toBe("grid");
   });
+  test("grid rows are budgeted on the header-reserved band", () => {
+    // 60px band, 20px unit: naive floor(60/20)=3 rows would then shrink to
+    // 16px under a 12px header — the reserved band (48px) approves only 2
+    const m = chooseTreeFold(500, 60, W, 999, 0.001, 20, 60 - 12);
+    expect(m.mode).toBe("grid");
+    if (m.mode === "grid") expect(m.rows).toBe(2);
+  });
   test("per-boundary hysteresis: grid↔strip has its own asymmetric unit", () => {
     const band = 1.0 * REM; // exactly one nominal grid row
     const minShare = 0.001; // list is out of reach either way

@@ -105,7 +105,6 @@ const MAX_INDENT_DEPTH = 12; // clamp indent so deep trees keep row width
 const HEADER_PX = 22; // fixed readable folder header when expanded
 const CULL = 24; // off-screen margin (px)
 const REM_PX = 16; // readability unit for the fold grid (≥1rem rule)
-const GRID_MIN_PX = 2 * REM_PX; // a thin run this tall folds into a grid
 const GRID_HEADER_PX = 12; // kind-column caption strip (like SMTWTFS)
 const GRID_GUTTER_PX = 42; // left gutter for chunk row labels
 const GLIDE_MS = 280; // share re-deal animation (matches timeline glide)
@@ -370,13 +369,19 @@ export function createTreeSource(
       if (c.share < min) min = c.share;
     }
     const minShare = total > 0 ? min / total : 1 / n;
-    const prev = modeCache.get(t) ?? "list";
+    // first sight starts from the COARSEST mode so entering list/grid pays
+    // the full 1.25×rem re-entry price — defaulting to "list" would let a
+    // dir skip the entry hysteresis and then squat down to 0.8×rem
+    const prev = modeCache.get(t) ?? "strip";
     // per-boundary hysteresis: each transition needs its own asymmetric
     // unit, or grid↔strip would share one threshold and flap
     const listUnit = REM_PX * (prev === "list" ? 0.8 : 1.25);
     const gridUnit = REM_PX * (prev === "strip" ? 1.25 : 0.8);
     const gridW = width - PAD_X - indentX(t.depth + 1) - GRID_GUTTER_PX;
-    const m = chooseTreeFold(n, contentH, gridW, listUnit, minShare, gridUnit);
+    // the caption header is part of the grid-mode contract: reserve it
+    // BEFORE budgeting rows, so it can't shrink an approved row below unit
+    const gridContentH = Math.max(0, contentH - GRID_HEADER_PX);
+    const m = chooseTreeFold(n, contentH, gridW, listUnit, minShare, gridUnit, gridContentH);
     modeCache.set(t, m.mode);
     return {
       mode: m.mode,
@@ -710,10 +715,11 @@ export function createTreeSource(
    * so a hover/double-click lands on exactly the drawn row.
    */
   function gridLayout(run: TNode[], sy0: number, sy1: number, rowsHint = 0) {
-    const span = sy1 - sy0;
-    const hasHeader = span >= GRID_MIN_PX + GRID_HEADER_PX;
-    const top = sy0 + (hasHeader ? GRID_HEADER_PX : 0);
-    const gridH = sy1 - top;
+    // grid-mode contract: the caption header is ALWAYS reserved — the
+    // chooser already budgeted rows on the band minus this header, so its
+    // appearance can never re-flow or shrink an approved row
+    const top = sy0 + GRID_HEADER_PX;
+    const gridH = Math.max(0, sy1 - top);
     // the hysteretic chooser's row budget is the single source when given;
     // recomputing here with a different unit would fork the contract
     const rows = chunkRows(
@@ -751,7 +757,7 @@ export function createTreeSource(
     // otherwise rows re-flow as the viewport edge slides across the run
     const { top, rows, rowH } = gridLayout(run, sy0, sy1, rowsHint);
     if (!rows.length) return;
-    if (top > sy0 && top > -2) {
+    if (top > -2) {
       ctx.font = "9px ui-monospace, Menlo, monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
