@@ -22,6 +22,21 @@
  */
 import { withAlpha, type RgTheme } from "../core/theme.js";
 import type { LaneEnv, LaneSource } from "./lane.js";
+import {
+  evTimestampMs,
+  foldCenturyProjector,
+  foldDayProjector,
+  foldDecadeProjector,
+  foldMillenniumProjector,
+  precisionWindow,
+  projectWindow,
+  foldHourProjector,
+  foldMonthProjector,
+  foldRowStartMs,
+  foldWeekProjector,
+  foldYearProjector,
+  FOLD_PERIOD_MS,
+} from "./temporal.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
 /** "now" — present reference (Unix seconds, ~2026-07). */
@@ -38,6 +53,17 @@ const FUTURE_HORIZON = 1e10; // years after present the axis extends to
 /** years before present for a UTC calendar date */
 const ymd = (y: number, m: number, d: number) =>
   (PRESENT_EPOCH - Date.UTC(y, m - 1, d) / 1000) / SPY;
+
+/**
+ * exact-date event coords: years-before-present PLUS the precise instant.
+ * `tMs` is what admits an event into calendar folds (see temporal.ts —
+ * a bare `y` must never invent calendar precision it doesn't have).
+ */
+const dated = (y: number, m: number, d: number) => ({
+  y: ymd(y, m, d),
+  tMs: Date.UTC(y, m - 1, d),
+  precision: { kind: "calendar", unit: "day" } as const,
+});
 
 type Cat = "cosmic" | "bio" | "human" | "tech" | "repo" | "future" | "periodic";
 
@@ -80,6 +106,22 @@ interface Ev {
    * small fraction of the age for prehistoric events, 0 (crisp) for dated ones.
    */
   span?: number;
+  /**
+   * exact instant (Unix ms, UTC) — present ONLY when the event's source is a
+   * real calendar date (dated()/ingested timestamps). Admits the event into
+   * temporal folds; without it the event stays on the continuous axis only.
+   */
+  tMs?: number;
+  /**
+   * source time precision, captured at ingest BEFORE parsing (Date.parse
+   * normalizes absent fields and destroys it). calendar → the containing
+   * cycle of that unit is the event's window; uncertainty → epistemic ±
+   * bounds in years (deep time), which stays on the continuous fuzzy band
+   * and never enters calendar folds.
+   */
+  precision?:
+    | { kind: "calendar"; unit: "year" | "month" | "day" | "hour" | "minute" }
+    | { kind: "uncertainty"; beforeYears: number; afterYears: number };
 }
 
 /**
@@ -178,20 +220,20 @@ const EVENTS: Ev[] = [
 
 // dated Linux kernel milestones (finest curated scale)
 const LINUX: Ev[] = [
-  { y: ymd(1991, 8, 25), label: "Linus announces Linux", imp: 0.68, cat: "repo", detail: '"just a hobby"' },
-  { y: ymd(1991, 9, 17), label: "Linux 0.01", imp: 0.6, cat: "repo" },
-  { y: ymd(1992, 1, 5), label: "Linux 0.12 — GPL", imp: 0.55, cat: "repo" },
-  { y: ymd(1994, 3, 14), label: "Linux 1.0", imp: 0.62, cat: "repo" },
-  { y: ymd(1996, 6, 9), label: "Linux 2.0 — SMP", imp: 0.55, cat: "repo" },
-  { y: ymd(1999, 1, 26), label: "Linux 2.2", imp: 0.45, cat: "repo" },
-  { y: ymd(2001, 1, 4), label: "Linux 2.4", imp: 0.48, cat: "repo" },
-  { y: ymd(2003, 12, 17), label: "Linux 2.6", imp: 0.5, cat: "repo" },
-  { y: ymd(2005, 4, 7), label: "Git created", imp: 0.66, cat: "repo", detail: "for kernel dev" },
-  { y: ymd(2011, 7, 21), label: "Linux 3.0", imp: 0.52, cat: "repo" },
-  { y: ymd(2015, 4, 12), label: "Linux 4.0", imp: 0.5, cat: "repo" },
-  { y: ymd(2019, 3, 3), label: "Linux 5.0", imp: 0.5, cat: "repo" },
-  { y: ymd(2022, 10, 2), label: "Linux 6.0", imp: 0.52, cat: "repo" },
-  { y: ymd(2024, 11, 17), label: "Linux 6.12 LTS", imp: 0.48, cat: "repo" },
+  { ...dated(1991, 8, 25), label: "Linus announces Linux", imp: 0.68, cat: "repo", detail: '"just a hobby"' },
+  { ...dated(1991, 9, 17), label: "Linux 0.01", imp: 0.6, cat: "repo" },
+  { ...dated(1992, 1, 5), label: "Linux 0.12 — GPL", imp: 0.55, cat: "repo" },
+  { ...dated(1994, 3, 14), label: "Linux 1.0", imp: 0.62, cat: "repo" },
+  { ...dated(1996, 6, 9), label: "Linux 2.0 — SMP", imp: 0.55, cat: "repo" },
+  { ...dated(1999, 1, 26), label: "Linux 2.2", imp: 0.45, cat: "repo" },
+  { ...dated(2001, 1, 4), label: "Linux 2.4", imp: 0.48, cat: "repo" },
+  { ...dated(2003, 12, 17), label: "Linux 2.6", imp: 0.5, cat: "repo" },
+  { ...dated(2005, 4, 7), label: "Git created", imp: 0.66, cat: "repo", detail: "for kernel dev" },
+  { ...dated(2011, 7, 21), label: "Linux 3.0", imp: 0.52, cat: "repo" },
+  { ...dated(2015, 4, 12), label: "Linux 4.0", imp: 0.5, cat: "repo" },
+  { ...dated(2019, 3, 3), label: "Linux 5.0", imp: 0.5, cat: "repo" },
+  { ...dated(2022, 10, 2), label: "Linux 6.0", imp: 0.52, cat: "repo" },
+  { ...dated(2024, 11, 17), label: "Linux 6.12 LTS", imp: 0.48, cat: "repo" },
 ];
 
 // tech & culture across world civilizations (yBP = 2026 − CE year; +BCE)
@@ -418,7 +460,20 @@ export interface SearchHit {
   center: number;
   /** world-span to fit (→ zoom = viewportHeight / scale) */
   scale: number;
+  /** folded mode: the hit's phase within its row (for the pulse highlight) */
+  phase?: number;
 }
+
+export type TimelineFold =
+  | "none"
+  | "year"
+  | "month"
+  | "week"
+  | "day"
+  | "hour"
+  | "decade"
+  | "century"
+  | "millennium";
 
 export interface TimelineSource extends LaneSource {
   readonly categories: readonly CatMeta[];
@@ -436,6 +491,30 @@ export interface TimelineSource extends LaneSource {
   isLogAxis(): boolean;
   /** switch the time axis at runtime (host should re-fit afterwards) */
   setLogAxis(on: boolean): void;
+  /** current temporal fold ("none" = continuous axis) */
+  getFold(): TimelineFold;
+  /**
+   * switch the temporal fold at runtime. "year" folds dated modern events
+   * into calendar-year rows (worldY = UTC year, x = phase within the year).
+   * The host should re-frame afterwards — use tMsForWorld()/worldForTMs()
+   * to keep the instant at the viewport center fixed across the switch.
+   */
+  setFold(fold: TimelineFold, opts?: { animateFrom?: LaneView }): void;
+  /** the instant at a world-y under the CURRENT projection (null if none) */
+  tMsForWorld(worldY: number): number | null;
+  /** folded mode: flash a transient ring at a search hit's (row, phase) */
+  setPulse(hit: SearchHit): void;
+  /** the calendar-year row range fold-year would cover (dated events + now) */
+  foldRowRange(): { min: number; max: number };
+  /** per-track folding: fold events inside each track whenever space allows */
+  isTrackFold(): boolean;
+  setTrackFold(on: boolean): void;
+  /** preference: OKLCH heat cells + presence wash in fold grids */
+  setHeatCells(on: boolean): void;
+  /** preference: glide animation on fold-level changes */
+  setGlide(on: boolean): void;
+  /** world-y of an instant under the CURRENT projection */
+  worldForTMs(tMs: number): number;
   /** the event under a screen point (for hover cards), or null */
   eventAt(
     screenX: number,
@@ -509,6 +588,8 @@ export function createTimelineSource(
         (Array.isArray(data) ? data : []).map(
           (c: { commit: { message: string; author: { date: string } } }) => ({
             y: (PRESENT_EPOCH - Date.parse(c.commit.author.date) / 1000) / SPY,
+            tMs: Date.parse(c.commit.author.date),
+            precision: { kind: "calendar", unit: "minute" },
             label: (String(c.commit.message).split("\n")[0] ?? "").slice(0, 72),
             detail: "torvalds/linux",
             imp: 0.3,
@@ -534,6 +615,8 @@ export function createTimelineSource(
           .filter((l) => l.net)
           .map((l) => ({
             y: (PRESENT_EPOCH - Date.parse(l.net!) / 1000) / SPY,
+            tMs: Date.parse(l.net!),
+            precision: { kind: "calendar", unit: "minute" },
             label: (l.name ?? "launch").slice(0, 60),
             detail: "🚀 launch",
             imp: 0.32,
@@ -564,6 +647,8 @@ export function createTimelineSource(
     lazyFetch(`wde:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
       wdRows(data).map((r) => ({
         y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
+        tMs: Date.parse(r.d.value),
+        precision: { kind: "calendar", unit: "day" },
         label: r.l.value.slice(0, 56),
         detail: "Wikidata",
         imp: 0.42,
@@ -667,6 +752,9 @@ export function createTimelineSource(
     const H = view.height;
     const topW = screenToWorldY(view, 0);
     const botW = screenToWorldY(view, H);
+    foldLabelRects = []; // repopulated by whichever event path draws labels
+    foldHeaderAxes.length = 0; // pseudo-x-axes queued by folding tracks
+    heatCells.clear(); // per-cell densities, repopulated by folding tracks
 
     maybeFetch(view); // lazily pull real commits when zoomed to their scale
     drawEras(ctx, view, theme, H);
@@ -689,7 +777,10 @@ export function createTimelineSource(
     for (const t of tracks) {
       if (t.meta.cat === "periodic")
         drawPeriodic(ctx, view, theme, t.x0, t.w, H, topW, botW);
-      else drawTrackEvents(ctx, view, theme, t.x0, t.w, H, topW, botW, t.meta.cat);
+      else {
+        drawTrackFoldBands(ctx, view, theme, t.x0, t.w, H, t.meta.cat);
+        drawTrackEvents(ctx, view, theme, t.x0, t.w, H, topW, botW, t.meta.cat);
+      }
     }
 
     // sticky header strip on top of everything
@@ -706,6 +797,17 @@ export function createTimelineSource(
     for (const t of tracks) {
       ctx.fillStyle = t.meta.color;
       ctx.fillText(fit(ctx, tr(t.meta.label), t.w - 8), t.x0 + 6, HEADER_H / 2);
+    }
+    // folding tracks: pseudo-x-axis slot labels share the sticky strip
+    // (skipping the zone the track's own name occupies)
+    ctx.font = "9px ui-monospace, Menlo, monospace";
+    for (const ax of foldHeaderAxes) {
+      for (let m2 = 0; m2 < ax.div.slots; m2 += ax.every) {
+        const x = ax.x0 + (m2 / ax.div.slots) * ax.contentW + 2;
+        if (x < ax.x0 + 62) continue; // leave room for the track name
+        ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
+        ctx.fillText(tr(ax.div.slotLabel(m2)), x, HEADER_H / 2);
+      }
     }
 
     drawOffscreen(ctx, theme, W, H, topW, botW);
@@ -819,6 +921,238 @@ export function createTimelineSource(
     ctx.fillText(`now · ${PRESENT_YEAR}`, W - 6, sy - 2);
   }
 
+  /** the fold GRID inside a folding track: vertical phase-slot columns (with
+   *  ghost placeholders for slots a short cycle doesn't have), horizontal
+   *  cycle-band separators, and a pseudo-x-axis of slot labels at the top —
+   *  the finest level readable at the viewport center draws its chrome */
+  function drawTrackFoldBands(
+    ctx: CanvasRenderingContext2D,
+    view: LaneView,
+    theme: RgTheme,
+    x0: number,
+    w: number,
+    H: number,
+    cat: Cat,
+  ) {
+    if (!trackFold || fold !== "none") return;
+    const rem = remPx();
+    if (!trackWideEnough(cat, w, rem)) return;
+    const contentW = trackContentW(w, rem);
+    const tCenter = tMsOfYbp(yBPof(screenToWorldY(view, H / 2)));
+    if (!Number.isFinite(tCenter) || !Number.isFinite(new Date(tCenter).getTime())) return;
+    for (const lf of LADDER_FINE_FIRST) {
+      const fv = FOLD_VIEWS[lf];
+      const div = chooseDivision(fv, contentW, rem);
+      if (!div) continue;
+      const p = fv.projector.project(tCenter);
+      if (!p) continue;
+      const start = foldRowStartMs(lf, p.rowIndex);
+      const end = foldRowStartMs(lf, p.rowIndex + 1);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      const yTop0 = worldToScreenY(view, worldOf(ybpOfTMs(start)));
+      const yBot0 = worldToScreenY(view, worldOf(ybpOfTMs(end)));
+      if (Math.abs(yBot0 - yTop0) < rem) continue;
+
+      const gx = (phase: number) => trackContentX0(x0, rem) + phase * contentW;
+
+      // aggregate the two heat channels for this track at THIS level:
+      // count = integer nominal events per cell (labels, dot suppression,
+      // lightness ramp); presence = mass-conserving float from TINT-state
+      // events whose precision window dwarfs the view (faint wash only —
+      // never rendered as a number). Interval-state events skip both: they
+      // are visible as row fragments instead.
+      const cells = new Map<string, number>();
+      const presence = new Map<string, number>();
+      heatCells.set(cat, { level: lf, cells, presence });
+      const list = byCat.get(cat) ?? [];
+      const centerRow = fv.projector.project(tCenter)!.rowIndex;
+      const vis = visibleRowRange(lf, view, H, centerRow); // projected endpoints
+      for (const e of list) {
+        const t2 = tMsOfEv(e);
+        if (t2 == null) continue;
+        const pe = fv.projector.project(t2);
+        if (!pe) continue;
+        // classify at the event's OWN resolved level — the single source of
+        // truth shared with the glyph pass and hit-testing (codex review P0);
+        // an event resolved at a different level than this grid renders as
+        // its own glyph and skips these center-level cells entirely
+        const fpAgg = trackFoldPos(e, view, x0, w);
+        if (!fpAgg) continue;
+        const { lod, win } = classifyEv(e, fpAgg.level, fpAgg.slots, fpAgg.bandPx, H);
+        // level mismatch (symlog variance): point/interval render as their
+        // own glyph/band at their own level — but TINT has no glyph, so its
+        // existence must still be carried by THIS grid's cells (codex P0):
+        // classification truth stays at the event's level, the encoding uses
+        // the center grid's geometry.
+        if (fpAgg.level !== lf && lod !== "tint") continue;
+        if (lod === "point" || !win) {
+          const slot = Math.floor(Math.min(0.999999, pe.phase0) * div.slots);
+          const key = `${pe.rowIndex}:${slot}`;
+          cells.set(key, (cells.get(key) ?? 0) + 1);
+          continue;
+        }
+        if (lod !== "tint") continue; // interval renders as fragments
+        // presence: clip the window's rows to the visible range (caller-owned
+        // bounding per temporal.ts contract), spread overlap/window weight.
+        // Display phases approximate elapsed time here — acceptable for a wash.
+        const winRows = (win[1] - win[0]) / FOLD_PERIOD_MS[lf]!;
+        const r0 = Math.max(fv.projector.project(win[0])?.rowIndex ?? vis.r0, vis.r0);
+        const r1 = Math.min(fv.projector.project(win[1] - 1)?.rowIndex ?? vis.r1, vis.r1);
+        const nSlots = Math.ceil(div.slots);
+        for (let row = r0; row <= r1 && row - r0 < 300; row++) {
+          const perRow = 1 / winRows; // this row's share of the whole window
+          // slot shares use each cell's ACTUAL phase width so fractional
+          // divisions (month's 31/7 week cells) conserve mass — the tail
+          // cell weighs its 3 days, not a full seventh (codex review)
+          for (let sl = 0; sl < nSlots; sl++) {
+            const share = (Math.min(sl + 1, div.slots) - sl) / div.slots;
+            if (share <= 0) continue;
+            const key = `${row}:${sl}`;
+            presence.set(key, (presence.get(key) ?? 0) + perRow * share);
+          }
+        }
+      }
+      const darkTheme = srgbToOklch(theme.background as string).L < 0.5;
+      const slotWpx = contentW / div.slots;
+      // presence wash: bounded alpha, composed UNDER the count cells — the
+      // "an imprecise event exists somewhere here" channel, never a number
+      for (const [key, p] of heatEnabled ? presence : new Map<string, number>()) {
+        if (cells.has(key) || p <= 0) continue; // count cells dominate (documented)
+        const [rowS, slotS] = key.split(":");
+        const row = Number(rowS);
+        const slot = Number(slotS);
+        const ms0 = foldRowStartMs(lf, row);
+        const ms1 = foldRowStartMs(lf, row + 1);
+        if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+        const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
+        const cy1 = Math.min(Math.max(ya, yb), H);
+        if (cy1 <= cy0) continue;
+        // perceptible floor + bounded ramp: the conserved p can be ~1e-4 for
+        // exactly the events tint exists for (codex review P0) — a tint-only
+        // event must never be invisible; magnitude still modulates above it
+        ctx.fillStyle = withAlpha(CAT_COLOR[cat], 0.07 + 0.23 * (1 - Math.exp(-p * 12)));
+        const cwP = ((Math.min(slot + 1, div.slots) - slot) / div.slots) * contentW;
+        ctx.fillRect(gx(slot / div.slots), cy0, Math.max(0, cwP), cy1 - cy0);
+      }
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const [key, n] of heatEnabled ? cells : new Map<string, number>()) {
+        const [rowS, slotS] = key.split(":");
+        const row = Number(rowS);
+        const slot = Number(slotS);
+        const ms0 = foldRowStartMs(lf, row);
+        const ms1 = foldRowStartMs(lf, row + 1);
+        if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+        const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
+        const cy1 = Math.min(Math.max(ya, yb), H);
+        if (cy1 <= cy0) continue;
+        ctx.fillStyle = heatCellColor(cat, n, darkTheme);
+        const cwN = ((Math.min(slot + 1, div.slots) - slot) / div.slots) * contentW;
+        ctx.fillRect(gx(slot / div.slots), cy0, Math.max(0, cwN), cy1 - cy0);
+        // selective direct label: the count, only when the cell affords it
+        if (n > HEAT_DOT_MAX && cwN >= 2 * rem && cy1 - cy0 >= 1.1 * rem) {
+          ctx.fillStyle = darkTheme ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.7)";
+          ctx.font = "9px ui-monospace, Menlo, monospace";
+          ctx.fillText(String(n), gx(slot / div.slots) + cwN / 2, (cy0 + cy1) / 2);
+        }
+      }
+      ctx.textAlign = "left";
+
+      // vertical slot columns — every column gets a crisp 1px border, and
+      // boundaries of the NEXT-COARSER division draw 更醒目: quarter lines
+      // among months, week lines among days, daypart lines among hours.
+      // Identical x in every band (max-slot phases), so identical wall times
+      // align down the whole track.
+      const divIdx = fv.divisions.indexOf(div);
+      const coarser = fv.divisions[divIdx + 1];
+      const majorEvery = coarser ? Math.max(1, Math.round(div.slots / coarser.slots)) : div.labelEvery;
+      ctx.lineWidth = 1;
+      for (let m2 = 1; m2 < div.slots; m2++) {
+        const major = m2 % majorEvery === 0;
+        ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.55 : 0.26);
+        const x = gx(m2 / div.slots);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x) + 0.5, HEADER_H);
+        ctx.lineTo(Math.round(x) + 0.5, H);
+        ctx.stroke();
+      }
+
+      // pseudo-x-axis: slot labels live in the sticky header strip (drawn
+      // last, above everything) — queue this track's axis for that pass
+      let every = div.labelEvery;
+      while ((contentW / div.slots) * every < 30 && every < div.slots) every *= 2;
+      foldHeaderAxes.push({ x0: trackContentX0(x0, rem), contentW, div, every });
+
+      // horizontal cycle-band separators + y-axis row labels + month ghosts
+      const drawRow = (row: number): number | null => {
+        const ms = foldRowStartMs(lf, row);
+        if (!Number.isFinite(ms)) return null;
+        const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
+        if (y >= HEADER_H - 2 && y <= H + 2) {
+          const strength = boundaryStrength(ms);
+          ctx.strokeStyle = withAlpha(theme.textFaint, Math.min(strength, 0.95));
+          ctx.lineWidth = strength >= 0.95 ? 2 : strength >= 0.85 ? 1.6 : 1;
+          ctx.beginPath();
+          ctx.moveTo(x0 + 2, Math.round(y) + 0.5);
+          ctx.lineTo(x0 + w - 4, Math.round(y) + 0.5);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        }
+        // y axis: which cycle this band IS — labeled at the band's top-left
+        {
+          const nextMs = foldRowStartMs(lf, row + 1);
+          if (Number.isFinite(nextMs)) {
+            const y1 = worldToScreenY(view, worldOf(ybpOfTMs(nextMs)));
+            const top = Math.min(y, y1);
+            const bandPx = Math.abs(y1 - y);
+            if (bandPx >= 13 && top + 8 >= HEADER_H && top <= H) {
+              const label = fv.projector.project(ms)?.rowLabel;
+              if (label) {
+                ctx.font = "9px ui-monospace, Menlo, monospace";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
+                ctx.fillText(label, x0 + 4, top + Math.min(bandPx / 2, 9));
+              }
+            }
+          }
+        }
+        // ghost slots: a 28..30-day month leaves its 29..31 columns blank —
+        // dim the placeholder region so alignment reads as intentional
+        if (lf === "month") {
+          const nextMs = foldRowStartMs(lf, row + 1);
+          if (Number.isFinite(nextMs)) {
+            const y1 = worldToScreenY(view, worldOf(ybpOfTMs(nextMs)));
+            const year = Math.floor(row / 12);
+            const dim = new Date(Date.UTC(year, (((row % 12) + 12) % 12) + 1, 0)).getUTCDate();
+            if (dim < 31) {
+              const a = Math.max(Math.min(y, y1), HEADER_H);
+              const b = Math.min(Math.max(y, y1), H);
+              if (b > a) {
+                ctx.fillStyle = withAlpha(theme.textFaint, 0.07);
+                ctx.fillRect(gx(dim / 31), a, gx(1) - gx(dim / 31), b - a);
+              }
+            }
+          }
+        }
+        return y;
+      };
+      for (let row = p.rowIndex, i = 0; i < 120; i++, row--) {
+        const y = drawRow(row);
+        if (y == null || y < HEADER_H - 2) break;
+      }
+      for (let row = p.rowIndex + 1, i = 0; i < 120; i++, row++) {
+        const y = drawRow(row);
+        if (y == null || y > H + 2) break;
+      }
+      return; // finest readable level only
+    }
+  }
+
   function drawTrackEvents(
     ctx: CanvasRenderingContext2D,
     view: LaneView,
@@ -841,6 +1175,8 @@ export function createTimelineSource(
     }
     vis.sort((a, b) => b.e.imp - a.e.imp);
     const placed: number[] = [];
+    const placedRects: { x0: number; x1: number; y: number }[] = [];
+    let anyGliding = false;
     const cx = x0 + 7;
     const vspan = view.height / view.zoomY; // visible time-span (world years)
     ctx.textBaseline = "middle";
@@ -850,12 +1186,107 @@ export function createTimelineSource(
       if (vspan > infl * influenceDots()) continue; // out of influence → hidden
       const future = e.cat === "future";
       const inScale = vspan <= infl; // zoomed in enough to earn a label
+
+      // per-track fold: a dated event whose cycle band is readable quantizes
+      // to the band and takes its phase-x — same helper the hit-test uses
+      const fp = trackFoldPos(e, view, x0, w);
+      if (fp) {
+        // precision-aware: classification at the EVENT'S OWN fold level —
+        // the same level trackFoldPos resolved — so aggregation, glyphs and
+        // hit-testing can never disagree (codex review P0). Interval-state
+        // events render as row fragments; tint-state events left the glyph
+        // layer entirely (presence wash carries them).
+        const cls = classifyEv(e, fp.level, fp.slots, fp.bandPx, H);
+        if (cls.lod === "tint") continue;
+        if (cls.lod === "interval") {
+          const win = cls.win;
+          if (win) {
+            const rem2 = remPx();
+            const contentW2 = trackContentW(w, rem2);
+            const cx0 = trackContentX0(x0, rem2);
+            // pre-clip the window IN TIME to the visible rows before
+            // projecting — projectWindow has no internal row cap by contract
+            const { r0, r1 } = visibleRowRange(fp.level, view, H, fp.row);
+            const clipA = Math.max(win[0], foldRowStartMs(fp.level, r0));
+            const clipB = Math.min(win[1], foldRowStartMs(fp.level, r1 + 1));
+            const frags = clipB > clipA ? projectWindow(fp.level, clipA, clipB) : [];
+            ctx.fillStyle = withAlpha(color, 0.28);
+            for (const fr of frags.slice(0, 200)) {
+              const ms0 = foldRowStartMs(fp.level, fr.rowIndex);
+              const ms1 = foldRowStartMs(fp.level, fr.rowIndex + 1);
+              if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+              const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+              const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+              const fy0 = Math.max(Math.min(ya, yb) + 1, HEADER_H);
+              const fy1 = Math.min(Math.max(ya, yb) - 1, H);
+              if (fy1 <= fy0) continue;
+              ctx.fillRect(cx0 + fr.phase0 * contentW2, fy0, Math.max(2, (fr.phase1 - fr.phase0) * contentW2), fy1 - fy0);
+            }
+            // nominal tick + label at the representative instant, for provenance
+            ctx.beginPath();
+            ctx.arc(fp.x, fp.y, 2, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            if (inScale) {
+              ctx.font = "12px ui-monospace, Menlo, monospace";
+              ctx.textAlign = "left";
+              const text = fit(ctx, tr(e.label), x0 + w - fp.x - 12);
+              const lx0 = fp.x + 6;
+              const lx1 = lx0 + ctx.measureText(text).width + 6;
+              if (!placedRects.some((p) => Math.abs(p.y - fp.y) < 12 && lx0 < p.x1 && lx1 > p.x0)) {
+                placedRects.push({ x0: lx0, x1: lx1, y: fp.y });
+                foldLabelRects.push({ x0: lx0, x1: lx1, y: fp.y, e });
+                ctx.fillStyle = future ? theme.textDim : theme.text;
+                ctx.fillText(text, lx0, fp.y);
+              }
+            }
+          }
+          continue;
+        }
+        // dense cells are represented by their heat shade + count label —
+        // individual dots would just overplot (hover still resolves them)
+        const hc = heatCells.get(e.cat);
+        if (heatEnabled && hc && hc.level === fp.level && (hc.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX) {
+          glide.delete(e); // no stale glide origin while represented by the cell
+          continue;
+        }
+        const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
+        if (g.moving) anyGliding = true;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, 3, 0, Math.PI * 2);
+        if (future) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        } else {
+          ctx.fillStyle = color;
+          ctx.fill();
+        }
+        if (inScale && !g.moving) {
+          ctx.font = "12px ui-monospace, Menlo, monospace";
+          ctx.textAlign = "left";
+          const text = fit(ctx, tr(e.label), x0 + w - fp.x - 12);
+          const lx0 = fp.x + 6;
+          const lx1 = lx0 + ctx.measureText(text).width + 6;
+          if (!placedRects.some((p) => Math.abs(p.y - fp.y) < 12 && lx0 < p.x1 && lx1 > p.x0)) {
+            placedRects.push({ x0: lx0, x1: lx1, y: fp.y });
+            foldLabelRects.push({ x0: lx0, x1: lx1, y: fp.y, e });
+            ctx.fillStyle = future ? theme.textDim : theme.text;
+            ctx.fillText(text, lx0, fp.y);
+          }
+        }
+        continue;
+      }
+
       const labeled =
         inScale && !placed.some((p) => Math.abs(p - sy) < LABEL_GAP);
       if (!labeled) {
         // presence hint: a small dim dot so hidden events aren't invisible
+        const g = glidePos(e, "rail", cx, sy);
+        if (g.moving) anyGliding = true;
         ctx.beginPath();
-        ctx.arc(cx, sy, 1.5, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, 1.5, 0, Math.PI * 2);
         ctx.fillStyle = withAlpha(color, 0.5);
         ctx.fill();
         continue;
@@ -880,8 +1311,10 @@ export function createTimelineSource(
         ctx.lineTo(cx + 6, sy + 0.5);
         ctx.stroke();
       } else {
+        const g = glidePos(e, "rail", cx, sy); // registers the glide origin
+        if (g.moving) anyGliding = true;
         ctx.beginPath();
-        ctx.arc(cx, sy, 3, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, 3, 0, Math.PI * 2);
         if (future) {
           ctx.strokeStyle = color; // hollow dot marks a prediction
           ctx.lineWidth = 1.5;
@@ -906,6 +1339,7 @@ export function createTimelineSource(
         }
       }
     }
+    if (anyGliding) onUpdate(); // pump frames until every glide lands
   }
 
   function drawPeriodic(
@@ -1039,6 +1473,557 @@ export function createTimelineSource(
     ctx.fillText(text, x + pad, cy);
   }
 
+  // ── temporal fold (v1: fold-year) — integration/UX layer ─────────────────
+  // Projection math lives in ./temporal.js (codex-owned, pure + tested); this
+  // side owns the Ev→tMs gate, layout, LOD, and chrome wiring.
+  let fold: TimelineFold = "none";
+  /**
+   * The instant an event may be folded at: its explicit `tMs`, or nothing.
+   * There is deliberately NO fallback from `y` — an age-derived coordinate
+   * cannot recover calendar precision, and fold-year must not visually assert
+   * a month/day the data doesn't have (bare-year events like "Transistor
+   * (1947)" stay on the continuous axis / future approx gutter).
+   */
+  const tMsOfEv = (e: Ev): number | null =>
+    e.cat === "periodic" ? null : evTimestampMs(e);
+  const tMsOfYbp = (yBP: number) => (PRESENT_EPOCH - yBP * SPY) * 1000;
+  const ybpOfTMs = (tMs: number) => (PRESENT_EPOCH - tMs / 1000) / SPY;
+  /** folded row range: the fold rows covered by foldable events (+ now).
+   *  When unfolded this reports YEAR rows (hosts gate auto-fold with it). */
+  const foldRows = () => {
+    const proj = (fold === "none" ? FOLD_VIEWS.year : foldView()).projector;
+    const nowRow = proj.project(PRESENT_EPOCH * 1000)?.rowIndex ?? 0;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const e of points) {
+      const t = tMsOfEv(e);
+      if (t == null) continue;
+      const p = proj.project(t);
+      if (!p) continue;
+      if (p.rowIndex < min) min = p.rowIndex;
+      if (p.rowIndex > max) max = p.rowIndex;
+    }
+    if (min > max) return { min: nowRow - 10, max: nowRow };
+    // the now-marker row and "today" orientation must always be in extent
+    return { min: Math.min(min, nowRow), max: Math.max(max, nowRow) };
+  };
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const WDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const DAYPARTS = ["Night", "Morning", "Afternoon", "Evening"];
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  /** a slot division of a fold row: how the phase axis subdivides. Rows can
+   *  offer several, fine→coarse — the finest whose columns stay ≥1rem wide
+   *  wins (taku: year shows quarters when 12 months don't fit; month shows
+   *  W1..W5 weeks until a super-wide track affords 31 day columns; day shows
+   *  the TODO's four dayparts when 24 hour columns don't fit). Event x comes
+   *  from the continuous phase, so the division changes only the chrome and
+   *  the heat-cell aggregation, never positions. */
+  interface FoldDivision {
+    slots: number;
+    slotLabel: (i: number) => string;
+    labelEvery: number;
+  }
+  const FOLD_VIEWS: Record<
+    Exclude<TimelineFold, "none">,
+    { projector: (typeof foldYearProjector); divisions: FoldDivision[] }
+  > = {
+    year: {
+      projector: foldYearProjector,
+      divisions: [
+        { slots: 12, slotLabel: (i) => MONTHS[i]!, labelEvery: 1 },
+        { slots: 4, slotLabel: (i) => `Q${i + 1}`, labelEvery: 1 },
+      ],
+    },
+    month: {
+      projector: foldMonthProjector,
+      divisions: [
+        { slots: 31, slotLabel: (i) => String(i + 1), labelEvery: 5 },
+        // 7-day week slots over the 31-day measure: W5 is the short tail
+        { slots: 31 / 7, slotLabel: (i) => `W${i + 1}`, labelEvery: 1 },
+      ],
+    },
+    // single-letter weekday initials read at any slot width (Monday-start;
+    // weekStartsOn config is a TODO — Sunday-start would read SMTWTFS)
+    week: {
+      projector: foldWeekProjector,
+      divisions: [{ slots: 7, slotLabel: (i) => WDAYS[i]![0]!, labelEvery: 1 }],
+    },
+    day: {
+      projector: foldDayProjector,
+      divisions: [
+        { slots: 24, slotLabel: (i) => `${p2(i)}h`, labelEvery: 3 },
+        { slots: 4, slotLabel: (i) => DAYPARTS[i]!, labelEvery: 1 },
+      ],
+    },
+    hour: {
+      projector: foldHourProjector,
+      divisions: [
+        { slots: 60, slotLabel: (i) => `:${p2(i)}`, labelEvery: 5 },
+        { slots: 4, slotLabel: (i) => `:${p2(i * 15)}`, labelEvery: 1 },
+      ],
+    },
+    // decimal upper folds: the calendar turns base-10 above the year
+    decade: {
+      projector: foldDecadeProjector,
+      divisions: [{ slots: 10, slotLabel: (i) => `'${i}`, labelEvery: 1 }],
+    },
+    century: {
+      projector: foldCenturyProjector,
+      divisions: [{ slots: 10, slotLabel: (i) => `${i * 10}s`, labelEvery: 1 }],
+    },
+    millennium: {
+      projector: foldMillenniumProjector,
+      divisions: [{ slots: 10, slotLabel: (i) => `${i * 100}s`, labelEvery: 1 }],
+    },
+  };
+  /** boundary prominence at an instant: the coarsest calendar unit that
+   *  rolls over exactly there decides the separator weight (year > month >
+   *  day > none) — so a month-fold grid shows 更醒目 lines between years,
+   *  a day-fold between months, etc. */
+  const boundaryStrength = (ms: number): number => {
+    const a = new Date(ms - 1);
+    const b = new Date(ms);
+    if (!Number.isFinite(a.getTime()) || !Number.isFinite(b.getTime())) return 0.42;
+    if (a.getUTCFullYear() !== b.getUTCFullYear()) {
+      const y = b.getUTCFullYear();
+      if (y % 1000 === 0) return 1.0; // millennium boundary, 更醒目の最上段
+      if (y % 100 === 0) return 0.95;
+      if (y % 10 === 0) return 0.9;
+      return 0.85;
+    }
+    if (a.getUTCMonth() !== b.getUTCMonth()) return 0.62;
+    if (a.getUTCDate() !== b.getUTCDate()) return 0.5;
+    return 0.34;
+  };
+
+  /** finest division whose columns stay ≥1rem within the content measure */
+  const chooseDivision = (fv: (typeof FOLD_VIEWS)[Exclude<TimelineFold, "none">], contentW: number, rem: number): FoldDivision | null => {
+    for (const d of fv.divisions) if (contentW / d.slots >= rem) return d;
+    return null;
+  };
+  const foldView = () => FOLD_VIEWS[fold as Exclude<TimelineFold, "none">];
+  /** label for any fold row, including empty ones (via the row's start instant) */
+  const foldRowLabel = (rowIndex: number) => {
+    const v = foldView();
+    return v.projector.project(foldRowStartMs(fold, rowIndex))?.rowLabel ?? String(rowIndex);
+  };
+  /** folded glyph layout, shared by drawFolded and eventAt so hover matches
+   *  pixels exactly: micro-lanes appear once rows are tall enough, else the
+   *  row centerline. Returns null for unfoldable events. */
+  const foldGlyphPos = (e: Ev, view: LaneView) => {
+    const t = tMsOfEv(e);
+    if (t == null) return null;
+    const p = foldView().projector.project(t);
+    if (!p) return null;
+    const usableW = Math.max(40, view.width - FOLD_X0 - 8);
+    const rowH = view.zoomY;
+    const x = FOLD_X0 + p.phase0 * usableW;
+    const rowTop = worldToScreenY(view, p.rowIndex - 0.5);
+    if (rowH < 14) return { x, y: rowTop + rowH / 2, p, laneH: 0 };
+    const cats = CAT_META.filter((m) => m.cat !== "periodic" && enabled.has(m.cat));
+    const lane = Math.max(0, cats.findIndex((m) => m.cat === e.cat));
+    const laneH = (rowH - 4) / Math.max(1, cats.length);
+    return { x, y: rowTop + 2 + lane * laneH + laneH / 2, p, laneH };
+  };
+  const FOLD_X0 = RULER_W + 8;
+  const PULSE_MS = 2200;
+  /** transient search-pulse marker (folded mode has no horizontal pan) */
+  let pulse: { world: number; phase: number; until: number } | null = null;
+  /** label rects placed by the last folded draw — labels are hover targets
+   *  too, not just their dots (codex review) */
+  let foldLabelRects: { x0: number; x1: number; y: number; e: Ev }[] = [];
+  // ── OKLCH heat-cells: per-cell event density in the fold grid ─────────────
+  // The track already spends HUE on identity, so within a track density is
+  // pure magnitude: the track's hue with an OKLCH lightness ramp (sequential,
+  // one hue, light→dark — CVD-safe because magnitude never rides on hue).
+  // Counts bucket on a fixed log2 ladder (1,2,4,8,16+) so scrolling never
+  // re-normalizes colors. Sparse cells (≤3) keep their dots; dense cells
+  // suppress dots and label the count when the cell affords it.
+  const srgbToOklch = (() => {
+    const cache = new Map<string, { L: number; C: number; H: number }>();
+    return (hex: string) => {
+      let v = cache.get(hex);
+      if (v) return v;
+      const n = parseInt(hex.slice(1), 16);
+      const lin = (u: number) => (u <= 0.04045 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4));
+      const r = lin(((n >> 16) & 255) / 255);
+      const g = lin(((n >> 8) & 255) / 255);
+      const b = lin((n & 255) / 255);
+      const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+      const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+      const s2 = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+      const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s2;
+      const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s2;
+      const bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s2;
+      v = { L, C: Math.hypot(a, bb), H: ((Math.atan2(bb, a) * 180) / Math.PI + 360) % 360 };
+      cache.set(hex, v);
+      return v;
+    };
+  })();
+  /** cell fill for `count` events in a category cell, per theme surface */
+  const heatCellColor = (cat: Cat, count: number, darkTheme: boolean): string => {
+    const { C, H } = srgbToOklch(CAT_COLOR[cat]);
+    const step = Math.min(4, Math.log2(1 + count)); // 1,2,4,8,16+ buckets
+    const L = darkTheme ? 0.3 + 0.115 * step : 0.93 - 0.1 * step;
+    const c = Math.min(0.11, C) * (0.55 + 0.11 * step);
+    return `oklch(${L.toFixed(3)} ${c.toFixed(3)} ${H.toFixed(1)})`;
+  };
+  // ── precision-aware LOD: point → interval → tint ──────────────────────────
+  // An event whose precision window outgrows the view stops being a point:
+  // ~a cell wide → interval (row fragments); beyond the viewport → tint
+  // (no glyph; presence wash in the heat cells). Hysteresis 1.25/0.8 per
+  // boundary so zoom jitter doesn't flap states (joint codex×claude design).
+  type EvLod = "point" | "interval" | "tint";
+  // hysteresis memory is keyed by (event, fold level): the SAME event can sit
+  // at different levels in different tracks/frames on the symlog axis, and a
+  // single-key map made states leak across levels (codex review P0). WeakMap
+  // needs no growth valve — a mid-frame clear corrupted the frame (P1).
+  const evLodPrev = new WeakMap<Ev, Map<string, EvLod>>();
+  // classification uses NOMINAL periods, not exact projected pixels — a
+  // documented v1 approximation of the projected-pixel classifier (calendar
+  // rows vary, symlog is nonlinear); the hysteresis band absorbs the error.
+  const classifyEv = (e: Ev, level: Exclude<TimelineFold, "none">, slots: number, bandPx: number, H: number): { lod: EvLod; win: readonly [number, number] | null } => {
+    const win = e.precision?.kind === "calendar" ? precisionWindow(e) : null;
+    if (!win) return { lod: "point", win: null }; // no window → today's behavior
+    const windowRows = (win[1] - win[0]) / FOLD_PERIOD_MS[level]!;
+    const slotFrac = windowRows * slots; // window width in slot units
+    const visibleRows = Math.max(1, H / Math.max(1, bandPx));
+    let mem = evLodPrev.get(e);
+    if (!mem) evLodPrev.set(e, (mem = new Map()));
+    const prev = mem.get(level) ?? "point";
+    const up = 1.25;
+    const down = 0.8;
+    let lod: EvLod;
+    if (windowRows > visibleRows * (prev === "tint" ? down : up)) lod = "tint";
+    else if (slotFrac > (prev === "point" ? up : down)) lod = "interval";
+    else lod = "point";
+    mem.set(level, lod);
+    // with heat cells disabled there is NO presence carrier: a tint event
+    // would simply vanish (codex P0). The classification truth is stored
+    // undegraded (hysteresis stays honest); the EFFECTIVE state every
+    // consumer renders/hits with degrades tint → interval while heat is off.
+    const eff: EvLod = !heatEnabled && lod === "tint" ? "interval" : lod;
+    return { lod: eff, win };
+  };
+  /** visible fold-row range from PROJECTED screen endpoints — symlog rows
+   *  vary in height, so center ± H/centerBand under-covers (codex review) */
+  const visibleRowRange = (level: Exclude<TimelineFold, "none">, view: LaneView, H: number, fallbackRow: number): { r0: number; r1: number } => {
+    const proj = FOLD_VIEWS[level].projector;
+    const rowAt = (sy: number): number | null => {
+      const t = tMsOfYbp(yBPof(screenToWorldY(view, sy)));
+      if (!Number.isFinite(t)) return null;
+      return proj.project(t)?.rowIndex ?? null;
+    };
+    const a = rowAt(HEADER_H - 40);
+    const b = rowAt(H + 40);
+    const r0 = Math.min(a ?? fallbackRow, b ?? fallbackRow);
+    const r1 = Math.max(a ?? fallbackRow, b ?? fallbackRow);
+    return { r0: r0 - 1, r1: r1 + 1 };
+  };
+
+  /** per-frame cell counts per track (cat → rowIndex*64+slot → n), shared by
+   *  the grid pass (fills + labels) and the event pass (dot suppression) */
+  const heatCells = new Map<Cat, { level: string; cells: Map<string, number>; presence: Map<string, number> }>();
+  const HEAT_DOT_MAX = 3; // cells with more events than this drop their dots
+
+  /** pseudo-x-axis specs queued by folding tracks for the sticky header */
+  const foldHeaderAxes: { x0: number; contentW: number; div: FoldDivision; every: number }[] = [];
+
+  // ── fold-switch morph-lite ────────────────────────────────────────────────
+  // On a fold change, every event glyph glides from its OLD screen position to
+  // its new one (~280ms, easeOutBack for a light spring feel) instead of
+  // teleporting. Positions are captured from the outgoing projection+view;
+  // targets are computed live each frame, so the glide composes with whatever
+  // the viewport is doing.
+  const FOLD_ANIM_MS = 280;
+  let foldAnim: { from: Map<Ev, { x: number; y: number }>; t0: number } | null = null;
+  const easeOutBack = (t: number) => 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+  /** screen position of an event under the CURRENT mode (fold or continuous) */
+  const glyphScreenPos = (e: Ev, view: LaneView): { x: number; y: number } | null => {
+    if (fold !== "none") {
+      const g = foldGlyphPos(e, view);
+      return g ? { x: g.x, y: g.y } : null;
+    }
+    const tracks = activeTracks(view);
+    const tr2 = tracks.find((t) => t.meta.cat === e.cat);
+    if (!tr2) return null;
+    return { x: tr2.x0 + tr2.w / 2, y: worldToScreenY(view, worldOf(e.y)) };
+  };
+  // ── per-track folding: fold whenever space allows (rg principle) ──────────
+  // Inside a track, an event's cycle already occupies a y-band on the axis.
+  // When that band renders ≥1rem tall AND the track is wide enough, the event
+  // quantizes to the band's center and spreads by phase in x — no coordinate
+  // switch, no global mode. On the symlog axis the fold level varies ALONG
+  // the axis: recent (tall) bands fold fine, deep-time (thin) bands stay dots.
+  let trackFold = true;
+  let heatEnabled = true; // pref: heat cells + presence wash
+  let glideEnabled = true; // pref: glide animation on level changes
+  const TRACK_FOLD_MIN_W_REM = 20; // a track folds only when at least this wide
+  const TRACK_FOLD_EXIT_W_REM = 17; // …and unfolds below this (width hysteresis)
+  /** per-category fold latch for the width hysteresis band */
+  const trackFoldLatch = new Map<Cat, boolean>();
+  const trackWideEnough = (cat: Cat, w: number, rem: number) => {
+    const was = trackFoldLatch.get(cat) ?? false;
+    const on = w >= (was ? TRACK_FOLD_EXIT_W_REM : TRACK_FOLD_MIN_W_REM) * rem;
+    trackFoldLatch.set(cat, on);
+    return on;
+  };
+  /** per-event glide: when an event's fold level (or rail↔fold) changes, it
+   *  glides from its last drawn position to the new one — taku's transition
+   *  animation, applied per element instead of per mode switch */
+  const GLIDE_MS = 280;
+  const glide = new Map<Ev, { x: number; y: number; key: string; from?: { x: number; y: number; t0: number } }>();
+  const glidePos = (e: Ev, key: string, tx: number, ty: number): { x: number; y: number; moving: boolean } => {
+    if (!glideEnabled) return { x: tx, y: ty, moving: false };
+    const prev = glide.get(e);
+    let from = prev?.from;
+    if (prev && prev.key !== key) from = { x: prev.x, y: prev.y, t0: performance.now() };
+    let x = tx;
+    let y = ty;
+    let moving = false;
+    if (from) {
+      const t = (performance.now() - from.t0) / GLIDE_MS;
+      if (t < 1) {
+        const k = easeOutBack(Math.max(0, t));
+        x = from.x + (tx - from.x) * k;
+        y = from.y + (ty - from.y) * k;
+        moving = true;
+      } else {
+        from = undefined;
+      }
+    }
+    glide.set(e, { x, y, key, from });
+    if (glide.size > 1200) glide.clear(); // safety valve
+    return { x, y, moving };
+  };
+  const TRACK_FOLD_MAX_CONTENT_REM = 45; // content measure capped like a text column
+  const remPx = () =>
+    typeof document !== "undefined"
+      ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      : 16;
+  const LADDER_FINE_FIRST = ["hour", "day", "week", "month", "year", "decade", "century", "millennium"] as const;
+  /** slim y-axis gutter inside a folding track: row labels live here,
+   *  uncovered by phase-0 events */
+  const Y_GUTTER_REM = 2.6;
+  const trackContentX0 = (x0: number, rem: number) => x0 + Y_GUTTER_REM * rem;
+  const trackContentW = (w: number, rem: number) =>
+    Math.min(w - Y_GUTTER_REM * rem - 8, TRACK_FOLD_MAX_CONTENT_REM * rem);
+  /** folded position of a dated event inside its track, or null (classic rail).
+   *  Picks the FINEST fold level whose local cycle band is ≥1rem tall and
+   *  whose phase slots are ≥1rem wide within the track's content measure. */
+  const trackFoldPos = (e: Ev, view: LaneView, x0: number, w: number) => {
+    if (!trackFold || fold !== "none") return null;
+    const rem = remPx();
+    if (!trackWideEnough(e.cat, w, rem)) return null;
+    const t = tMsOfEv(e);
+    if (t == null) return null;
+    const contentW = trackContentW(w, rem);
+    for (const lf of LADDER_FINE_FIRST) {
+      const fv = FOLD_VIEWS[lf];
+      const div = chooseDivision(fv, contentW, rem);
+      if (!div) continue; // no division's columns readable → coarser level
+      const p = fv.projector.project(t);
+      if (!p) continue;
+      const start = foldRowStartMs(lf, p.rowIndex);
+      const end = foldRowStartMs(lf, p.rowIndex + 1);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      const yTop = worldToScreenY(view, worldOf(ybpOfTMs(start)));
+      const yBot = worldToScreenY(view, worldOf(ybpOfTMs(end)));
+      if (Math.abs(yBot - yTop) < rem) continue; // band unreadable → coarser
+      return {
+        x: trackContentX0(x0, rem) + p.phase0 * contentW,
+        y: (yTop + yBot) / 2,
+        level: lf,
+        bandPx: Math.abs(yBot - yTop),
+        row: p.rowIndex,
+        slot: Math.floor(Math.min(0.999999, p.phase0) * div.slots),
+        slots: div.slots, // the CHOSEN division's slot count (may be fractional)
+      };
+    }
+    return null;
+  };
+
+  const captureGlyphs = (view: LaneView) => {
+    const from = new Map<Ev, { x: number; y: number }>();
+    let n = 0;
+    for (const e of points) {
+      if (!enabled.has(e.cat) || tMsOfEv(e) == null) continue;
+      const p = glyphScreenPos(e, view);
+      if (!p || p.y < -50 || p.y > view.height + 50) continue;
+      from.set(e, p);
+      if (++n >= 400) break; // cap the animated population
+    }
+    return from;
+  };
+
+  function drawFolded(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
+    const { theme } = env;
+    const W = view.width;
+    const H = view.height;
+    const usableW = Math.max(40, W - FOLD_X0 - 8);
+    const rowH = view.zoomY; // one row = 1.0 world unit = one fold period
+    const fv0 = foldView();
+    const fv = { ...fv0, ...fv0.divisions[0]! }; // legacy path: finest division
+    const yearTop = Math.floor(screenToWorldY(view, 0) + 0.5);
+    const yearBot = Math.ceil(screenToWorldY(view, H) + 0.5);
+    const phaseX = (p: number) => FOLD_X0 + p * usableW;
+    const rowTopY = (year: number) => worldToScreenY(view, year - 0.5);
+
+    // row bands + year labels + per-year month gridlines
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    ctx.textBaseline = "middle";
+    for (let year = yearTop; year <= yearBot; year++) {
+      const y0 = rowTopY(year);
+      if (year % 2 === 0) {
+        ctx.fillStyle = withAlpha(theme.textFaint, 0.05);
+        ctx.fillRect(FOLD_X0, y0, usableW, rowH);
+      }
+      ctx.strokeStyle = withAlpha(theme.textFaint, 0.22);
+      ctx.beginPath();
+      ctx.moveTo(FOLD_X0, y0 + 0.5);
+      ctx.lineTo(W - 8, y0 + 0.5);
+      ctx.stroke();
+      // row label in the left ruler, readable even for thin rows
+      if (rowH >= 9) {
+        ctx.fillStyle = theme.textFaint;
+        ctx.textAlign = "right";
+        ctx.fillText(foldRowLabel(year), RULER_W - 2, y0 + rowH / 2);
+      }
+    }
+
+    // equal-width slot grid: boundaries sit at exactly i/slots in EVERY row
+    // (max-slot phases), so the guides are single full-height lines — the
+    // same wall time aligns across rows at every fold level
+    for (let m = 1; m < fv.slots; m++) {
+      const major = m % fv.labelEvery === 0;
+      if (!major && fv.slots > 32) continue; // 60-slot folds: majors only
+      ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.12 : 0.06);
+      const x = phaseX(m / fv.slots);
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, H);
+      ctx.stroke();
+    }
+
+    // "now" marker: a tick at today's phase in the current row
+    const nowP = fv.projector.project(PRESENT_EPOCH * 1000);
+    if (nowP && nowP.rowIndex >= yearTop && nowP.rowIndex <= yearBot) {
+      const x = phaseX(nowP.phase0);
+      const y0 = rowTopY(nowP.rowIndex);
+      ctx.strokeStyle = withAlpha(theme.accent, 0.9);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y0 + 1);
+      ctx.lineTo(x, y0 + rowH - 1);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
+    // events — LOD ladder by row height: dots → micro-lane dots → labels;
+    // positions come from foldGlyphPos, the SAME helper eventAt hit-tests.
+    // During a fold-switch morph, each glyph glides old→new (easeOutBack);
+    // labels wait until the motion ends so text doesn't smear mid-flight.
+    let animK = 1;
+    if (foldAnim) {
+      const t = (performance.now() - foldAnim.t0) / FOLD_ANIM_MS;
+      if (t >= 1) foldAnim = null;
+      else {
+        animK = easeOutBack(Math.max(0, t));
+        onUpdate(); // keep animating
+      }
+    }
+    ctx.textAlign = "left";
+    const labelCandidates: { e: Ev; x: number; y: number; r: number }[] = [];
+    for (const e of points) {
+      if (!enabled.has(e.cat)) continue;
+      const g = foldGlyphPos(e, view);
+      if (!g || g.p.rowIndex < yearTop - 1 || g.p.rowIndex > yearBot + 1) continue;
+      const color = CAT_COLOR[e.cat];
+      let gx = g.x;
+      let gy = g.y;
+      if (foldAnim) {
+        const from = foldAnim.from.get(e);
+        if (from) {
+          gx = from.x + (g.x - from.x) * animK;
+          gy = from.y + (g.y - from.y) * animK;
+        }
+      }
+      if (rowH < 14) {
+        // collapsed row: plain density dots on the row centerline
+        ctx.fillStyle = withAlpha(color, 0.85);
+        ctx.fillRect(gx - 1, gy - 1, 2, 2);
+        continue;
+      }
+      const r = Math.min(3.2, Math.max(1.5, g.laneH * 0.3));
+      ctx.fillStyle = foldAnim && !foldAnim.from.has(e) ? withAlpha(color, Math.min(1, animK)) : color;
+      ctx.beginPath();
+      ctx.arc(gx, gy, r, 0, Math.PI * 2);
+      ctx.fill();
+      if (!foldAnim && g.laneH >= 11) labelCandidates.push({ e, x: g.x, y: g.y, r });
+    }
+    // greedy label declutter: important events label first; later (lesser)
+    // labels are dropped when they'd overlap an already-placed one on the
+    // same text line — dense ingest clusters degrade to dots, not soup
+    labelCandidates.sort((a, b) => b.e.imp - a.e.imp);
+    const placed: { x0: number; x1: number; y: number; e: Ev }[] = [];
+    for (const c of labelCandidates) {
+      const text = fit(ctx, tr(c.e.label), W - 8 - c.x - 6);
+      if (!text) continue;
+      const x0 = c.x + c.r + 3;
+      const x1 = x0 + ctx.measureText(text).width + 6;
+      if (placed.some((p) => Math.abs(p.y - c.y) < 11 && x0 < p.x1 && x1 > p.x0)) continue;
+      placed.push({ x0, x1, y: c.y, e: c.e });
+      ctx.fillStyle = withAlpha(theme.text, 0.92);
+      ctx.fillText(text, x0, c.y);
+    }
+    foldLabelRects = placed;
+
+    // search pulse: expanding ring at the found (row, phase)
+    if (pulse) {
+      const life = pulse.until - performance.now();
+      if (life <= 0) pulse = null;
+      else {
+        const k = 1 - life / PULSE_MS;
+        const x = phaseX(pulse.phase);
+        const y = worldToScreenY(view, pulse.world);
+        ctx.strokeStyle = withAlpha(theme.accent, 0.85 * (1 - k));
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, 6 + k * 26, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        onUpdate(); // keep animating until expiry
+      }
+    }
+
+    // sticky header: month phase labels (reference year — exact per-row lines
+    // above carry the per-year truth; the header is a guide)
+    ctx.fillStyle = withAlpha(theme.background, 0.82);
+    ctx.fillRect(FOLD_X0, 0, W - FOLD_X0, HEADER_H);
+    ctx.strokeStyle = withAlpha(theme.textFaint, 0.2);
+    ctx.beginPath();
+    ctx.moveTo(FOLD_X0, HEADER_H + 0.5);
+    ctx.lineTo(W, HEADER_H + 0.5);
+    ctx.stroke();
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    // cull header labels on narrow canvases: widen the label stride until
+    // neighbouring labels keep a readable gap (codex review: 60-slot hour
+    // fold could space its labels ~3px apart at min width)
+    let every = fv.labelEvery;
+    while ((usableW / fv.slots) * every < 34 && every < fv.slots) every *= 2;
+    for (let m = 0; m < fv.slots; m += every) {
+      const x = phaseX(m / fv.slots);
+      ctx.fillStyle = theme.textFaint;
+      ctx.fillText(tr(fv.slotLabel(m)), x + 3, HEADER_H / 2);
+    }
+    ctx.fillStyle = theme.textFaint;
+    ctx.textAlign = "right";
+    ctx.fillText(tr(fold), RULER_W - 2, HEADER_H / 2);
+    ctx.textAlign = "left";
+  }
+
   return {
     title: "deep time",
     categories: CAT_META,
@@ -1070,7 +2055,32 @@ export function createTimelineSource(
       onUpdate();
     },
     eventAt(sx, sy, view) {
-      // the event in the hovered track whose y is nearest the cursor
+      // a visible label is a hover target for its event (either mode)
+      for (const l of foldLabelRects) {
+        if (sx >= l.x0 && sx <= l.x1 && Math.abs(sy - l.y) <= 7) {
+          const title = l.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+          return { title, detail: l.e.detail, cat: l.e.cat };
+        }
+      }
+      if (fold !== "none") {
+        let best: Ev | null = null;
+        let bestD = 9;
+        for (const e of points) {
+          if (!enabled.has(e.cat)) continue;
+          const g = foldGlyphPos(e, view);
+          if (!g) continue;
+          const d = Math.hypot(g.x - sx, g.y - sy);
+          if (d < bestD) {
+            bestD = d;
+            best = e;
+          }
+        }
+        if (!best) return null;
+        const title = best.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+        return { title, detail: best.detail, cat: best.cat };
+      }
+      // the event in the hovered track nearest the cursor — folded events sit
+      // at trackFoldPos (the same helper the draw uses), rail events on the y
       const tracks = activeTracks(view);
       const track = tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
       if (!track || track.meta.cat === "periodic") return null;
@@ -1078,8 +2088,14 @@ export function createTimelineSource(
       let bestDy = 11;
       for (const e of points) {
         if (e.cat !== track.meta.cat) continue;
-        const ey = worldToScreenY(view, worldOf(e.y));
-        const dy = Math.abs(ey - sy);
+        const fp = trackFoldPos(e, view, track.x0, track.w);
+        // tint-state events have NO visible glyph — giving the invisible
+        // nominal point hover semantics would fake precision (cell-level
+        // candidate listing is the deferred v1 follow-up)
+        if (fp && classifyEv(e, fp.level, fp.slots, fp.bandPx, view.height).lod === "tint") continue;
+        const dy = fp
+          ? Math.hypot(fp.x - sx, fp.y - sy)
+          : Math.abs(worldToScreenY(view, worldOf(e.y)) - sy);
         if (dy < bestDy) {
           bestDy = dy;
           best = e;
@@ -1104,6 +2120,27 @@ export function createTimelineSource(
         hits.push({ e, rank });
       }
       hits.sort((a, b) => b.rank - a.rank);
+      if (fold !== "none") {
+        // folded hits focus their row; the phase drives the pulse highlight
+        // (the lane cannot pan horizontally). Undatable hits fall back to
+        // their row-less continuous position — skip them in fold mode.
+        return hits
+          .flatMap(({ e }) => {
+            const t = tMsOfEv(e);
+            const p = t == null ? null : foldView().projector.project(t);
+            if (!p) return [];
+            return [{
+              label: e.label,
+              detail: e.detail,
+              cat: e.cat,
+              color: CAT_COLOR[e.cat],
+              center: p.rowIndex,
+              scale: 1.6,
+              phase: p.phase0,
+            }];
+          })
+          .slice(0, limit);
+      }
       return hits.slice(0, limit).map(({ e }) => ({
         label: e.label,
         detail: e.detail,
@@ -1113,20 +2150,33 @@ export function createTimelineSource(
         scale: ctxWorld(e),
       }));
     },
-    extent: () => ({
-      min: worldOf(BIG_BANG) * 1.01,
-      max: worldOf(-FUTURE_HORIZON) * 1.01,
-    }),
+    extent: () => {
+      if (fold !== "none") {
+        const r = foldRows();
+        return { min: r.min - 0.5, max: r.max + 0.5 };
+      }
+      return {
+        min: worldOf(BIG_BANG) * 1.01,
+        max: worldOf(-FUTURE_HORIZON) * 1.01,
+      };
+    },
     // bias the initial fit toward the PAST: frame Big Bang→now plus a thin
     // future sliver; the sparse far future stays reachable by scrolling
-    fitExtent: () => ({
-      min: worldOf(BIG_BANG) * 1.01,
-      max: logAxis ? 2.5 : 0,
-    }),
+    fitExtent: () => {
+      if (fold !== "none") {
+        const r = foldRows();
+        return { min: r.min - 0.5, max: r.max + 0.5 };
+      }
+      return {
+        min: worldOf(BIG_BANG) * 1.01,
+        max: logAxis ? 2.5 : 0,
+      };
+    },
     maxZoom: 5e6,
     // viewport emptiness (target-density): 1 when a void, 0 once ≥ TARGET
     // in-scale events are on screen — drives scroll-into-void auto-zoom-out
     emptiness: (view) => {
+      if (fold !== "none") return 0;
       const TARGET = 5;
       const top = screenToWorldY(view, 0);
       const bot = screenToWorldY(view, view.height);
@@ -1141,6 +2191,10 @@ export function createTimelineSource(
     },
     // double-click an event → center it and zoom to ~its precision scale
     focusAt: (screenY, view) => {
+      if (fold !== "none") {
+        const year = Math.round(screenToWorldY(view, screenY));
+        return { center: year, zoom: view.height / 1.6 };
+      }
       let best: Ev | null = null;
       let bestD = 30;
       for (const e of points) {
@@ -1157,6 +2211,9 @@ export function createTimelineSource(
     // the zoom anchor gravitates to nearby enabled events (and the now line);
     // each carries its track-centre x so the snap is track-aware
     snapTargets: (view) => {
+      // fold mode: no zoom-center snapping — rows are a uniform lattice, and
+      // snap gravity just fights the user's own anchor (taku 2026-07-12)
+      if (fold !== "none") return [];
       const tracks = activeTracks(view);
       const cx = new Map(tracks.map((t) => [t.meta.cat, t.x0 + t.w / 2]));
       const top = screenToWorldY(view, -40);
@@ -1169,9 +2226,90 @@ export function createTimelineSource(
       }
       return out;
     },
-    draw,
-    hudLine: (view) => {
-      const yBP = yBPof(screenToWorldY(view, view.height / 2));
+    draw: (ctx, view, env) =>
+      fold === "none" ? draw(ctx, view, env) : drawFolded(ctx, view, env),
+    getFold: () => fold,
+    setFold(f, opts) {
+      if (f === fold) return;
+      // capture outgoing glyph positions BEFORE the projection changes
+      foldAnim = opts?.animateFrom
+        ? { from: captureGlyphs(opts.animateFrom), t0: performance.now() }
+        : null;
+      fold = f;
+      pulse = null;
+      onUpdate();
+    },
+    tMsForWorld(worldY) {
+      const t =
+        fold !== "none"
+          ? // mid-row representative instant (row start + half the period)
+            foldRowStartMs(fold, Math.round(worldY)) + FOLD_PERIOD_MS[fold]! / 2
+          : tMsOfYbp(yBPof(worldY));
+      // TimeClip: deep-time worlds (Big Bang framing) exceed Date range —
+      // report "no calendar instant here" instead of a poisoned number
+      return Number.isFinite(t) && Number.isFinite(new Date(t).getTime()) ? t : null;
+    },
+    worldForTMs(tMs) {
+      // TimeClip at entry: garbage in must not poison scrollY with NaN
+      const clipped = Number.isFinite(tMs) ? new Date(tMs).getTime() : NaN;
+      if (!Number.isFinite(clipped))
+        return fold !== "none"
+          ? (foldView().projector.project(PRESENT_EPOCH * 1000)?.rowIndex ?? 0)
+          : worldOf(0);
+      if (fold !== "none") {
+        const proj = foldView().projector;
+        const p = proj.project(clipped);
+        // out-of-fold instant: land on the present row, never NaN
+        return p?.rowIndex ?? proj.project(PRESENT_EPOCH * 1000)?.rowIndex ?? 0;
+      }
+      return worldOf(ybpOfTMs(clipped));
+    },
+    foldRowRange: () => foldRows(),
+    isTrackFold: () => trackFold,
+    setTrackFold(on) {
+      trackFold = on;
+      onUpdate();
+    },
+    setHeatCells(on) {
+      heatEnabled = on;
+      onUpdate();
+    },
+    setGlide(on) {
+      glideEnabled = on;
+      if (!on) glide.clear(); // stale origins would animate on re-enable
+    },
+    setPulse(hit) {
+      if (fold === "none" || hit.phase === undefined) return;
+      pulse = { world: hit.center, phase: hit.phase, until: performance.now() + PULSE_MS };
+      onUpdate();
+    },
+    hudLine: (view, pointerY) => {
+      const screenY = pointerY ?? view.height / 2;
+      const cursorWorld = screenToWorldY(view, screenY);
+      let tMs: number;
+      if (fold !== "none") {
+        // Only global fold mode changes the y coordinate system. Per-track
+        // folds keep fold="none", so they correctly use the continuous-axis
+        // inverse below. Global rows are centered on integer world coords;
+        // interpolate exact UTC row boundaries so cursor time stays continuous.
+        const row = Math.floor(cursorWorld + 0.5);
+        const phase = Math.max(0, Math.min(1, cursorWorld - (row - 0.5)));
+        const start = foldRowStartMs(fold, row);
+        const end = foldRowStartMs(fold, row + 1);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+          return `fold: ${fold} · ${foldRowLabel(row)}`;
+        }
+        tMs = start + (end - start) * phase;
+      } else {
+        tMs = tMsOfYbp(yBPof(cursorWorld));
+      }
+      const clipped = new Date(tMs).getTime();
+      if (Number.isFinite(tMs) && Number.isFinite(clipped)) {
+        // ISO communicates the calendar instant; fractional unix_ms preserves
+        // the continuous y-derived value beyond Date's millisecond display.
+        return `${new Date(clipped).toISOString()} · unix_ms ${tMs.toFixed(6)}`;
+      }
+      const yBP = yBPof(cursorWorld);
       if (yBP > BIG_BANG) return "before time";
       if (yBP < 0) return `in ${fmtDur(-yBP)}`; // future
       if (yBP >= 1e6) return fmtLabel(yBP, 1e6);

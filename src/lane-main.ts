@@ -5,7 +5,8 @@
  */
 import { createLane, type LaneSource } from "./lane/lane.js";
 import { createTimelineSource } from "./lane/timeline.js";
-import type { TimelineSource } from "./lane/timeline.js";
+import type { TimelineFold, TimelineSource } from "./lane/timeline.js";
+import { FOLD_PERIOD_MS } from "./lane/temporal.js";
 import { createSeriesSource } from "./lane/timeseries.js";
 import { createTreeSource, type FileNode } from "./lane/tree.js";
 
@@ -311,16 +312,60 @@ const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
 const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
 const axisBtn = document.querySelector<HTMLButtonElement>("#axis");
+const foldBtn = document.querySelector<HTMLButtonElement>("#fold");
+
+// ── preferences panel: persisted, applied on load ───────────────────────────
+// Behavioral toggles live here instead of hidden defaults. Auto zoom-out on
+// empty scroll is OFF by default (taku: it fought users more than blank
+// stretches did) and opt-in; animation/heat default on.
+const PREFS_KEY = "lane-prefs";
+type LanePrefs = { autoZoomOut: boolean; glide: boolean; heat: boolean };
+const prefs: LanePrefs = { autoZoomOut: false, glide: true, heat: true };
+try {
+  Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}"));
+} catch { /* corrupted prefs → defaults */ }
+function applyPrefs() {
+  lane.setAutoZoomOut(prefs.autoZoomOut);
+  timeSource.setGlide(prefs.glide);
+  timeSource.setHeatCells(prefs.heat);
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* private mode */ }
+}
+const prefsBtn = document.querySelector<HTMLButtonElement>("#prefs");
+const prefsPanel = document.querySelector<HTMLDivElement>("#prefsPanel");
+prefsBtn?.addEventListener("click", () => {
+  if (!prefsPanel) return;
+  prefsPanel.style.display = prefsPanel.style.display === "none" ? "" : "none";
+});
+function bindPref(id: string, key: keyof LanePrefs) {
+  const el = document.querySelector<HTMLInputElement>(id);
+  if (!el) return;
+  el.checked = prefs[key];
+  el.addEventListener("change", () => {
+    prefs[key] = el.checked;
+    applyPrefs();
+    lane.invalidate();
+  });
+}
+bindPref("#prefAutoZoomOut", "autoZoomOut");
+bindPref("#prefGlide", "glide");
+bindPref("#prefHeat", "heat");
 function refreshChrome() {
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
     logBtn.setAttribute("aria-pressed", String(seriesLog));
   }
   if (axisBtn) {
-    axisBtn.style.display = current === "time" ? "" : "none";
+    // the log/linear axis only applies to the continuous (unfolded) view
+    axisBtn.style.display = current === "time" && timeSource.getFold() === "none" ? "" : "none";
     const log = timeSource.isLogAxis();
     axisBtn.textContent = log ? "log axis" : "linear axis";
     axisBtn.setAttribute("aria-pressed", String(log));
+  }
+  if (foldBtn) {
+    foldBtn.style.display = current === "time" ? "" : "none";
+    const on = timeSource.isTrackFold();
+    foldBtn.textContent = on ? "fold: auto" : "fold: off";
+    foldBtn.setAttribute("aria-pressed", String(on));
   }
   filters.style.display = current === "time" ? "flex" : "none";
   searchWrap.style.display = current === "time" ? "" : "none";
@@ -335,6 +380,102 @@ axisBtn?.addEventListener("click", () => {
   lane.fit(); // re-frame the biased fit in the new axis
   refreshChrome();
 });
+// ── temporal fold: full auto ladder, every scale ───────────────────────────
+// "auto" (the default) picks the fold level from READABILITY, per the
+// rg-merge principle: a scale change starts exactly when rendered elements
+// become unreadable. A fold level is eligible while its rows AND slot
+// columns render at ≥ 1rem on screen — the finest eligible level wins, and
+// the row count is whatever the viewport allows (never a fixed number).
+const YEAR_MS = FOLD_PERIOD_MS.year!;
+const LADDER = ["year", "month", "week", "day", "hour"] as const;
+type FoldLevel = (typeof LADDER)[number];
+const FOLD_SLOTS: Record<FoldLevel, number> = { year: 12, month: 31, week: 7, day: 24, hour: 60 };
+const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+let foldMode: "auto" | "none" = "auto";
+
+// last pointer position over the canvas: fold switches anchor on the instant
+// UNDER THE CURSOR, so a switch that fires mid zoom-gesture keeps the user's
+// zoom anchor fixed — the fold reads as the same zoom continuing, not a jump
+let lastPointer: { y: number; at: number } | null = null;
+for (const type of ["pointermove", "wheel"] as const) {
+  canvas.addEventListener(type, (e) => {
+    lastPointer = { y: (e as PointerEvent | WheelEvent).offsetY, at: performance.now() };
+  }, { passive: true });
+}
+const HYST = 0.85; // keep the current level until its rows drop below HYST·1rem
+const MIN_ROWS = 1.2; // below this a fold isn't folding anything — go continuous
+
+/** finest ladder level whose rows and slot columns stay readable, or null.
+ *  `keep` (the current level) gets the hysteresis allowance so tiny zoom
+ *  changes at a boundary don't flap between adjacent levels. */
+function foldLevelFor(spanMs: number, keep?: FoldLevel): FoldLevel | null {
+  const rem = remPx();
+  const v = lane.view;
+  const usableW = Math.max(40, v.width - 90); // ≈ width minus the fold ruler
+  let pick: FoldLevel | null = null;
+  for (const f of LADDER) {
+    const rows = spanMs / FOLD_PERIOD_MS[f]!;
+    const rowH = v.height / rows;
+    const slotW = usableW / FOLD_SLOTS[f];
+    const minRowH = f === keep ? rem * HYST : rem;
+    if (rows >= MIN_ROWS && rowH >= minRowH && slotW >= rem) pick = f;
+  }
+  return pick;
+}
+
+// orientation-preserving HARD switch (TODO.md: no morph yet): re-project the
+// instant at the viewport center and jump there with setView — a focus
+// animation would interpolate across two unrelated coordinate systems.
+// `spanMs` = the time window the new viewport should show; every transition
+// maps scale continuously, so auto switches feel like the same zoom
+// continuing in a new coordinate system.
+// debug ring buffer of fold transitions (QA aid, harmless in prod)
+const foldLog: unknown[] = [];
+(window as unknown as { __foldLog: unknown[] }).__foldLog = foldLog;
+function applyFold(next: TimelineFold, spanMs: number) {
+  const v = lane.view;
+  foldLog.push({ t: Math.round(performance.now()), from: timeSource.getFold(), next, spanMs: Math.round(spanMs), zoomY: +v.zoomY.toFixed(2), scrollY: +v.scrollY.toFixed(3) });
+  if (foldLog.length > 40) foldLog.shift();
+  // anchor: the cursor's screen-y when fresh (mid-gesture), else the center
+  const anchorY =
+    lastPointer && performance.now() - lastPointer.at < 1500 ? lastPointer.y : v.height / 2;
+  const tMs = timeSource.tMsForWorld(v.scrollY + anchorY / v.zoomY) ?? Date.now();
+  timeSource.setFold(next, { animateFrom: { ...v } }); // morph-lite: glyphs glide old→new
+  const anchorWorld = timeSource.worldForTMs(tMs);
+  let zoomY: number;
+  if (next !== "none") {
+    // readability clamp, not a count clamp: rows span [1, height/1rem] so
+    // every rendered row keeps ≥ 1rem after the switch
+    const rows = Math.min(Math.max(spanMs / FOLD_PERIOD_MS[next]!, 1.05), v.height / remPx());
+    zoomY = v.height / rows;
+  } else {
+    // world-span of the same window in the continuous axis's own units
+    // (exact on linear, symlog-aware on log)
+    const w1 = timeSource.worldForTMs(tMs - spanMs / 2);
+    const w2 = timeSource.worldForTMs(tMs + spanMs / 2);
+    zoomY = v.height / Math.max(Math.abs(w2 - w1), 1e-9);
+  }
+  // keep the anchored instant at the SAME screen y across the switch
+  lane.setView({ zoomY, scrollY: anchorWorld - anchorY / zoomY });
+  refreshChrome();
+}
+
+foldBtn?.addEventListener("click", () => {
+  // per-track folding on/off (on by default — folds whenever space allows)
+  timeSource.setTrackFold(!timeSource.isTrackFold());
+  refreshChrome();
+});
+
+// auto-fold watcher: acts only once the view SETTLES (a few unchanged
+// frames) — firing mid zoom-gesture or mid focus-animation would re-anchor
+// on a transient center and land the fold somewhere the user wasn't going
+// The GLOBAL fold ladder is retired: per-track folding (timeline.ts
+// trackFoldPos) folds each track independently whenever ITS space allows —
+// the rg rule applied per element, with no global mode switch at all. The
+// global fold machinery (applyFold/foldLevelFor/setFold) stays for the
+// manual API and tests but no watcher drives it.
+void applyFold; // referenced: kept for manual/global fold paths
+void foldLevelFor;
 seg.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-src]");
   if (!btn) return;
@@ -385,6 +526,7 @@ function doSearch() {
 }
 function focusHit(h: Hit) {
   lane.focus({ center: h.center, zoom: lane.view.height / h.scale });
+  timeSource.setPulse(h);
   hits = [];
   renderSuggest();
   searchEl.blur();
@@ -428,6 +570,7 @@ logBtn?.addEventListener("click", () => {
   refreshChrome();
 });
 refreshChrome();
+applyPrefs();
 
 // ── folder tree from any GitHub repo (default: torvalds/linux) ────────────
 interface GhEntry {

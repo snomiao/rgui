@@ -182,7 +182,8 @@
         transform: rotate(-15deg);
       }
       #logscale[aria-pressed="true"],
-      #axis[aria-pressed="true"] {
+      #axis[aria-pressed="true"],
+      #fold[aria-pressed="true"] {
         background: var(--accent);
         color: var(--bg);
         border-color: var(--accent);
@@ -419,6 +420,8 @@
           <option value="/lane/" selected>1D Lane</option>
           <option value="/cube/">3D Cube</option>
           <option value="/world/">3D World</option>
+          <option value="https://agent-yes.com/r/">agent-yes RGUI</option>
+          <option value="https://otoji.org/">otoji</option>
         </select>
       </div>
       <div class="seg" id="dataset" role="group" aria-label="dataset">
@@ -433,6 +436,14 @@
       <input id="repo" type="text" placeholder="owner/repo or GitHub URL" autocomplete="off" spellcheck="false" value="torvalds/linux" style="display: none;" />
       <span id="repostat"></span>
       <button class="icon-btn" id="axis" title="Toggle log / linear time axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log axis</button>
+      <button class="icon-btn" id="fold" title="Fold time into calendar-year rows (Jan–Dec across, one row per year)" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">fold: off</button>
+      <button class="icon-btn" id="prefs" title="Preferences" style="width: auto; border-radius: 7px; padding: 0 10px; font: 600 12px/1 ui-monospace, Menlo, monospace;">⚙</button>
+      <div id="prefsPanel" style="display: none; position: absolute; top: 44px; right: 12px; z-index: 40; background: rgba(24,24,28,0.96); border: 1px solid rgba(148,163,184,0.35); border-radius: 9px; padding: 10px 14px; font: 12px/1.9 ui-monospace, Menlo, monospace; color: #cbd5e0; min-width: 240px;">
+        <div style="font-weight: 700; margin-bottom: 4px;">Preferences</div>
+        <label style="display: block; cursor: pointer;"><input type="checkbox" id="prefAutoZoomOut" /> auto zoom-out on empty scroll</label>
+        <label style="display: block; cursor: pointer;"><input type="checkbox" id="prefGlide" checked /> fold transition animation</label>
+        <label style="display: block; cursor: pointer;"><input type="checkbox" id="prefHeat" checked /> density heat cells</label>
+      </div>
       <button class="icon-btn" id="logscale" title="Toggle symlog value axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log</button>
       <div class="grow"></div>
       <a id="wordmark" href="/">RGUI<span> · lane</span></a>

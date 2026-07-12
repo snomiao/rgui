@@ -8,7 +8,12 @@
  *   import rgui from "@snomiao/rgui";
  *   const viewer = rgui(canvas, { graph, rule: { collapsePx: 48 } });
  */
-export { createRgui, type Rgui, type RguiOptions } from "./rgui.js";
+export {
+  createRgui,
+  type Rgui,
+  type RguiOptions,
+  type AutoLayoutOptions,
+} from "./rgui.js";
 
 // core — rg math & models (pure, framework-agnostic)
 export {
@@ -39,7 +44,14 @@ export {
   type RgTheme,
   type RgThemeInput,
 } from "./core/theme.js";
-export { layoutGraph, type LayoutOptions } from "./core/layout.js";
+export {
+  layoutGraph,
+  layoutDenseGraph,
+  type LayoutOptions,
+  type DenseLayoutOptions,
+  type DenseLayoutRect,
+  type DenseLayoutResult,
+} from "./core/layout.js";
 export type {
   SummarizeFn,
   SummaryContent,

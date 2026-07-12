@@ -70,7 +70,12 @@ import {
   resolveOverlap,
   snapConnections,
 } from "./core/pack.js";
-import { layoutGraph, type LayoutOptions } from "./core/layout.js";
+import {
+  layoutDenseGraph,
+  layoutGraph,
+  type DenseLayoutOptions,
+  type LayoutOptions,
+} from "./core/layout.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
 import {
   resolveTheme,
@@ -277,8 +282,11 @@ export interface Rgui {
   /** selected node ids (click to select, shift+drag to box-select) */
   readonly selection: string[];
   setSelection(nodeIds: string[]): void;
-  /** programmatic viewport control (syncs d3-zoom state) */
-  setView(view: ViewTransform): void;
+  /** programmatic viewport control (syncs d3-zoom state). `animate` glides
+   * to the target (easeInOut pan + log-space zoom) instead of hard-switching —
+   * use it for focus/goto jumps so the user keeps spatial context. Any user
+   * zoom/pan gesture mid-flight cancels the glide. */
+  setView(view: ViewTransform, opts?: { animate?: boolean; durationMs?: number }): void;
   /** fit all nodes into the viewport with the given screen-px padding */
   fitView(paddingPx?: number): void;
   /** fit one node into the viewport with the given screen-px padding */
@@ -322,11 +330,12 @@ export interface Rgui {
    */
   rescaleNode(nodeId: string, scale: number): void;
   /**
-   * auto-layout by connection optimization (layered + barycenter). Pinned
-   * nodes stay put. Animates ~300ms, then fires onNodeMoveEnd per moved node
-   so hosts can broadcast the new positions.
+   * Auto-layout by connection optimization. The default layered mode keeps
+   * pinned nodes fixed. Dense mode contracts direct chains, snaps positions
+   * AND sizes, and relayouts the whole workflow. Animates ~300ms, then fires
+   * persistence callbacks for every changed position/size.
    */
-  autoLayout(opts?: LayoutOptions & { animate?: boolean }): void;
+  autoLayout(opts?: AutoLayoutOptions): void;
   /**
    * snap every node — POSITION and SIZE — to the MAIN visible grid at the
    * current scale; one call makes a generated/imported graph obey the snap
@@ -357,6 +366,13 @@ export interface Rgui {
   invalidate(): void;
   destroy(): void;
 }
+
+export type AutoLayoutOptions =
+  & { animate?: boolean }
+  & (
+    | ({ mode?: "layered" } & LayoutOptions)
+    | ({ mode: "dense" } & DenseLayoutOptions)
+  );
 
 type Hit =
   | { type: "node"; node: GraphNode }
@@ -571,6 +587,42 @@ export function createRgui(
     return { nodes, edges: graph.edges };
   }
   let dGraph: Graph = graph;
+
+  // one glide at a time; a user gesture (zoomBehavior event with a sourceEvent)
+  // cancels it so the animation never fights the wheel/drag
+  let flyRaf = 0;
+  function cancelFly() {
+    if (flyRaf) cancelAnimationFrame(flyRaf);
+    flyRaf = 0;
+  }
+  /** glide the viewport to a target transform: easeInOut on pan, log-space on
+   * zoom (equal zoom RATIOS per frame read as constant speed) */
+  function flyTo(to: ViewTransform, durationMs = 320) {
+    cancelFly();
+    const from = { x: view.x, y: view.y, k: view.k };
+    const lk0 = Math.log(from.k);
+    const lk1 = Math.log(to.k);
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const u = Math.min(1, (now - t0) / durationMs);
+      const e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2; // easeInOut
+      const k = Math.exp(lk0 + (lk1 - lk0) * e);
+      // interpolate the world point under screen-center, not raw x/y — raw
+      // translate lerp combined with changing k makes the camera swerve
+      const W = canvas.clientWidth;
+      const H = canvas.clientHeight;
+      const c0 = { x: (W / 2 - from.x) / from.k, y: (H / 2 - from.y) / from.k };
+      const c1 = { x: (W / 2 - to.x) / to.k, y: (H / 2 - to.y) / to.k };
+      const cx = c0.x + (c1.x - c0.x) * e;
+      const cy = c0.y + (c1.y - c0.y) * e;
+      sel.call(
+        zoomBehavior.transform,
+        zoomIdentity.translate(W / 2 - cx * k, H / 2 - cy * k).scale(k),
+      );
+      flyRaf = u < 1 ? requestAnimationFrame(step) : 0;
+    };
+    flyRaf = requestAnimationFrame(step);
+  }
 
   /** smooth-pan the viewport so the given world point lands center-screen */
   function panTo(cx: number, cy: number, durationMs = 280) {
@@ -2289,6 +2341,9 @@ export function createRgui(
       return !hitAt(fvx, fvy);
     })
     .on("zoom", (ev: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
+      // a USER gesture (wheel/drag → sourceEvent set) cancels any glide so the
+      // animation never fights the hand; programmatic frames have no sourceEvent
+      if (ev.sourceEvent) cancelFly();
       view = { x: ev.transform.x, y: ev.transform.y, k: ev.transform.k };
       invalidate();
     });
@@ -2485,19 +2540,49 @@ export function createRgui(
       }
       invalidate();
     },
-    autoLayout(opts?: LayoutOptions & { animate?: boolean }) {
-      const target = layoutGraph(graph, opts);
+    autoLayout(opts?: AutoLayoutOptions) {
+      const dense = opts?.mode === "dense";
+      const target = dense
+        ? layoutDenseGraph(graph, {
+            ...opts,
+            gridStep:
+              // Dense workflows use the next-finer readable lattice: branch
+              // gaps remain exactly one grid cell without becoming node-sized.
+              opts.gridStep ?? gridLevels(view.k, rule.minGridPx, rule.radix)[1]!.step,
+          }).nodes
+        : new Map(
+            [...layoutGraph(graph, opts)].map(([id, p]) => {
+              const n = graph.nodes.find((m) => m.id === id)!;
+              return [id, { ...p, w: n.w, h: nodeHeight(n) }] as const;
+            }),
+          );
       const moved = [...target].filter(([id, p]) => {
         const n = graph.nodes.find((m) => m.id === id);
-        return n && (n.x !== p.x || n.y !== p.y);
+        return n && (n.x !== p.x || n.y !== p.y || n.w !== p.w || nodeHeight(n) !== p.h);
       });
       if (!moved.length) return;
+      const resizedIds = new Set(
+        moved
+          .filter(([id, p]) => {
+            const n = graph.nodes.find((m) => m.id === id)!;
+            return n.w !== p.w || nodeHeight(n) !== p.h;
+          })
+          .map(([id]) => id),
+      );
       const finish = () => {
         for (const [id, p] of moved) {
           const n = graph.nodes.find((m) => m.id === id)!;
           n.x = p.x;
           n.y = p.y;
+          n.w = p.w;
+          n.h = p.h;
           options.onNodeMoveEnd?.(id, p);
+          if (resizedIds.has(id))
+            options.onNodeResizeEnd?.(id, {
+              w: p.w,
+              h: p.h,
+              scale: contentScale(n),
+            });
         }
         invalidate();
       };
@@ -2505,7 +2590,7 @@ export function createRgui(
       const start = new Map(
         moved.map(([id]) => {
           const n = graph.nodes.find((m) => m.id === id)!;
-          return [id, { x: n.x, y: n.y }] as const;
+          return [id, { x: n.x, y: n.y, w: n.w, h: nodeHeight(n) }] as const;
         }),
       );
       const t0 = performance.now();
@@ -2518,6 +2603,8 @@ export function createRgui(
           const s0 = start.get(id)!;
           n.x = s0.x + (p.x - s0.x) * e;
           n.y = s0.y + (p.y - s0.y) * e;
+          n.w = s0.w + (p.w - s0.w) * e;
+          n.h = s0.h + (p.h - s0.h) * e;
         }
         invalidate();
         if (u < 1) requestAnimationFrame(stepFrame);
@@ -2586,7 +2673,12 @@ export function createRgui(
       );
       return { x: mx, y: my };
     },
-    setView(v: ViewTransform) {
+    setView(v: ViewTransform, opts?: { animate?: boolean; durationMs?: number }) {
+      if (opts?.animate) {
+        flyTo(v, opts.durationMs);
+        return;
+      }
+      cancelFly();
       sel.call(
         zoomBehavior.transform,
         zoomIdentity.translate(v.x, v.y).scale(v.k),
