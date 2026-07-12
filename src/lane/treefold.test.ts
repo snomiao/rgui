@@ -118,6 +118,12 @@ describe("chooseTreeFold", () => {
     expect(chooseTreeFold(10, 10 * REM, W, REM * 1.25).mode).toBe("grid");
     expect(chooseTreeFold(12, 10 * REM, W, REM * 0.8).mode).toBe("list");
   });
+  test("uneven shares: the SMALLEST child must stay readable for list", () => {
+    // 4 children over 10rem is fine when equal (2.5rem each)…
+    expect(chooseTreeFold(4, 10 * REM, W, REM).mode).toBe("list");
+    // …but a 5% runt child (0.5rem) forces the fold
+    expect(chooseTreeFold(4, 10 * REM, W, REM, 0.05).mode).toBe("grid");
+  });
 });
 
 describe("bucketWeight", () => {

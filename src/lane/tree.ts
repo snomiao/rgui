@@ -23,13 +23,15 @@ import {
   KIND_COLOR,
   KIND_LABEL,
   KIND_ORDER,
-  NO_LEVEL,
+  bucketWeight,
+  chooseTreeFold,
   chunkRows,
   contentLevels,
   discloseLevel,
   heatRampColor,
   kindOf,
   srgbToOklch,
+  type TreeFoldMode,
 } from "./treefold.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
@@ -53,9 +55,9 @@ export interface TreeOptions {
   onUpdate?: () => void;
 }
 
-/** a content file spans this many world units at most (keeps layout balanced) */
+/** cap on lazily-loaded content lines kept per file */
 const MAX_FILE_UNITS = 120;
-const BYTES_PER_LINE = 45; // size → estimated line count (fixes weight up-front)
+const BYTES_PER_LINE = 45; // size → estimated line count (drives zoom depth)
 
 interface TNode {
   name: string;
@@ -91,7 +93,6 @@ const PAD_X = 10;
 const INDENT = 15;
 const MAX_INDENT_DEPTH = 12; // clamp indent so deep trees keep row width
 const HEADER_PX = 22; // fixed readable folder header when expanded
-const MIN_ROW = 6; // runs of thinner siblings fold into an aggregate strip
 const CULL = 24; // off-screen margin (px)
 const REM_PX = 16; // readability unit for the fold grid (≥1rem rule)
 const GRID_MIN_PX = 2 * REM_PX; // a thin run this tall folds into a grid
@@ -147,14 +148,24 @@ function dispShare(t: TNode, now: number): number {
   return t.shareFrom + (t.share - t.shareFrom) * e;
 }
 
+/**
+ * layout weight from CHEAP-LOCAL inputs only (the TODO.md contract): a
+ * file weighs its own size's log2-KB bucket, a directory weighs 1 + its
+ * immediate child count — valid here because build()/applyFsEvent always
+ * see a complete listing; a lazy TreeProvider must keep unlisted dirs at
+ * the bare 1 until their listing completes (pagination churn guard).
+ * Subtree aggregates (fileCount/totalSize) are display decoration and
+ * never feed layout.
+ */
+const localWeight = (isDir: boolean, childCount: number, ownSize: number): number =>
+  isDir ? 1 + childCount : bucketWeight(ownSize);
+
 function build(node: FileNode, depth: number): TNode {
   if (node.children) {
     const children = node.children.map((c) => build(c, depth + 1));
-    let weight = 1;
     let fileCount = 0;
     let totalSize = 0;
     for (const c of children) {
-      weight += c.weight;
       fileCount += c.fileCount;
       totalSize += c.totalSize;
     }
@@ -164,7 +175,7 @@ function build(node: FileNode, depth: number): TNode {
       ext: "",
       isDir: true,
       children,
-      weight,
+      weight: localWeight(true, children.length, 0),
       depth,
       fileCount,
       totalSize,
@@ -178,18 +189,16 @@ function build(node: FileNode, depth: number): TNode {
     };
   }
   const lines = node.content ? node.content.split("\n") : [];
-  // estimate line count from bytes when content isn't loaded yet, so the file's
-  // world-height (and thus zoomability) is fixed before any lazy fetch
-  const estLines = lines.length || Math.round((node.size ?? 0) / BYTES_PER_LINE);
+  const size = node.size ?? node.content?.length ?? 0;
   return {
     name: node.name,
     ext: extOf(node.name),
     isDir: false,
     children: [],
-    weight: estLines ? Math.min(estLines + 1, MAX_FILE_UNITS) : 1,
+    weight: localWeight(false, 0, size),
     depth,
     fileCount: 1,
-    totalSize: node.size ?? 0,
+    totalSize: size,
     lines,
     path: node.path ?? "",
     tried: !!node.content, // already have content → nothing to fetch
@@ -319,48 +328,44 @@ export function createTreeSource(
     return bounds;
   }
 
-  type Seg =
-    | { kind: "node"; c: TNode; a: number; b: number; i: number }
-    | {
-        kind: "run";
-        run: TNode[];
-        a: number;
-        b: number;
-        i0: number; // first child index of the run
-        files: number;
-        size: number;
-        grid: boolean;
-      };
+  // ── per-directory fold mode: the design's division ladder, hysteretic ──
+  // list (every child row readable) → grid (kind columns readable) → strip.
+  // chooseTreeFold gets a readability unit scaled by the previous mode
+  // (0.8 to stay list, 1.25 to re-enter it) so zoom jitter can't flap the
+  // mode at a boundary. Decisions use TARGET shares — the settled layout —
+  // never mid-glide display shares.
+  type DirMode = TreeFoldMode["mode"];
+  const modeCache = new WeakMap<TNode, DirMode>();
 
-  /** group child bounds into readable rows and fold runs */
-  function segment(t: TNode, bounds: Array<[TNode, number, number]>, width: number): Seg[] {
-    const segs: Seg[] = [];
-    let i = 0;
-    while (i < bounds.length) {
-      const [c, a, b] = bounds[i]!;
-      if (b - a >= MIN_ROW) {
-        segs.push({ kind: "node", c, a, b, i });
-        i++;
-        continue;
-      }
-      let files = 0;
-      let size = 0;
-      const run: TNode[] = [];
-      const i0 = i;
-      const rStart = a;
-      let end = b;
-      while (i < bounds.length && bounds[i]![2] - bounds[i]![1] < MIN_ROW) {
-        files += bounds[i]![0].fileCount;
-        size += bounds[i]![0].totalSize;
-        run.push(bounds[i]![0]);
-        end = bounds[i]![2];
-        i++;
-      }
-      const gridW = width - PAD_X - indentX(t.depth + 1) - GRID_GUTTER_PX;
-      const grid = end - rStart >= GRID_MIN_PX && gridW >= KIND_ORDER.length * REM_PX;
-      segs.push({ kind: "run", run, a: rStart, b: end, i0, files, size, grid });
+  interface DirLayout {
+    mode: DirMode;
+    headerB: number; // header bottom = children top
+    bounds: Array<[TNode, number, number]>; // list mode child bands
+  }
+
+  function treeFoldLayout(t: TNode, sy0: number, sy1: number, width: number): DirLayout {
+    const bandH = sy1 - sy0;
+    const headerB = sy0 + Math.min(HEADER_PX, bandH);
+    const contentH = sy1 - headerB;
+    const n = t.children.length;
+    if (!n) return { mode: "strip", headerB, bounds: [] };
+    let total = 0;
+    let min = Infinity;
+    for (const c of t.children) {
+      total += c.share;
+      if (c.share < min) min = c.share;
     }
-    return segs;
+    const minShare = total > 0 ? min / total : 1 / n;
+    const prev = modeCache.get(t) ?? "list";
+    const unit = REM_PX * (prev === "list" ? 0.8 : 1.25);
+    const gridW = width - PAD_X - indentX(t.depth + 1) - GRID_GUTTER_PX;
+    const m = chooseTreeFold(n, contentH, gridW, unit, minShare);
+    modeCache.set(t, m.mode);
+    return {
+      mode: m.mode,
+      headerB,
+      bounds: m.mode === "list" ? layoutChildren(t, headerB, contentH) : [],
+    };
   }
 
   function draw(ctx: CanvasRenderingContext2D, view: LaneView, env: LaneEnv) {
@@ -398,23 +403,22 @@ export function createTreeSource(
       return;
     }
 
-    // expanded: fixed readable header, children subdivide the remainder
-    const headerH = Math.min(HEADER_PX, bandH);
-    drawFolderSummary(ctx, t, sy0, sy0 + headerH, env, true);
+    // expanded: fixed readable header, children fill the remainder in the
+    // directory's fold mode (list / grid / strip — one decision per dir)
+    const L = treeFoldLayout(t, sy0, sy1, env.size.width);
+    drawFolderSummary(ctx, t, sy0, L.headerB, env, true);
     if (!t.children.length) return;
 
-    const top = sy0 + headerH;
-    const bounds = layoutChildren(t, top, sy1 - top);
-    for (const s of segment(t, bounds, env.size.width)) {
-      if (s.b < -CULL) continue;
-      if (s.a > H + CULL) break;
-      if (s.kind === "node") {
-        drawNode(ctx, s.c, s.a, s.b, view, env, H);
-      } else if (s.grid) {
-        drawFoldGrid(ctx, s.run, s.a, s.b, t.depth + 1, env);
-      } else {
-        drawAggStrip(ctx, s.a, s.b, t.depth + 1, s.run.length, s.files, s.size, env);
+    if (L.mode === "list") {
+      for (const [c, a, b] of L.bounds) {
+        if (b < -CULL) continue;
+        if (a > H + CULL) break;
+        drawNode(ctx, c, a, b, view, env, H);
       }
+    } else if (L.mode === "grid") {
+      drawFoldGrid(ctx, t.children, L.headerB, sy1, t.depth + 1, env);
+    } else {
+      drawAggStrip(ctx, L.headerB, sy1, t.depth + 1, t.children.length, t.fileCount, t.totalSize, env);
     }
   }
 
@@ -742,13 +746,15 @@ export function createTreeSource(
       const ry = top + r * rowH;
       if (ry + rowH < -2) continue;
       if (ry > H + 2) break;
-      // per-kind counts over this chunk: a file counts itself, a dir counts
-      // its immediate children (one readdir deep — the design's "直下 1 階層";
-      // deeper totals stay async decoration, never a layout input)
+      // per-kind counts = each row member's CONTENTS projection: a file
+      // counts itself, a complete dir counts its immediate children (one
+      // readdir deep), a complete-EMPTY dir contributes nothing — all-ghost
+      // row, never a fabricated count. (Unknown/partial dirs get an
+      // unknown-presence tint once a lazy TreeProvider exists.)
       const counts: Record<string, number> = {};
       for (let k = row.start; k < row.end; k++) {
         const n = run[k]!;
-        if (n.isDir && n.children.length) {
+        if (n.isDir) {
           for (const c of n.children) {
             const kb = kindOf(c.name, c.isDir);
             counts[kb] = (counts[kb] ?? 0) + 1;
@@ -851,46 +857,41 @@ export function createTreeSource(
     trail.push(t.name);
     const bandH = sy1 - sy0;
     if (!t.isDir || bandH < collapsePx || !t.children.length) return { trail, wa, wb };
-    const headerH = Math.min(HEADER_PX, bandH);
-    if (screenY < sy0 + headerH) return { trail, wa, wb };
+    const L = treeFoldLayout(t, sy0, sy1, width);
+    if (screenY < L.headerB) return { trail, wa, wb };
 
-    const top = sy0 + headerH;
-    const bounds = layoutChildren(t, top, sy1 - top);
     // world offsets from TARGET shares, matching the settled layout
     const prefix: number[] = [0];
     for (const c of t.children) prefix.push(prefix[prefix.length - 1]! + c.share);
+    const norm = prefix[prefix.length - 1]! || 1;
     const worldAt = (i0: number, i1: number): [number, number] => [
-      wa + (wb - wa) * prefix[i0]!,
-      wa + (wb - wa) * prefix[i1]!,
+      wa + ((wb - wa) * prefix[i0]!) / norm,
+      wa + ((wb - wa) * prefix[i1]!) / norm,
     ];
-    for (const s of segment(t, bounds, width)) {
-      if (screenY >= s.b) continue;
-      if (s.kind === "node") {
-        const [cwa, cwb] = worldAt(s.i, s.i + 1);
-        return hitTest(s.c, s.a, s.b, cwa, cwb, screenY, view, width, collapsePx, trail);
+    if (L.mode === "list") {
+      for (let i = 0; i < L.bounds.length; i++) {
+        const [c, a, b] = L.bounds[i]!;
+        if (screenY >= b) continue;
+        const [cwa, cwb] = worldAt(i, i + 1);
+        return hitTest(c, a, b, cwa, cwb, screenY, view, width, collapsePx, trail);
       }
-      if (s.grid) {
-        // grid run: land on the chunk row under the cursor; the caption
-        // header above the rows hits the whole run, not a fake first row
-        const { top: gTop, rows, rowH } = gridLayout(s.run, s.a, s.b);
-        if (screenY < gTop) {
-          const [cwa, cwb] = worldAt(s.i0, s.i0 + s.run.length);
-          trail.push(`⋯ ${s.run.length} more`);
-          return { trail, wa: cwa, wb: cwb };
-        }
+      return { trail, wa, wb };
+    }
+    if (L.mode === "grid") {
+      // land on the chunk row under the cursor; the caption header above
+      // the rows hits the whole directory, not a fake first row
+      const { top: gTop, rows, rowH } = gridLayout(t.children, L.headerB, sy1);
+      if (screenY >= gTop && rows.length) {
         const r = Math.min(rows.length - 1, Math.max(0, Math.floor((screenY - gTop) / (rowH || 1))));
         const row = rows[r];
         if (row) {
-          const [cwa, cwb] = worldAt(s.i0 + row.start, s.i0 + row.end);
+          const [cwa, cwb] = worldAt(row.start, row.end);
           trail.push(row.label);
           return { trail, wa: cwa, wb: cwb };
         }
       }
-      const [cwa, cwb] = worldAt(s.i0, s.i0 + s.run.length);
-      trail.push(`⋯ ${s.run.length} more`);
-      return { trail, wa: cwa, wb: cwb };
     }
-    return { trail, wa, wb };
+    return { trail, wa, wb }; // strip / grid header: the directory itself
   }
 
   function hitAt(screenY: number, view: LaneView): Hit {
@@ -925,9 +926,10 @@ export function createTreeSource(
     const walk = (t: TNode, len: number) => {
       if (len <= 0) return;
       if (!t.isDir) {
-        // loaded content can be finer than the weight estimate (weight caps
-        // at MAX_FILE_UNITS; lines don't) — zoom must reach the real lines
-        minLine = Math.min(minLine, len / Math.max(1, t.weight, t.lines.length));
+        // weight is now a layout bucket, not a line count — zoom depth
+        // targets the estimated (from bytes) or real loaded line count
+        const estLines = Math.round(t.totalSize / BYTES_PER_LINE);
+        minLine = Math.min(minLine, len / Math.max(1, estLines, t.lines.length));
         return;
       }
       for (const c of t.children) walk(c, len * c.share);
@@ -977,13 +979,14 @@ export function createTreeSource(
       }
     }
     assignShares(parent.children, now);
+    // ancestor refresh: weights stay LOCAL (1 + own child count — only the
+    // direct parent's can change); counts/sizes are display decoration
     for (let i = chain.length - 1; i >= 0; i--) {
       const d = chain[i]!;
-      d.weight = 1;
+      d.weight = localWeight(true, d.children.length, 0);
       d.fileCount = 0;
       d.totalSize = 0;
       for (const c of d.children) {
-        d.weight += c.weight;
         d.fileCount += c.fileCount;
         d.totalSize += c.totalSize;
       }

@@ -26,7 +26,8 @@ const ROOT: FileNode = {
   ],
 };
 
-const view = (height = 600, zoomY = 600, scrollY = 0.5): LaneView =>
+// scrollY=0 puts world [0,1] exactly on screen [0,600]
+const view = (height = 600, zoomY = 600, scrollY = 0): LaneView =>
   ({ height, zoomY, scrollY, width: 800 } as unknown as LaneView);
 
 describe("tree source — interval coordinates", () => {
