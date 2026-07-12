@@ -299,21 +299,46 @@ function parseHash() {
     zoomY: z != null && isFinite(+z) ? +z : null,
   };
 }
+// ── path-per-dataset routing: /lane/tree/ · /lane/time/ · /lane/signal/ ──
+// One app shell serves every path (vite rewrites the dataset paths to
+// lane/index.html; the build copies it into each subdir). The path names
+// the dataset; the hash keeps only the view (y/z). Legacy #src= links
+// still resolve, then canonicalize to the path form on the first write.
+const PATH_TO_SRC: Record<string, string> = { tree: "tree", time: "time", signal: "series" };
+const SRC_TO_PATH: Record<string, string> = { tree: "tree", time: "time", series: "signal" };
+const lanePath = (key: string) => `/lane/${SRC_TO_PATH[key] ?? key}/`;
+function srcFromPath(): string | null {
+  const m = /\/lane\/([a-z]+)\/?/.exec(location.pathname);
+  return m ? PATH_TO_SRC[m[1]!] ?? null : null;
+}
+
 const restored = parseHash();
-let current = restored.src ?? "tree";
+let current = srcFromPath() ?? restored.src ?? "tree";
 
 let hashTimer = 0;
 function writeHash() {
   const p = new URLSearchParams();
-  p.set("src", current);
   p.set("y", lane.view.scrollY.toPrecision(8));
   p.set("z", lane.view.zoomY.toPrecision(6));
-  history.replaceState(null, "", "#" + p.toString());
+  history.replaceState(null, "", lanePath(current) + "#" + p.toString());
 }
 function scheduleHash() {
   clearTimeout(hashTimer);
   hashTimer = window.setTimeout(writeHash, 250);
 }
+// back/forward across dataset paths: swap the source, re-apply the view
+window.addEventListener("popstate", () => {
+  const key = srcFromPath();
+  if (key && key !== current && sources[key]) {
+    current = key;
+    lane.setSource(sources[key]!);
+    refreshChrome();
+  }
+  const r = parseHash();
+  if (r.scrollY != null || r.zoomY != null) {
+    lane.setView({ scrollY: r.scrollY ?? undefined, zoomY: r.zoomY ?? undefined });
+  }
+});
 
 const lane = createLane(canvas, {
   source: sources[current]!,
@@ -594,6 +619,8 @@ seg.addEventListener("click", (e) => {
   const src = sources[key];
   if (!src) return;
   current = key;
+  // each dataset is its own path — switching is a real navigation entry
+  history.pushState(null, "", lanePath(key));
   lane.setSource(src);
   clearSearch();
   refreshChrome();

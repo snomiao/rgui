@@ -417,7 +417,9 @@
       <div class="demo-nav">
         <select id="demo-nav" aria-label="rgui demo switch">
           <option value="/">2D Graph</option>
-          <option value="/lane/" selected>1D Lane</option>
+          <option value="/lane/tree/" selected>1D Lane · Tree</option>
+          <option value="/lane/time/">1D Lane · Deep time</option>
+          <option value="/lane/signal/">1D Lane · Signal</option>
           <option value="/cube/">3D Cube</option>
           <option value="/world/">3D World</option>
           <option value="https://agent-yes.com/r/">agent-yes RGUI</option>
@@ -481,6 +483,12 @@
       document.querySelector("#demo-nav")?.addEventListener("change", (e) => {
         location.href = e.target.value;
       });
+      // reflect the current dataset path in the nav select
+      {
+        const nav = document.querySelector("#demo-nav");
+        const m = /^\/lane\/(tree|time|signal)\//.exec(location.pathname);
+        if (nav && m) nav.value = `/lane/${m[1]}/`;
+      }
     </script>
   </body>
 </html>
