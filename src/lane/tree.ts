@@ -23,7 +23,10 @@ import {
   KIND_COLOR,
   KIND_LABEL,
   KIND_ORDER,
+  NO_LEVEL,
   chunkRows,
+  contentLevels,
+  discloseLevel,
   heatRampColor,
   kindOf,
   srgbToOklch,
@@ -501,7 +504,9 @@ export function createTreeSource(
     // visible line window
     const i0 = Math.max(0, Math.floor((-2 - top) / lineH));
     const i1 = Math.min(lines.length - 1, Math.ceil((H + 2 - top) / lineH));
-    const textMode = lineH >= 8;
+    // full text only once every line is genuinely readable (≥ font height);
+    // the 0.8–13px band belongs to the minimap + progressive disclosure
+    const textMode = lineH >= 13;
     const gx = x + 8;
     const gutterW = textMode ? 30 : 0;
     const tx = gx + gutterW;
@@ -543,6 +548,45 @@ export function createTreeSource(
       ctx.fillStyle = isComment ? theme.textMuted : theme.textDim;
       ctx.fillText(fit(ctx, line || " ", right - tx - 6), tx, cy);
     }
+
+    // progressive disclosure over the minimap: structural anchor lines
+    // (indent level / md heading ladder) surface readable text as space
+    // grows — level 0 first, deeper levels once their lines fit the budget
+    if (!textMode && lineH >= 0.8) {
+      const levels = levelsOf(t);
+      const budget = Math.max(1, Math.floor((Math.min(bottom, H) - Math.max(top, 0)) / 12));
+      const L = discloseLevel(levels, i0, i1, budget);
+      if (L >= 0) {
+        ctx.font = "10px ui-monospace, Menlo, monospace";
+        ctx.textAlign = "left";
+        let lastBottom = -Infinity;
+        for (let i = i0; i <= i1; i++) {
+          if (levels[i]! > L) continue;
+          const ly = top + i * lineH;
+          if (ly < lastBottom) continue; // declutter: keep top-most
+          const text = fit(ctx, lines[i]!.trim(), right - tx - 6);
+          if (!text) continue;
+          const w = ctx.measureText(text).width;
+          const ix = tx + levels[i]! * 12; // indent mirrors the structure
+          // wash behind the label so it reads over the bars
+          ctx.fillStyle = withAlpha(theme.background as string, 0.72);
+          ctx.fillRect(ix - 2, ly - 5, w + 6, 12);
+          ctx.fillStyle = theme.textDim;
+          ctx.fillText(text, ix, ly + 1);
+          lastBottom = ly + 12;
+        }
+      }
+    }
+  }
+
+  // structural levels per line, cached on the node (invalidated with lines)
+  const levelCache = new WeakMap<TNode, { key: number; levels: number[] }>();
+  function levelsOf(t: TNode): number[] {
+    const hit = levelCache.get(t);
+    if (hit && hit.key === t.lines.length) return hit.levels;
+    const levels = contentLevels(t.lines, t.ext === "md" || t.ext === "markdown");
+    levelCache.set(t, { key: t.lines.length, levels });
+    return levels;
   }
 
   function drawPreview(

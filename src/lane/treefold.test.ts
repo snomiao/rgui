@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   KIND_ORDER,
+  NO_LEVEL,
   bucketWeight,
   chooseTreeFold,
   chunkRows,
+  contentLevels,
+  discloseLevel,
   heatRampColor,
   kindCounts,
   kindOf,
@@ -139,6 +142,35 @@ describe("shareIntervals", () => {
   test("degenerate weights fall back to equal shares", () => {
     expect(shareIntervals([0, 0])).toEqual([0.5, 0.5]);
     expect(shareIntervals([])).toEqual([]);
+  });
+});
+
+describe("progressive disclosure", () => {
+  test("markdown headings ladder to levels; body text never surfaces", () => {
+    const lv = contentLevels(["# a", "body", "## b", "### c", "", "#not-heading"], true);
+    expect(lv).toEqual([0, NO_LEVEL, 1, 2, NO_LEVEL, NO_LEVEL]);
+  });
+  test("code indent levels use the file's own indent unit", () => {
+    const lv = contentLevels(["fn a() {", "    one", "        two", "", "}"], false);
+    expect(lv).toEqual([0, 1, 2, NO_LEVEL, 0]);
+  });
+  test("tab indentation counts as one unit step", () => {
+    const lv = contentLevels(["top", "\tin", "\t\tdeep"], false);
+    expect(lv[0]).toBe(0);
+    expect(lv[1]).toBe(1);
+    expect(lv[2]).toBe(2);
+  });
+  test("discloseLevel unlocks deeper levels only within budget", () => {
+    // 2× level-0, 4× level-1, 8× level-2
+    const levels = [0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2];
+    expect(discloseLevel(levels, 0, 13, 1)).toBe(0); // first level always shows
+    expect(discloseLevel(levels, 0, 13, 2)).toBe(0);
+    expect(discloseLevel(levels, 0, 13, 6)).toBe(1);
+    expect(discloseLevel(levels, 0, 13, 14)).toBe(2);
+    expect(discloseLevel(levels, 0, 13, 13)).toBe(1);
+  });
+  test("window with no structural lines yields -1", () => {
+    expect(discloseLevel([NO_LEVEL, NO_LEVEL], 0, 1, 10)).toBe(-1);
   });
 });
 

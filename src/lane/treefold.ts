@@ -175,6 +175,82 @@ export function shareIntervals(weights: readonly number[]): number[] {
   return weights.map((w) => (Math.max(0, w) || 0) / total);
 }
 
+// ── progressive content disclosure (indent / heading levels) ───────────
+
+/**
+ * structural level per line, for zoom-progressive disclosure: level-0 lines
+ * surface first, deeper levels as space grows. Markdown uses its native
+ * heading ladder (# → 0, ## → 1, …; body text never surfaces early).
+ * Everything else uses indentation — the cheap universal proxy for
+ * structure — with the indent unit inferred from the file itself.
+ * Blank lines and non-heading md lines get NO_LEVEL.
+ */
+export const NO_LEVEL = 99;
+
+const leadingWidth = (line: string): number => {
+  let w = 0;
+  for (const ch of line) {
+    if (ch === " ") w += 1;
+    else if (ch === "\t") w += 4;
+    else break;
+  }
+  return w;
+};
+
+export function contentLevels(lines: readonly string[], isMarkdown: boolean): number[] {
+  if (isMarkdown) {
+    return lines.map((l) => {
+      const m = /^(#{1,6})\s/.exec(l);
+      return m ? m[1]!.length - 1 : NO_LEVEL;
+    });
+  }
+  // infer the indent unit: smallest positive leading width, clamped sane
+  let unit = Infinity;
+  for (const l of lines) {
+    if (!l.trim()) continue;
+    const w = leadingWidth(l);
+    if (w > 0 && w < unit) unit = w;
+  }
+  if (!Number.isFinite(unit)) unit = 2;
+  unit = Math.min(8, Math.max(2, unit));
+  return lines.map((l) => {
+    if (!l.trim()) return NO_LEVEL;
+    return Math.min(NO_LEVEL - 1, Math.floor(leadingWidth(l) / unit));
+  });
+}
+
+/**
+ * deepest structural level whose lines still fit the label budget — the
+ * ≥1rem rule turned inward: reveal level L+1 only once every line of
+ * level ≤ L+1 in the window can afford a readable label.
+ */
+export function discloseLevel(
+  levels: readonly number[],
+  i0: number,
+  i1: number,
+  budget: number,
+): number {
+  const cum: number[] = [];
+  for (let i = Math.max(0, i0); i <= Math.min(levels.length - 1, i1); i++) {
+    const lv = levels[i]!;
+    if (lv >= NO_LEVEL) continue;
+    cum[lv] = (cum[lv] ?? 0) + 1;
+  }
+  let total = 0;
+  let chosen = -1;
+  for (let l = 0; l < cum.length; l++) {
+    const c = cum[l] ?? 0;
+    if (c === 0) continue;
+    // a deeper level only unlocks if it still fits; the FIRST populated
+    // level always shows (overlap declutter thins it when over budget)
+    if (chosen >= 0 && total + c > budget) break;
+    total += c;
+    chosen = l;
+    if (total > budget) break;
+  }
+  return chosen;
+}
+
 // ── OKLCH heat ramp (shared with the timeline ramp's shape) ────────────
 
 const oklchCache = new Map<string, { L: number; C: number; H: number }>();
