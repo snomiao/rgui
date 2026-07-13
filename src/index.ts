@@ -13,6 +13,7 @@ export {
   type Rgui,
   type RguiOptions,
   type AutoLayoutOptions,
+  type PortRef,
 } from "./rgui.js";
 
 // core — rg math & models (pure, framework-agnostic)

@@ -86,8 +86,10 @@ export function panelLayout(
     let y: number;
     const anchor = p.anchor ?? "left";
     if (typeof anchor === "object") {
-      x = anchor.x;
-      y = anchor.y;
+      // clamp dragged anchors into the viewport: a position persisted from a
+      // wider/taller window must not strand the panel off-screen
+      x = Math.max(PANEL.margin, Math.min(anchor.x, size.width - PANEL.margin - w));
+      y = Math.max(PANEL.margin, Math.min(anchor.y, size.height - PANEL.margin - PANEL.headerH));
     } else {
       x = anchor === "left" ? PANEL.margin : size.width - PANEL.margin - w;
       y = stackY[anchor];

@@ -176,6 +176,11 @@ export interface RguiOptions {
    */
   onPanelMove?: (panel: Panel, anchor: { x: number; y: number }) => void;
   /**
+   * a panel header was clicked, toggling its collapsed state — persist it
+   * and pass it back via Panel.collapsed on the next run
+   */
+  onPanelToggle?: (panel: Panel, collapsed: boolean) => void;
+  /**
    * summarize rule: when a node is too small for its fields ("small") or
    * nodes merge into a pseudo-node ("pseudo"), rgui asks for compact
    * host-defined content and renders it screen-constant. Return null to
@@ -870,7 +875,10 @@ export function createRgui(
       else if (zArrow < 1) zArrow = Math.min(1, zArrow + 0.05);
       if (rendererKind === "webgpu") gpu?.render(view);
       renderer.render(view);
-      overlays.sync(dGraph, lastRg?.nodes ?? null, view, rule);
+      // panels are canvas chrome above nodes — cut them out of the HTML
+      // overlay layer so they stay visible and clickable over full-bleed
+      // node overlays (previews would otherwise bury them)
+      overlays.sync(dGraph, lastRg?.nodes ?? null, view, rule, lastPanelRects);
       if (debugEl) updateDebug();
       options.onFrame?.(view, lastRg);
     });
@@ -1803,6 +1811,7 @@ export function createRgui(
       if (!drag.moved) {
         // plain header click keeps its old meaning: collapse toggle
         drag.panel.collapsed = !drag.panel.collapsed;
+        options.onPanelToggle?.(drag.panel, drag.panel.collapsed);
       } else if (typeof drag.panel.anchor === "object") {
         options.onPanelMove?.(drag.panel, drag.panel.anchor);
       }

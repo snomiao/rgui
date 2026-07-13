@@ -74,6 +74,13 @@ export interface OverlayManager {
     visibleNodes: GraphNode[] | null,
     view: ViewTransform,
     rule: RgRule,
+    /**
+     * screen rects (CSS px) cut OUT of the overlay layer — canvas-native
+     * chrome (panels) that must stay visible and clickable above HTML
+     * overlays. Clipping also removes pointer hits, so presses over a
+     * cutout reach the canvas.
+     */
+    cutouts?: Array<{ x: number; y: number; w: number; h: number }>,
   ): void;
   destroy(): void;
 }
@@ -221,11 +228,34 @@ export function createOverlayManager(
     mounted.delete(id);
   }
 
+  /** cut panel-shaped holes so canvas chrome shows through (and gets clicks) */
+  let lastClip = "";
+  function applyCutouts(
+    cutouts: Array<{ x: number; y: number; w: number; h: number }> | undefined,
+    W: number,
+    H: number,
+  ) {
+    if (!layer) return;
+    // evenodd: outer viewport rect + one subpath per panel = holes
+    const holes = cutouts?.length
+      ? cutouts
+          .map((c) => `M${c.x} ${c.y}H${c.x + c.w}V${c.y + c.h}H${c.x}Z`)
+          .join(" ")
+      : "";
+    const clip = holes ? `path(evenodd, "M0 0H${W}V${H}H0Z ${holes}")` : "";
+    // sync runs every frame — only touch style when the geometry changed,
+    // so idle frames skip the style-recalc entirely
+    if (clip === lastClip) return;
+    lastClip = clip;
+    layer.style.clipPath = clip;
+  }
+
   function sync(
     graph: Graph,
     visibleNodes: GraphNode[] | null,
     view: ViewTransform,
     rule: RgRule,
+    cutouts?: Array<{ x: number; y: number; w: number; h: number }>,
   ) {
     const want = new Map(
       graph.nodes.filter((n) => n.overlay).map((n) => [n.id, n]),
@@ -241,6 +271,7 @@ export function createOverlayManager(
     const visible = new Set((visibleNodes ?? graph.nodes).map((n) => n.id));
     const W = canvas.clientWidth;
     const H = canvas.clientHeight;
+    applyCutouts(cutouts, W, H);
     let z = 0;
     for (const [id, n] of want) {
       const ov = n.overlay!;
