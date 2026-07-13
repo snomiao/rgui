@@ -238,6 +238,24 @@ const LINUX: Ev[] = [
 ];
 
 // tech & culture across world civilizations (yBP = 2026 − CE year; +BCE)
+// pandemics & great disasters — the human-scale punctuation marks that make
+// recent centuries legible (taku: "I don't see covid yet")
+const DISASTERS: Ev[] = [
+  { y: PRESENT_YEAR - 541, label: "Plague of Justinian", imp: 0.7, cat: "human", span: 8 },
+  { y: PRESENT_YEAR - 1347, label: "Black Death", imp: 0.86, cat: "human", detail: "~⅓ of Europe dies", span: 5 },
+  { ...dated(1755, 11, 1), label: "Lisbon earthquake", imp: 0.66, cat: "human" },
+  { ...dated(1815, 4, 10), label: "Tambora eruption", imp: 0.7, cat: "human", detail: "Year Without a Summer" },
+  { ...dated(1883, 8, 27), label: "Krakatoa eruption", imp: 0.66, cat: "human" },
+  { ...dated(1918, 3, 4), label: "Spanish flu pandemic", imp: 0.84, cat: "human", detail: "H1N1 · ~50M dead", span: 2 },
+  { ...dated(1981, 6, 5), label: "AIDS first reported", imp: 0.7, cat: "human" },
+  { ...dated(1986, 4, 26), label: "Chernobyl disaster", imp: 0.78, cat: "human" },
+  { ...dated(2003, 3, 12), label: "SARS outbreak", imp: 0.6, cat: "human" },
+  { ...dated(2004, 12, 26), label: "Indian Ocean tsunami", imp: 0.74, cat: "human" },
+  { ...dated(2011, 3, 11), label: "Tōhoku earthquake & tsunami", imp: 0.76, cat: "human", detail: "Fukushima meltdown" },
+  { ...dated(2014, 3, 23), label: "West African Ebola epidemic", imp: 0.62, cat: "human" },
+  { ...dated(2019, 12, 31), label: "COVID-19 pandemic", imp: 0.92, cat: "human", detail: "WHO declaration 2020-03-11", span: 3 },
+];
+
 const CIV: Ev[] = [
   // Mesopotamia · Egypt · Indus (Bronze-Age cradles)
   { y: PRESENT_YEAR + 3500, label: "Wheel invented", imp: 0.66, cat: "tech", detail: "Sumer / Mesopotamia", span: 150 },
@@ -528,7 +546,7 @@ export function createTimelineSource(
   opts: { logAxis?: boolean } = {},
 ): TimelineSource {
   let points: Ev[] = [
-    ...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE,
+    ...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE, ...DISASTERS,
   ].sort((a, b) => b.y - a.y);
   let byCat = new Map<Cat, Ev[]>();
   function reindex() {
@@ -698,11 +716,16 @@ export function createTimelineSource(
     if (!enabled.has("human")) return;
     const { top, b, y1, y2 } = ceWindow(view);
     if (top < 5 || top > 2020 || top - b > 600 || y2 <= y1) return;
+    // battles/wars/treaties/revolutions/massacres + pandemics/epidemics/
+    // outbreaks/earthquakes/tsunamis/eruptions; P580 (start) alternates
+    // with P585 because era-scale events (wars, COVID) carry a start time,
+    // not a point in time
     const q =
-      `SELECT ?l ?d WHERE { VALUES ?t { wd:Q178561 wd:Q198 wd:Q131569 wd:Q10931 wd:Q3199915 } ` +
-      `?e wdt:P31 ?t ; wdt:P585 ?d ; rdfs:label ?l . FILTER(LANG(?l)="en") ` +
+      `SELECT ?l ?d WHERE { VALUES ?t { wd:Q178561 wd:Q198 wd:Q131569 wd:Q10931 wd:Q3199915 ` +
+      `wd:Q12184 wd:Q44512 wd:Q3241045 wd:Q7944 wd:Q8070 wd:Q7692360 } ` +
+      `?e wdt:P31 ?t ; rdfs:label ?l . ?e wdt:P585|wdt:P580 ?d . FILTER(LANG(?l)="en") ` +
       `FILTER(?d >= "${y1}-01-01T00:00:00Z"^^xsd:dateTime && ?d < "${y2}-01-01T00:00:00Z"^^xsd:dateTime) } LIMIT 60`;
-    lazyFetch(`wde:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
+    lazyFetch(`wde2:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
       wdRows(data).map((r) => ({
         y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
         tMs: Date.parse(r.d.value),
@@ -768,23 +791,25 @@ export function createTimelineSource(
     );
   }
 
-  // solar & lunar eclipses (P585) — 4-7 a year, day-precise: the Cosmos
-  // track's calendar-fold showpiece
-  function fetchEclipses(view: LaneView) {
+  // dated astronomical phenomena — the whole P31/P279* subtree of Q751989:
+  // eclipses (4-7/yr, the calendar-fold showpiece) plus planetary transits,
+  // meteors & fireballs, impacts, solar storms… (probed 2026-07: 255 rows /
+  // 37 yr in ~2s). Day-precise via P585.
+  function fetchAstro(view: LaneView) {
     if (!enabled.has("cosmic")) return;
     const { top, b, y1, y2 } = ceWindow(view);
     if (top < -40 || top > 3000 || top - b > 30 || y2 <= y1) return;
     const q =
-      `SELECT ?l ?d WHERE { VALUES ?t { wd:Q3887 wd:Q1143154 wd:Q1142251 wd:Q1144073 wd:Q2685866 wd:Q2668072 } ` +
-      `?e wdt:P31 ?t ; wdt:P585 ?d ; rdfs:label ?l . FILTER(LANG(?l)="en") ` +
+      `SELECT ?l ?d WHERE { ?e wdt:P31/wdt:P279* wd:Q751989 . ` +
+      `?e wdt:P585 ?d ; rdfs:label ?l . FILTER(LANG(?l)="en") ` +
       `FILTER(?d >= "${y1}-01-01T00:00:00Z"^^xsd:dateTime && ?d < "${y2}-01-01T00:00:00Z"^^xsd:dateTime) } LIMIT 250`;
-    lazyFetch(`wdc:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
+    lazyFetch(`wda:${y1}-${y2}`, WD + encodeURIComponent(q), (data) =>
       wdRows(data).map((r) => ({
         y: (PRESENT_EPOCH - Date.parse(r.d.value) / 1000) / SPY,
         tMs: Date.parse(r.d.value),
         precision: { kind: "calendar", unit: "day" },
         label: r.l.value.slice(0, 56),
-        detail: "🌘 eclipse",
+        detail: /eclipse/i.test(r.l.value) ? "🌘 eclipse" : "🌌 astronomy",
         imp: 0.3,
         cat: "cosmic" as Cat,
         span: 0.5,
@@ -798,7 +823,7 @@ export function createTimelineSource(
     fetchWikidataEvents(view);
     fetchInventions(view);
     fetchSpecies(view);
-    fetchEclipses(view);
+    fetchAstro(view);
   }
 
   const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
