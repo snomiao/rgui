@@ -1084,6 +1084,7 @@ export function createTimelineSource(
     const topW = screenToWorldY(view, 0);
     const botW = screenToWorldY(view, H);
     foldLabelRects = []; // repopulated by whichever event path draws labels
+    drawnGlyphs.clear(); // repopulated with this frame's ACTUAL glyph pixels
     foldHeaderAxes.length = 0; // pseudo-x-axes queued by folding tracks
     heatCells.clear(); // per-cell densities, repopulated by folding tracks
 
@@ -1564,6 +1565,7 @@ export function createTimelineSource(
             ctx.arc(fp.x, fp.y, 2, 0, Math.PI * 2);
             ctx.fillStyle = color;
             ctx.fill();
+            drawnGlyphs.set(e, { x: fp.x, y: fp.y, r: 3 });
             if (inScale) {
               ctx.font = "12px ui-monospace, Menlo, monospace";
               ctx.textAlign = "left";
@@ -1590,6 +1592,7 @@ export function createTimelineSource(
         const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
         if (g.moving) anyGliding = true;
         const md = massDot(e);
+        drawnGlyphs.set(e, { x: g.x, y: g.y, r: md.r });
         if (future || !drawSplitDot(ctx, e, g.x, g.y, md.r)) {
           ctx.beginPath();
           ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
@@ -1632,6 +1635,7 @@ export function createTimelineSource(
         ctx.arc(g.x, g.y, 1.5 + mb * 0.5, 0, Math.PI * 2);
         ctx.fillStyle = withAlpha(mb ? massDot(e).fill : color, 0.5);
         ctx.fill();
+        drawnGlyphs.set(e, { x: g.x, y: g.y, r: 1.5 + mb * 0.5 });
         continue;
       }
       placed.push(sy);
@@ -1653,10 +1657,12 @@ export function createTimelineSource(
         ctx.moveTo(cx - 6, sy + 0.5);
         ctx.lineTo(cx + 6, sy + 0.5);
         ctx.stroke();
+        drawnGlyphs.set(e, { x: cx, y: sy, r: 6 });
       } else {
         const g = glidePos(e, "rail", cx, sy); // registers the glide origin
         if (g.moving) anyGliding = true;
         const md = massDot(e);
+        drawnGlyphs.set(e, { x: g.x, y: g.y, r: md.r });
         if (future || !drawSplitDot(ctx, e, g.x, g.y, md.r)) {
           ctx.beginPath();
           ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
@@ -1978,6 +1984,12 @@ export function createTimelineSource(
   /** label rects placed by the last folded draw — labels are hover targets
    *  too, not just their dots (codex review) */
   let foldLabelRects: { x0: number; x1: number; y: number; e: Ev }[] = [];
+  // where each event's glyph was ACTUALLY drawn this frame (glide/morph
+  // included) — eventAt hit-tests these first, so hover tracks the pixels on
+  // screen instead of an animation's destination (codex review). Cleared and
+  // repopulated every draw; events represented only by heat cells or tint
+  // never enter, keeping their (intentional) non-hoverability.
+  const drawnGlyphs = new Map<Ev, { x: number; y: number; r: number }>();
   // ── OKLCH heat-cells: per-cell event density in the fold grid ─────────────
   // The track already spends HUE on identity, so within a track density is
   // pure magnitude: the track's hue with an OKLCH lightness ramp (sequential,
@@ -2276,6 +2288,7 @@ export function createTimelineSource(
         // widens the tick a step per rung so big commits stay visible
         ctx.fillStyle = withAlpha(color, 0.85);
         ctx.fillRect(gx - 1 - mb * 0.5, gy - 1, 2 + mb, 2);
+        drawnGlyphs.set(e, { x: gx, y: gy, r: 2 + mb * 0.5 });
         continue;
       }
       const r = Math.min(3.2 + mb * 0.6, Math.max(1.5, g.laneH * 0.3 + mb * 0.5));
@@ -2284,6 +2297,7 @@ export function createTimelineSource(
       ctx.beginPath();
       ctx.arc(gx, gy, r, 0, Math.PI * 2);
       ctx.fill();
+      drawnGlyphs.set(e, { x: gx, y: gy, r });
       if (!foldAnim && g.laneH >= 11) labelCandidates.push({ e, x: g.x, y: g.y, r });
     }
     // greedy label declutter: important events label first; later (lesser)
@@ -2386,6 +2400,25 @@ export function createTimelineSource(
         if (sx >= l.x0 && sx <= l.x1 && Math.abs(sy - l.y) <= 7) {
           const title = l.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
           return { title, detail: l.e.detail, cat: l.e.cat };
+        }
+      }
+      // this frame's DRAWN glyphs win next: during a glide/morph the pixels
+      // on screen sit between coordinate systems, and recomputing an event's
+      // destination here would hover a position nothing is drawn at (codex
+      // review). Falls through for events with no glyph this frame.
+      {
+        let best: Ev | null = null;
+        let bestD = 9;
+        for (const [e, p] of drawnGlyphs) {
+          const d = Math.hypot(p.x - sx, p.y - sy) - Math.min(p.r, 5);
+          if (d < bestD) {
+            bestD = d;
+            best = e;
+          }
+        }
+        if (best) {
+          const title = best.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+          return { title, detail: best.detail, cat: best.cat };
         }
       }
       if (fold !== "none") {
