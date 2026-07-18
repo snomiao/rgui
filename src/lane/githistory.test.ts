@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { commitImp, commitTrack, createGitHistorySource, gqlRows, parseRepoSpec, windowCells } from "./githistory.js";
-import { createTimelineSource } from "./timeline.js";
+import { createTimelineSource, massBucket, massWeight } from "./timeline.js";
 
 describe("commitTrack", () => {
   test("Claude co-author trailer wins over human author", () => {
@@ -62,6 +62,34 @@ describe("windowCells", () => {
   });
   test("future-only bound clamps at now", () => {
     for (const c of windowCells(0.02, -0.01)) expect(c.bot).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("mass ladder", () => {
+  test("powers-of-16 rung boundaries (codex off-by-one catch)", () => {
+    expect(massBucket(undefined)).toBe(0);
+    expect(massBucket(1)).toBe(0);
+    expect(massBucket(15)).toBe(0);
+    expect(massBucket(16)).toBe(1);
+    expect(massBucket(255)).toBe(1);
+    expect(massBucket(256)).toBe(2);
+    expect(massBucket(4095)).toBe(2);
+    expect(massBucket(4096)).toBe(3);
+    expect(massBucket(1e9)).toBe(3); // capped top rung
+  });
+  test("invalid public input reads as unknown, never NaN", () => {
+    expect(massBucket(NaN)).toBe(0);
+    expect(massBucket(-5)).toBe(0);
+    expect(massBucket(Infinity)).toBe(0);
+    expect(massWeight(NaN)).toBe(1);
+    expect(massWeight(-5)).toBe(1);
+    expect(massWeight(undefined)).toBe(1);
+  });
+  test("cell weight: unknown = exactly legacy count; known bounded", () => {
+    expect(massWeight(undefined)).toBe(1);
+    expect(massWeight(1)).toBe(0.5); // a KNOWN one-liner weighs less than unknown
+    expect(massWeight(2000)).toBeGreaterThan(2);
+    expect(massWeight(1e8)).toBeLessThanOrEqual(6);
   });
 });
 

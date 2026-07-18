@@ -40,9 +40,15 @@ import {
 import { heatRampColor, srgbToOklch } from "./treefold.js";
 import { screenToWorldY, worldToScreenY, type LaneView } from "./view.js";
 
-/** "now" — present reference (Unix seconds, ~2026-07). */
-const PRESENT_EPOCH = 1783512000;
-const PRESENT_YEAR = 2026;
+/**
+ * "now" — present reference (Unix seconds), captured at module load. A
+ * hardcoded epoch made every commit since build week render as "future"
+ * (hollow dots below the now-line) in the git view; live capture keeps the
+ * boundary honest. Deep-time statics tolerate the drift trivially — their
+ * yBP scales dwarf any clock offset.
+ */
+const PRESENT_EPOCH = Math.floor(Date.now() / 1000);
+const PRESENT_YEAR = new Date().getUTCFullYear();
 const SPY = 31556952; // seconds per Julian year
 const DAY = 1 / 365.25;
 const HOUR = DAY / 24;
@@ -126,7 +132,30 @@ interface Ev {
   precision?:
     | { kind: "calendar"; unit: "year" | "month" | "day" | "hour" | "minute" }
     | { kind: "uncertainty"; beforeYears: number; afterYears: number };
+  /**
+   * conserved magnitude of the event (e.g. a commit's changed lines). Known
+   * mass scales the glyph on a small discrete ladder and brightens it on the
+   * track's heat ramp — the same vocabulary as the aggregated cells, so a
+   * heat cell is literally the merged dot of its events. Absent = neutral
+   * glyph and count-weight 1 in cells (never a fabricated average).
+   */
+  mass?: number;
 }
+
+// mass ladder: powers-of-16 rungs (≤15 lines · ≤255 · ≤4095 · beyond) — a
+// discrete, zoom-stable size/brightness step per rung, area-ish growth.
+// Invalid magnitudes (NaN/negative — mass is a public field) read as unknown.
+export const massBucket = (mass: number | undefined): number =>
+  mass === undefined || !Number.isFinite(mass) || mass <= 0
+    ? 0
+    : Math.max(0, Math.min(3, Math.floor(Math.log2(Math.max(1, mass)) / 4)));
+const MASS_DOT_R = [3, 3.7, 4.4, 5] as const;
+const MASS_RAMP_N = [1, 3, 8, 20] as const; // rung → heat-ramp count input
+/** cell weight: unknown (or invalid) mass counts exactly 1 (legacy count) */
+export const massWeight = (mass: number | undefined): number =>
+  mass === undefined || !Number.isFinite(mass) || mass < 0
+    ? 1
+    : Math.max(0.5, Math.min(6, Math.log2(1 + mass) / 5));
 
 /**
  * Effective ± uncertainty (years) for an event — its date PRECISION. Every
@@ -618,6 +647,19 @@ export function createTimelineSource(
     catMeta.map((m) => [m.cat, m.color]),
   ) as Record<Cat, string>;
   const colorOf = (cat: Cat) => catColor[cat] ?? "#888888";
+  // mass-known events grow on the discrete dot ladder and brighten on the
+  // track's heat ramp — the single-event end of the heat-cell vocabulary.
+  // Shared by every glyph path (per-track fold, continuous rail, global
+  // fold) so a fold switch never drops the magnitude encoding.
+  const massGlyph = (e: Ev, dark: boolean): { r: number; fill: string } => {
+    const mb = massBucket(e.mass);
+    return {
+      r: MASS_DOT_R[mb]!,
+      fill: mb
+        ? heatRampColor(colorOf(e.cat), MASS_RAMP_N[mb]!, dark)
+        : colorOf(e.cat),
+    };
+  };
   const eras = ds ? (ds.eras ?? []) : ERAS;
   const cycles = ds ? (ds.cycles ?? []) : CYCLES;
   const OLDEST = ds?.oldestYBP ?? BIG_BANG;
@@ -1215,8 +1257,9 @@ export function createTimelineSource(
       // never rendered as a number). Interval-state events skip both: they
       // are visible as row fragments instead.
       const cells = new Map<string, number>();
+      const ramp = new Map<string, number>(); // mass-weighted shade channel
       const presence = new Map<string, number>();
-      heatCells.set(cat, { level: lf, cells, presence });
+      heatCells.set(cat, { level: lf, cells, ramp, presence });
       const list = byCat.get(cat) ?? [];
       const centerRow = fv.projector.project(tCenter)!.rowIndex;
       const vis = visibleRowRange(lf, view, H, centerRow); // projected endpoints
@@ -1242,6 +1285,9 @@ export function createTimelineSource(
           const slot = Math.floor(Math.min(0.999999, pe.phase0) * div.slots);
           const key = `${pe.rowIndex}:${slot}`;
           cells.set(key, (cells.get(key) ?? 0) + 1);
+          // shade channel: mass-weighted so a 2k-line afternoon outglows a
+          // typo streak; the label/dot-suppression stay honest counts
+          ramp.set(key, (ramp.get(key) ?? 0) + massWeight(e.mass));
           continue;
         }
         if (lod !== "tint") continue; // interval renders as fragments
@@ -1303,7 +1349,7 @@ export function createTimelineSource(
         const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
         const cy1 = Math.min(Math.max(ya, yb), H);
         if (cy1 <= cy0) continue;
-        ctx.fillStyle = heatCellColor(cat, n, darkTheme);
+        ctx.fillStyle = heatCellColor(cat, Math.max(1, Math.round(ramp.get(key) ?? n)), darkTheme);
         const cwN = ((Math.min(slot + 1, div.slots) - slot) / div.slots) * contentW;
         ctx.fillRect(gx(slot / div.slots), cy0, Math.max(0, cwN), cy1 - cy0);
         // selective direct label: the count, only when the cell affords it
@@ -1419,6 +1465,8 @@ export function createTimelineSource(
   ) {
     const list = byCat.get(cat);
     if (!list) return;
+    const darkT = srgbToOklch(theme.background as string).L < 0.5;
+    const massDot = (e: Ev) => massGlyph(e, darkT);
     const color = colorOf(cat);
     const vis: Array<{ e: Ev; sy: number }> = [];
     for (const e of list) {
@@ -1505,15 +1553,16 @@ export function createTimelineSource(
         }
         const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
         if (g.moving) anyGliding = true;
+        const md = massDot(e);
         ctx.beginPath();
-        ctx.arc(g.x, g.y, 3, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
         if (future) {
           ctx.strokeStyle = color;
           ctx.lineWidth = 1.5;
           ctx.stroke();
           ctx.lineWidth = 1;
         } else {
-          ctx.fillStyle = color;
+          ctx.fillStyle = md.fill;
           ctx.fill();
         }
         if (inScale && !g.moving) {
@@ -1535,12 +1584,15 @@ export function createTimelineSource(
       const labeled =
         inScale && !placed.some((p) => Math.abs(p - sy) < LABEL_GAP);
       if (!labeled) {
-        // presence hint: a small dim dot so hidden events aren't invisible
+        // presence hint: a small dim dot so hidden events aren't invisible.
+        // Known mass keeps its rung (half-scale) so losing the label doesn't
+        // snap a big commit down to the same speck as a typo (codex review)
         const g = glidePos(e, "rail", cx, sy);
         if (g.moving) anyGliding = true;
+        const mb = massBucket(e.mass);
         ctx.beginPath();
-        ctx.arc(g.x, g.y, 1.5, 0, Math.PI * 2);
-        ctx.fillStyle = withAlpha(color, 0.5);
+        ctx.arc(g.x, g.y, 1.5 + mb * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = withAlpha(mb ? massDot(e).fill : color, 0.5);
         ctx.fill();
         continue;
       }
@@ -1566,15 +1618,16 @@ export function createTimelineSource(
       } else {
         const g = glidePos(e, "rail", cx, sy); // registers the glide origin
         if (g.moving) anyGliding = true;
+        const md = massDot(e);
         ctx.beginPath();
-        ctx.arc(g.x, g.y, 3, 0, Math.PI * 2);
+        ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
         if (future) {
           ctx.strokeStyle = color; // hollow dot marks a prediction
           ctx.lineWidth = 1.5;
           ctx.stroke();
           ctx.lineWidth = 1;
         } else {
-          ctx.fillStyle = color;
+          ctx.fillStyle = md.fill;
           ctx.fill();
         }
       }
@@ -1951,7 +2004,7 @@ export function createTimelineSource(
 
   /** per-frame cell counts per track (cat → rowIndex*64+slot → n), shared by
    *  the grid pass (fills + labels) and the event pass (dot suppression) */
-  const heatCells = new Map<Cat, { level: string; cells: Map<string, number>; presence: Map<string, number> }>();
+  const heatCells = new Map<Cat, { level: string; cells: Map<string, number>; ramp: Map<string, number>; presence: Map<string, number> }>();
   const HEAT_DOT_MAX = 3; // cells with more events than this drop their dots
 
   /** pseudo-x-axis specs queued by folding tracks for the sticky header */
@@ -2161,6 +2214,7 @@ export function createTimelineSource(
       }
     }
     ctx.textAlign = "left";
+    const darkG = srgbToOklch(theme.background as string).L < 0.5;
     const labelCandidates: { e: Ev; x: number; y: number; r: number }[] = [];
     for (const e of points) {
       if (!enabled.has(e.cat)) continue;
@@ -2176,14 +2230,17 @@ export function createTimelineSource(
           gy = from.y + (g.y - from.y) * animK;
         }
       }
+      const mb = massBucket(e.mass);
       if (rowH < 14) {
-        // collapsed row: plain density dots on the row centerline
+        // collapsed row: density dots on the row centerline — known mass
+        // widens the tick a step per rung so big commits stay visible
         ctx.fillStyle = withAlpha(color, 0.85);
-        ctx.fillRect(gx - 1, gy - 1, 2, 2);
+        ctx.fillRect(gx - 1 - mb * 0.5, gy - 1, 2 + mb, 2);
         continue;
       }
-      const r = Math.min(3.2, Math.max(1.5, g.laneH * 0.3));
-      ctx.fillStyle = foldAnim && !foldAnim.from.has(e) ? withAlpha(color, Math.min(1, animK)) : color;
+      const r = Math.min(3.2 + mb * 0.6, Math.max(1.5, g.laneH * 0.3 + mb * 0.5));
+      const fillC = mb ? massGlyph(e, darkG).fill : color;
+      ctx.fillStyle = foldAnim && !foldAnim.from.has(e) ? withAlpha(fillC, Math.min(1, animK)) : fillC;
       ctx.beginPath();
       ctx.arc(gx, gy, r, 0, Math.PI * 2);
       ctx.fill();

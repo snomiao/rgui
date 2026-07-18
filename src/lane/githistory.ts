@@ -243,10 +243,16 @@ function commitEvents(
     // changed lines (GraphQL mode) sharpen importance: a 2k-line feat commit
     // keeps its label at zooms where a one-liner has faded to a dot
     const lines = c.stats ? c.stats.additions + c.stats.deletions : null;
+    // merge commits report their whole merged diff — damp them so a routine
+    // merge doesn't render as the biggest event of the week
+    const merge = /^merge /i.test(subject);
+    const mass = lines == null ? undefined : merge ? Math.min(lines, 48) : lines;
+    // importance blends the DAMPED mass — a giant merge must not keep its
+    // label via imp while its glyph is capped (codex review)
     const imp =
-      lines == null
+      mass == null
         ? commitImp(subject)
-        : Math.min(0.9, commitImp(subject) + Math.log2(1 + lines) / 50);
+        : Math.min(0.9, commitImp(subject) + Math.log2(1 + mass) / 50);
     const sized = c.stats ? ` · +${c.stats.additions} −${c.stats.deletions}` : "";
     const spec = parseRepoSpec(repo);
     const disp = spec.ref ? `${spec.path}@${spec.ref}` : spec.path;
@@ -258,6 +264,7 @@ function commitEvents(
         label: subject,
         detail: `${disp} · ${author}${sized}`,
         imp,
+        mass,
         cat: repo,
         // commit timestamps are exact to the minute — a wider span would
         // paint half-day uncertainty bands over precise data at deep zoom
