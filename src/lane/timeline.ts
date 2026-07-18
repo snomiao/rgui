@@ -140,6 +140,14 @@ interface Ev {
    * glyph and count-weight 1 in cells (never a fabricated average).
    */
   mass?: number;
+  /**
+   * signed composition of `mass` (e.g. additions vs deletions). At readable
+   * glyph sizes the dot discloses into a two-tone bar — gains above the
+   * event's instant, losses below, proportional. Position carries the
+   * meaning (up/down), so the conventional green/red is redundant, not
+   * load-bearing (CVD-safe). Below the gate it stays the single mass dot.
+   */
+  split?: { add: number; del: number };
 }
 
 // mass ladder: powers-of-16 rungs (≤15 lines · ≤255 · ≤4095 · beyond) — a
@@ -660,6 +668,34 @@ export function createTimelineSource(
         : colorOf(e.cat),
     };
   };
+  // two-tone +/− disclosure: from rung 2 up (glyph ≥ ~4.4px) a split-known
+  // dot renders as a proportional bar — gains up, losses down. Returns false
+  // below the gate (or without split data) so callers fall back to the dot.
+  const SPLIT_MIN_BUCKET = 2;
+  const SPLIT_ADD = "#3fb950";
+  const SPLIT_DEL = "#f85149";
+  function drawSplitDot(
+    ctx: CanvasRenderingContext2D,
+    e: Ev,
+    x: number,
+    y: number,
+    r: number,
+  ): boolean {
+    const s = e.split;
+    if (!s || massBucket(e.mass) < SPLIT_MIN_BUCKET) return false;
+    const add = Number.isFinite(s.add) && s.add > 0 ? s.add : 0;
+    const del = Number.isFinite(s.del) && s.del > 0 ? s.del : 0;
+    const total = add + del;
+    if (!(total > 0)) return false;
+    const barH = 2 * r + 2;
+    const hUp = add === 0 ? 0 : Math.max(1, Math.round((add / total) * barH));
+    const hDn = del === 0 ? 0 : Math.max(1, barH - hUp);
+    ctx.fillStyle = SPLIT_ADD;
+    if (hUp) ctx.fillRect(x - 1.5, y - hUp, 3, hUp);
+    ctx.fillStyle = SPLIT_DEL;
+    if (hDn) ctx.fillRect(x - 1.5, y, 3, hDn);
+    return true;
+  }
   const eras = ds ? (ds.eras ?? []) : ERAS;
   const cycles = ds ? (ds.cycles ?? []) : CYCLES;
   const OLDEST = ds?.oldestYBP ?? BIG_BANG;
@@ -1554,16 +1590,18 @@ export function createTimelineSource(
         const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
         if (g.moving) anyGliding = true;
         const md = massDot(e);
-        ctx.beginPath();
-        ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
-        if (future) {
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-          ctx.lineWidth = 1;
-        } else {
-          ctx.fillStyle = md.fill;
-          ctx.fill();
+        if (future || !drawSplitDot(ctx, e, g.x, g.y, md.r)) {
+          ctx.beginPath();
+          ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
+          if (future) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          } else {
+            ctx.fillStyle = md.fill;
+            ctx.fill();
+          }
         }
         if (inScale && !g.moving) {
           ctx.font = "12px ui-monospace, Menlo, monospace";
@@ -1619,16 +1657,18 @@ export function createTimelineSource(
         const g = glidePos(e, "rail", cx, sy); // registers the glide origin
         if (g.moving) anyGliding = true;
         const md = massDot(e);
-        ctx.beginPath();
-        ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
-        if (future) {
-          ctx.strokeStyle = color; // hollow dot marks a prediction
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-          ctx.lineWidth = 1;
-        } else {
-          ctx.fillStyle = md.fill;
-          ctx.fill();
+        if (future || !drawSplitDot(ctx, e, g.x, g.y, md.r)) {
+          ctx.beginPath();
+          ctx.arc(g.x, g.y, md.r, 0, Math.PI * 2);
+          if (future) {
+            ctx.strokeStyle = color; // hollow dot marks a prediction
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.lineWidth = 1;
+          } else {
+            ctx.fillStyle = md.fill;
+            ctx.fill();
+          }
         }
       }
       ctx.font = "12px ui-monospace, Menlo, monospace";

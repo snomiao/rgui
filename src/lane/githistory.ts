@@ -254,6 +254,15 @@ function commitEvents(
         ? commitImp(subject)
         : Math.min(0.9, commitImp(subject) + Math.log2(1 + mass) / 50);
     const sized = c.stats ? ` · +${c.stats.additions} −${c.stats.deletions}` : "";
+    // +/− composition rides along, rescaled to the (possibly damped) mass so
+    // the split bar's total height matches the dot rung it replaces
+    const split =
+      c.stats && mass != null && lines
+        ? {
+            add: (c.stats.additions * mass) / lines,
+            del: (c.stats.deletions * mass) / lines,
+          }
+        : undefined;
     const spec = parseRepoSpec(repo);
     const disp = spec.ref ? `${spec.path}@${spec.ref}` : spec.path;
     return [
@@ -265,6 +274,7 @@ function commitEvents(
         detail: `${disp} · ${author}${sized}`,
         imp,
         mass,
+        split,
         cat: repo,
         // commit timestamps are exact to the minute — a wider span would
         // paint half-day uncertainty bands over precise data at deep zoom
