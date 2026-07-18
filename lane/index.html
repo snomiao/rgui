@@ -183,6 +183,7 @@
       }
       #logscale[aria-pressed="true"],
       #axis[aria-pressed="true"],
+      #ghtokenHelp[aria-pressed="true"],
       #fold[aria-pressed="true"] {
         background: var(--accent);
         color: var(--bg);
@@ -441,8 +442,7 @@
         <div id="suggest"></div>
       </div>
       <input id="repo" type="text" placeholder="owner/repo or GitHub URL" autocomplete="off" spellcheck="false" value="torvalds/linux" style="display: none;" />
-      <input id="ghtoken" type="password" placeholder="gh token?" autocomplete="off" spellcheck="false" title="Optional GitHub token — raises the API rate limit from 60 to 5,000 req/h" style="display: none; width: 90px;" />
-      <button class="icon-btn" id="ghtokenHelp" title="How to create a read-only token" style="display: none; font-size: 12px;">?</button>
+      <button class="icon-btn" id="ghtokenHelp" title="GitHub token — go deeper than the anonymous rate limit" style="display: none; font-size: 12px;">?</button>
       <div id="tokenPanel" style="display: none; position: absolute; top: 44px; left: 50%; transform: translateX(-50%); z-index: 40; background: rgba(24,24,28,0.96); border: 1px solid rgba(148,163,184,0.35); border-radius: 9px; padding: 12px 16px; font: 12px/1.7 ui-monospace, Menlo, monospace; color: #cbd5e0; max-width: 420px;">
         <div style="font-weight: 700; margin-bottom: 6px;">Go deeper with a read-only GitHub token</div>
         <div style="color: #91a9c7;">
@@ -455,7 +455,8 @@
           <li>Skip all other permissions, set a short expiry, Generate</li>
           <li>Paste it in the box — it stays in <b>this browser only</b> (localStorage) and is sent only to api.github.com</li>
         </ol>
-        <div style="color: #91a9c7;">Clear the box anytime to forget it.</div>
+        <input id="ghtoken" type="password" placeholder="paste token here" autocomplete="off" spellcheck="false" style="width: 100%; box-sizing: border-box; margin-top: 4px;" />
+        <div style="color: #91a9c7; margin-top: 6px;">Clear the box anytime to forget it.</div>
       </div>
       <span id="repostat"></span>
       <button class="icon-btn" id="axis" title="Toggle log / linear time axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log axis</button>

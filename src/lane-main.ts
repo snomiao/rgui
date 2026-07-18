@@ -471,7 +471,9 @@ function maybeShowTokenPanel() {
 }
 tokenHelpBtn?.addEventListener("click", () => {
   if (!tokenPanel) return;
-  tokenPanel.style.display = tokenPanel.style.display === "none" ? "" : "none";
+  const opening = tokenPanel.style.display === "none";
+  tokenPanel.style.display = opening ? "" : "none";
+  if (opening) ghTokenInput?.focus();
 });
 document.addEventListener("pointerdown", (e) => {
   if (!tokenPanel || tokenPanel.style.display === "none") return;
@@ -486,6 +488,7 @@ ghTokenInput?.addEventListener("change", () => {
     else localStorage.removeItem(GH_TOKEN_KEY);
   } catch { /* private mode */ }
   if (tokenPanel) tokenPanel.style.display = "none";
+  tokenHelpBtn?.setAttribute("aria-pressed", String(!!ghToken));
   // fresh source: rate-limited windows were marked attempted and would
   // otherwise never refetch; the new one also gets the deeper page chain
   installGitSource(gitRepos);
@@ -630,8 +633,12 @@ function refreshChrome() {
   const repoable = current === "tree" || current === "git";
   repoInput.style.display = repoable ? "" : "none";
   repoStat.style.display = repoable ? "" : "none";
-  if (ghTokenInput) ghTokenInput.style.display = repoable ? "" : "none";
-  if (tokenHelpBtn) tokenHelpBtn.style.display = repoable ? "" : "none";
+  // the token input lives INSIDE the tutorial panel; the toolbar carries
+  // only the "?" button, lit when a token is active
+  if (tokenHelpBtn) {
+    tokenHelpBtn.style.display = repoable ? "" : "none";
+    tokenHelpBtn.setAttribute("aria-pressed", String(!!ghToken));
+  }
   // one box, two views: remember each view's text and swap on dataset switch
   if (repoable && repoInput.dataset.view !== current && document.activeElement !== repoInput) {
     if (repoInput.dataset.view) repoInput.dataset[`text_${repoInput.dataset.view}`] = repoInput.value;
