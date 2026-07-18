@@ -66,9 +66,12 @@ const dated = (y: number, m: number, d: number) => ({
   precision: { kind: "calendar", unit: "day" } as const,
 });
 
-type Cat = "cosmic" | "bio" | "human" | "tech" | "repo" | "future" | "periodic";
+// Track key. The deep-time dataset uses the well-known set below; injected
+// datasets (see TimelineDataset) bring their own keys. "periodic" is the one
+// magic value — that track renders cycles instead of events.
+type Cat = string;
 
-interface CatMeta {
+export interface CatMeta {
   cat: Cat;
   label: string;
   color: string;
@@ -542,12 +545,68 @@ export interface TimelineSource extends LaneSource {
   ): { title: string; detail?: string; cat: string } | null;
 }
 
+/** an event as timeline datasets author them (see Ev for field docs) */
+export type TimelineEvent = Ev;
+export type TimelineEra = Era;
+export type TimelineCycle = Cycle;
+
+/**
+ * A swappable dataset behind the timeline engine. The engine (tracks, symlog
+ * axis, calendar folds, heat cells, declutter, search) is generic; what the
+ * deep-time demo hard-codes — track list, static events, eras, cycles, axis
+ * reach, lazy fetchers — arrives here instead. The `fetch` hook runs once per
+ * draw; anything it ingests streams in like the deep-time feeds do. The lib
+ * itself still does no I/O — datasets that fetch live in demo/host code.
+ */
+export interface TimelineDataset {
+  title: string;
+  tracks: CatMeta[];
+  statics: Ev[];
+  eras?: Era[];
+  cycles?: Cycle[];
+  /** oldest years-before-present the axis reaches (default: Big Bang) */
+  oldestYBP?: number;
+  /** years after present the axis extends to (default 1e10) */
+  futureYears?: number;
+  /** per-frame lazy-loading hook (demo/host side — the engine never fetches) */
+  fetch?: (view: LaneView, api: TimelineFetchApi) => void;
+}
+
+/** helpers the engine lends a dataset's fetch hook */
+export interface TimelineFetchApi {
+  /** fetch a URL once per key (dedup + in-flight cap) and ingest the result */
+  lazyFetch(key: string, url: string, mapFn: (data: unknown) => Ev[]): void;
+  /** visible window in years-before-present (top = older edge) */
+  winYBP(view: LaneView): { top: number; bot: number };
+  /** ISO timestamp of a years-before-present offset */
+  isoOf(yBP: number): string;
+  /** years-before-present of a Unix-ms instant */
+  ybpOfMs(tMs: number): number;
+  /** is this track currently toggled on? */
+  enabled(cat: string): boolean;
+  /** push events straight in (for non-HTTP sources the host already has) */
+  ingest(evs: Ev[]): void;
+}
+
 export function createTimelineSource(
-  opts: { logAxis?: boolean } = {},
+  opts: { logAxis?: boolean; dataset?: TimelineDataset } = {},
 ): TimelineSource {
-  let points: Ev[] = [
-    ...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE, ...DISASTERS,
-  ].sort((a, b) => b.y - a.y);
+  const ds = opts.dataset;
+  let points: Ev[] = (
+    ds
+      ? [...ds.statics]
+      : [...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE, ...DISASTERS]
+  ).sort((a, b) => b.y - a.y);
+  // dataset-scoped vocabulary — the deep-time tables are just the default
+  const catMeta = ds?.tracks ?? CAT_META;
+  const catColor = Object.fromEntries(
+    catMeta.map((m) => [m.cat, m.color]),
+  ) as Record<Cat, string>;
+  const colorOf = (cat: Cat) => catColor[cat] ?? "#888888";
+  const eras = ds ? (ds.eras ?? []) : ERAS;
+  const cycles = ds ? (ds.cycles ?? []) : CYCLES;
+  const OLDEST = ds?.oldestYBP ?? BIG_BANG;
+  const FUT_HORIZON = ds?.futureYears ?? FUTURE_HORIZON;
   let byCat = new Map<Cat, Ev[]>();
   function reindex() {
     byCat = new Map();
@@ -817,7 +876,19 @@ export function createTimelineSource(
     );
   }
 
+  const fetchApi: TimelineFetchApi = {
+    lazyFetch,
+    winYBP,
+    isoOf: iso,
+    ybpOfMs: (tMs) => (PRESENT_EPOCH - tMs / 1000) / SPY,
+    enabled: (cat) => enabled.has(cat),
+    ingest,
+  };
   function maybeFetch(view: LaneView) {
+    if (ds) {
+      ds.fetch?.(view, fetchApi);
+      return;
+    }
     fetchLinux(view);
     fetchLaunches(view);
     fetchWikidataEvents(view);
@@ -826,7 +897,7 @@ export function createTimelineSource(
     fetchAstro(view);
   }
 
-  const enabled = new Set<Cat>(CAT_META.map((m) => m.cat));
+  const enabled = new Set<Cat>(catMeta.map((m) => m.cat));
 
   // ── axis transform ────────────────────────────────────────────────────────
   // LOG (default): symlog centred at "now" — worldY = ∓log10(1+|yBP|/LIN), so
@@ -868,7 +939,7 @@ export function createTimelineSource(
   function trackDemand(cat: Cat, view: LaneView): number {
     if (cat === "periodic") {
       let c = 0;
-      for (const cy of CYCLES) {
+      for (const cy of cycles) {
         const px = cy.period * view.zoomY;
         if (px >= 9 && px <= view.height * 1.6) c++;
       }
@@ -892,7 +963,7 @@ export function createTimelineSource(
   const W_MAX = 4;
   const DEMAND_HALF = 1.3; // demand at which a track reaches half its extra width
   const activeTracks = (view: LaneView) => {
-    const active = CAT_META.filter((m) => enabled.has(m.cat));
+    const active = catMeta.filter((m) => enabled.has(m.cat));
     const weights = active.map((m) => {
       const D = trackDemand(m.cat, view);
       return W_MIN + (W_MAX - W_MIN) * (D / (D + DEMAND_HALF));
@@ -1033,7 +1104,7 @@ export function createTimelineSource(
     theme: RgTheme,
     H: number,
   ) {
-    for (const era of ERAS) {
+    for (const era of eras) {
       const yTop = worldToScreenY(view, worldOf(era.from));
       const yBot = worldToScreenY(view, worldOf(era.to));
       if (yBot < -2 || yTop > H + 2) continue;
@@ -1194,7 +1265,7 @@ export function createTimelineSource(
         // perceptible floor + bounded ramp: the conserved p can be ~1e-4 for
         // exactly the events tint exists for (codex review P0) — a tint-only
         // event must never be invisible; magnitude still modulates above it
-        ctx.fillStyle = withAlpha(CAT_COLOR[cat], 0.07 + 0.23 * (1 - Math.exp(-p * 12)));
+        ctx.fillStyle = withAlpha(colorOf(cat), 0.07 + 0.23 * (1 - Math.exp(-p * 12)));
         const cwP = ((Math.min(slot + 1, div.slots) - slot) / div.slots) * contentW;
         ctx.fillRect(gx(slot / div.slots), cy0, Math.max(0, cwP), cy1 - cy0);
       }
@@ -1328,7 +1399,7 @@ export function createTimelineSource(
   ) {
     const list = byCat.get(cat);
     if (!list) return;
-    const color = CAT_COLOR[cat];
+    const color = colorOf(cat);
     const vis: Array<{ e: Ev; sy: number }> = [];
     for (const e of list) {
       const wy = worldOf(e.y);
@@ -1525,7 +1596,7 @@ export function createTimelineSource(
         worldToScreenY(view, worldOf(midYBP)) -
           worldToScreenY(view, worldOf(midYBP + c.period)),
       );
-    const active = CYCLES.filter((c) => {
+    const active = cycles.filter((c) => {
       const px = localPx(c);
       return px >= 6 && px <= H * 1.6;
     });
@@ -1541,7 +1612,7 @@ export function createTimelineSource(
     active.forEach((c, i) => {
       const cx = x0 + i * sub + sub / 2;
       const lo = Math.max(botYBP, c.to ?? 0);
-      const hi = Math.min(topYBP, c.from ?? BIG_BANG);
+      const hi = Math.min(topYBP, c.from ?? OLDEST);
       ctx.strokeStyle = withAlpha(c.color, 0.7);
       ctx.lineWidth = 1;
       let n = 0;
@@ -1782,7 +1853,7 @@ export function createTimelineSource(
     const x = FOLD_X0 + p.phase0 * usableW;
     const rowTop = worldToScreenY(view, p.rowIndex - 0.5);
     if (rowH < 14) return { x, y: rowTop + rowH / 2, p, laneH: 0 };
-    const cats = CAT_META.filter((m) => m.cat !== "periodic" && enabled.has(m.cat));
+    const cats = catMeta.filter((m) => m.cat !== "periodic" && enabled.has(m.cat));
     const lane = Math.max(0, cats.findIndex((m) => m.cat === e.cat));
     const laneH = (rowH - 4) / Math.max(1, cats.length);
     return { x, y: rowTop + 2 + lane * laneH + laneH / 2, p, laneH };
@@ -1804,7 +1875,7 @@ export function createTimelineSource(
   // (Conversion + ramp shared with the tree fold — treefold.ts owns them.)
   /** cell fill for `count` events in a category cell, per theme surface */
   const heatCellColor = (cat: Cat, count: number, darkTheme: boolean): string =>
-    heatRampColor(CAT_COLOR[cat], count, darkTheme);
+    heatRampColor(colorOf(cat), count, darkTheme);
   // ── precision-aware LOD: point → interval → tint ──────────────────────────
   // An event whose precision window outgrows the view stops being a point:
   // ~a cell wide → interval (row fragments); beyond the viewport → tint
@@ -2075,7 +2146,7 @@ export function createTimelineSource(
       if (!enabled.has(e.cat)) continue;
       const g = foldGlyphPos(e, view);
       if (!g || g.p.rowIndex < yearTop - 1 || g.p.rowIndex > yearBot + 1) continue;
-      const color = CAT_COLOR[e.cat];
+      const color = colorOf(e.cat);
       let gx = g.x;
       let gy = g.y;
       if (foldAnim) {
@@ -2162,8 +2233,8 @@ export function createTimelineSource(
   }
 
   return {
-    title: "deep time",
-    categories: CAT_META,
+    title: ds?.title ?? "deep time",
+    categories: catMeta,
     isEnabled: (cat) => enabled.has(cat),
     setEnabled(cat, on) {
       on ? enabled.add(cat) : enabled.delete(cat);
@@ -2177,9 +2248,9 @@ export function createTimelineSource(
         s.add(e.label);
         if (e.detail) s.add(e.detail);
       }
-      for (const m of CAT_META) s.add(m.label);
-      for (const era of ERAS) s.add(era.label);
-      for (const c of CYCLES) s.add(c.label);
+      for (const m of catMeta) s.add(m.label);
+      for (const era of eras) s.add(era.label);
+      for (const c of cycles) s.add(c.label);
       return [...s];
     },
     setTranslate(fn) {
@@ -2270,7 +2341,7 @@ export function createTimelineSource(
               label: e.label,
               detail: e.detail,
               cat: e.cat,
-              color: CAT_COLOR[e.cat],
+              color: colorOf(e.cat),
               center: p.rowIndex,
               scale: 1.6,
               phase: p.phase0,
@@ -2282,7 +2353,7 @@ export function createTimelineSource(
         label: e.label,
         detail: e.detail,
         cat: e.cat,
-        color: CAT_COLOR[e.cat],
+        color: colorOf(e.cat),
         center: worldOf(e.y),
         scale: ctxWorld(e),
       }));
@@ -2293,8 +2364,8 @@ export function createTimelineSource(
         return { min: r.min - 0.5, max: r.max + 0.5 };
       }
       return {
-        min: worldOf(BIG_BANG) * 1.01,
-        max: worldOf(-FUTURE_HORIZON) * 1.01,
+        min: worldOf(OLDEST) * 1.01,
+        max: worldOf(-FUT_HORIZON) * 1.01,
       };
     },
     // bias the initial fit toward the PAST: frame Big Bang→now plus a thin
@@ -2305,7 +2376,7 @@ export function createTimelineSource(
         return { min: r.min - 0.5, max: r.max + 0.5 };
       }
       return {
-        min: worldOf(BIG_BANG) * 1.01,
+        min: worldOf(OLDEST) * 1.01,
         max: logAxis ? 2.5 : 0,
       };
     },
@@ -2449,7 +2520,7 @@ export function createTimelineSource(
         return `${new Date(clipped).toISOString()} · unix_ms ${tMs.toFixed(6)}`;
       }
       const yBP = yBPof(cursorWorld);
-      if (yBP > BIG_BANG) return "before time";
+      if (yBP > OLDEST) return "before time";
       if (yBP < 0) return `in ${fmtDur(-yBP)}`; // future
       if (yBP >= 1e6) return fmtLabel(yBP, 1e6);
       if (yBP >= 1) return fmtLabel(yBP, 1);

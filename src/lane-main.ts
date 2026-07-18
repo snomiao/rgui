@@ -3,6 +3,7 @@
  * Dogfoods src/lane exactly as a consumer would: two 1-D datasets (a synthetic
  * folder tree and a synthetic time series) behind one dataset-blind engine.
  */
+import { createAgentsSource } from "./lane/agents.js";
 import { createLane, type LaneSource } from "./lane/lane.js";
 import { createTimelineSource } from "./lane/timeline.js";
 import type { TimelineFold, TimelineSource } from "./lane/timeline.js";
@@ -234,6 +235,7 @@ const buildSeries = () =>
   });
 
 const timeSource: TimelineSource = createTimelineSource();
+const agentsSource: TimelineSource = createAgentsSource();
 const treeSource = createTreeSource(genTree(0x51a1));
 
 // ── lazy provider demo: the same generated repo behind a paginated, ────────
@@ -282,8 +284,16 @@ const lazyTreeSource = createLazyTreeSource(demoProvider(genTree(0x51a1)), {
 const sources: Record<string, LaneSource> = {
   tree: treeSource,
   time: timeSource,
+  agents: agentsSource,
   series: buildSeries(),
 };
+// timeline-engine sources share their chrome (filters, fold, axis, search);
+// whatever backs `current` right now is the one the chrome talks to
+const timelines: Record<string, TimelineSource> = {
+  time: timeSource,
+  agents: agentsSource,
+};
+const activeTimeline = (): TimelineSource | null => timelines[current] ?? null;
 // the demo trees mutate/materialize asynchronously — repaint on change
 treeSource.setOnUpdate(() => lane.invalidate());
 lazyTreeSource.setOnUpdate(() => lane.invalidate());
@@ -304,8 +314,8 @@ function parseHash() {
 // lane/index.html; the build copies it into each subdir). The path names
 // the dataset; the hash keeps only the view (y/z). Legacy #src= links
 // still resolve, then canonicalize to the path form on the first write.
-const PATH_TO_SRC: Record<string, string> = { tree: "tree", time: "time", signal: "series" };
-const SRC_TO_PATH: Record<string, string> = { tree: "tree", time: "time", series: "signal" };
+const PATH_TO_SRC: Record<string, string> = { tree: "tree", time: "time", signal: "series", agents: "agents" };
+const SRC_TO_PATH: Record<string, string> = { tree: "tree", time: "time", series: "signal", agents: "agents" };
 const lanePath = (key: string) => `/lane/${SRC_TO_PATH[key] ?? key}/`;
 function srcFromPath(): string | null {
   const m = /\/lane\/([a-z]+)\/?/.exec(location.pathname);
@@ -359,27 +369,37 @@ timeSource.setOnUpdate(() => {
   lane.invalidate();
   void translateNew();
 });
+// commit subjects stay English — feeding hundreds of live-fetched subjects
+// through the on-device translator would swamp it for little gain
+agentsSource.setOnUpdate(() => lane.invalidate());
 
 // ── dataset switcher ──────────────────────────────────────────────────────
 const seg = document.querySelector<HTMLDivElement>("#dataset")!;
 const logBtn = document.querySelector<HTMLButtonElement>("#logscale");
 const filters = document.querySelector<HTMLDivElement>("#filters")!;
 
-// event-type filter chips (deep-time view)
-for (const c of timeSource.categories) {
-  const chip = document.createElement("button");
-  chip.className = "chip";
-  chip.type = "button";
-  chip.dataset.cat = c.cat;
-  chip.setAttribute("aria-pressed", "true");
-  chip.innerHTML = `<span class="swatch" style="background:${c.color}"></span>${c.label}`;
-  chip.addEventListener("click", () => {
-    const on = chip.getAttribute("aria-pressed") !== "true";
-    chip.setAttribute("aria-pressed", String(on));
-    timeSource.setEnabled(c.cat, on);
-    lane.invalidate();
-  });
-  filters.appendChild(chip);
+// track filter chips — rebuilt when the active timeline changes (each
+// timeline dataset brings its own track list; toggle state lives in the
+// source, so a rebuild reflects it instead of resetting it)
+let chipsFor: TimelineSource | null = null;
+function buildFilterChips(tl: TimelineSource) {
+  filters.innerHTML = "";
+  for (const c of tl.categories) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.type = "button";
+    chip.dataset.cat = c.cat;
+    chip.setAttribute("aria-pressed", String(tl.isEnabled(c.cat)));
+    chip.innerHTML = `<span class="swatch" style="background:${c.color}"></span>${c.label}`;
+    chip.addEventListener("click", () => {
+      const on = chip.getAttribute("aria-pressed") !== "true";
+      chip.setAttribute("aria-pressed", String(on));
+      tl.setEnabled(c.cat, on);
+      lane.invalidate();
+    });
+    filters.appendChild(chip);
+  }
+  chipsFor = tl;
 }
 
 const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
@@ -452,8 +472,10 @@ function setTreeLive(on: boolean) {
 
 function applyPrefs() {
   lane.setAutoZoomOut(prefs.autoZoomOut);
-  timeSource.setGlide(prefs.glide);
-  timeSource.setHeatCells(prefs.heat);
+  for (const tl of Object.values(timelines)) {
+    tl.setGlide(prefs.glide);
+    tl.setHeatCells(prefs.heat);
+  }
   setTreeLive(prefs.treeLive);
   // lazy demo swaps which source backs the "tree" slot (GitHub-loaded trees
   // installed via the repo box override this until the pref is re-toggled)
@@ -486,25 +508,27 @@ bindPref("#prefHeat", "heat");
 bindPref("#prefTreeLive", "treeLive");
 bindPref("#prefTreeLazy", "treeLazy");
 function refreshChrome() {
+  const tl = activeTimeline();
+  if (tl && chipsFor !== tl) buildFilterChips(tl);
   if (logBtn) {
     logBtn.style.display = current === "series" ? "" : "none";
     logBtn.setAttribute("aria-pressed", String(seriesLog));
   }
   if (axisBtn) {
     // the log/linear axis only applies to the continuous (unfolded) view
-    axisBtn.style.display = current === "time" && timeSource.getFold() === "none" ? "" : "none";
-    const log = timeSource.isLogAxis();
+    axisBtn.style.display = tl && tl.getFold() === "none" ? "" : "none";
+    const log = tl?.isLogAxis() ?? true;
     axisBtn.textContent = log ? "log axis" : "linear axis";
     axisBtn.setAttribute("aria-pressed", String(log));
   }
   if (foldBtn) {
-    foldBtn.style.display = current === "time" ? "" : "none";
-    const on = timeSource.isTrackFold();
+    foldBtn.style.display = tl ? "" : "none";
+    const on = tl?.isTrackFold() ?? false;
     foldBtn.textContent = on ? "fold: auto" : "fold: off";
     foldBtn.setAttribute("aria-pressed", String(on));
   }
-  filters.style.display = current === "time" ? "flex" : "none";
-  searchWrap.style.display = current === "time" ? "" : "none";
+  filters.style.display = tl ? "flex" : "none";
+  searchWrap.style.display = tl ? "" : "none";
   repoInput.style.display = current === "tree" ? "" : "none";
   repoStat.style.display = current === "tree" ? "" : "none";
   for (const b of seg.querySelectorAll("button")) {
@@ -512,7 +536,9 @@ function refreshChrome() {
   }
 }
 axisBtn?.addEventListener("click", () => {
-  timeSource.setLogAxis(!timeSource.isLogAxis());
+  const tl = activeTimeline();
+  if (!tl) return;
+  tl.setLogAxis(!tl.isLogAxis());
   lane.fit(); // re-frame the biased fit in the new axis
   refreshChrome();
 });
@@ -598,7 +624,9 @@ function applyFold(next: TimelineFold, spanMs: number) {
 
 foldBtn?.addEventListener("click", () => {
   // per-track folding on/off (on by default — folds whenever space allows)
-  timeSource.setTrackFold(!timeSource.isTrackFold());
+  const tl = activeTimeline();
+  if (!tl) return;
+  tl.setTrackFold(!tl.isTrackFold());
   refreshChrome();
 });
 
@@ -658,13 +686,14 @@ function clearSearch() {
 }
 function doSearch() {
   const q = searchEl.value;
-  hits = current === "time" && q.trim() ? timeSource.find(q, 7) : [];
+  const tl = activeTimeline();
+  hits = tl && q.trim() ? tl.find(q, 7) : [];
   activeIdx = hits.length ? 0 : -1;
   renderSuggest();
 }
 function focusHit(h: Hit) {
   lane.focus({ center: h.center, zoom: lane.view.height / h.scale });
-  timeSource.setPulse(h);
+  activeTimeline()?.setPulse(h);
   hits = [];
   renderSuggest();
   searchEl.blur();
@@ -996,4 +1025,4 @@ void setLang(savedLang);
 applyPrefs();
 
 // expose for host debugging / e2e
-Object.assign(window as object, { lane, timeSource, treeSource, lazyTreeSource });
+Object.assign(window as object, { lane, timeSource, agentsSource, treeSource, lazyTreeSource });
