@@ -420,7 +420,7 @@
           <option value="/lane/tree/" selected>1D Lane · Tree</option>
           <option value="/lane/time/">1D Lane · Deep time</option>
           <option value="/lane/signal/">1D Lane · Signal</option>
-          <option value="/lane/agents/">1D Lane · Agents</option>
+          <option value="/lane/git/">1D Lane · Git history</option>
           <option value="/cube/">3D Cube</option>
           <option value="/world/">3D World</option>
           <option value="https://agent-yes.com/r/">agent-yes RGUI</option>
@@ -430,7 +430,7 @@
       <div class="seg" id="dataset" role="group" aria-label="dataset">
         <button data-src="tree" aria-pressed="true">📁 Folder tree</button>
         <button data-src="time" aria-pressed="false">🌌 Deep time</button>
-        <button data-src="agents" aria-pressed="false">🤖 Agents</button>
+        <button data-src="git" aria-pressed="false">🕘 Git history</button>
         <button data-src="series" aria-pressed="false">📈 Signal</button>
       </div>
       <div id="searchwrap" style="display: none; position: relative;">
@@ -488,7 +488,7 @@
       // reflect the current dataset path in the nav select
       {
         const nav = document.querySelector("#demo-nav");
-        const m = /^\/lane\/(tree|time|signal|agents)\//.exec(location.pathname);
+        const m = /^\/lane\/(tree|time|signal|git)\//.exec(location.pathname);
         if (nav && m) nav.value = `/lane/${m[1]}/`;
       }
     </script>

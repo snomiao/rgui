@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 // /lane/<dataset>/ paths — one app shell (lane/index.html) serves them all.
 // Dev/preview rewrite the request; the build copies the built page into
 // each subdir so static hosting (Cloudflare Pages) needs no redirects.
-const LANE_DATASETS = ["tree", "time", "signal", "agents"];
+const LANE_DATASETS = ["tree", "time", "signal", "git", "agents"]; // agents = legacy alias of git
 const laneRewrite: Connect.NextHandleFunction = (req, _res, next) => {
   if (
     req.url &&

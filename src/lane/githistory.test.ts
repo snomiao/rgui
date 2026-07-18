@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitImp, commitTrack, createAgentsSource, windowCells } from "./agents.js";
+import { commitImp, commitTrack, createGitHistorySource, windowCells } from "./githistory.js";
 import { createTimelineSource } from "./timeline.js";
 
 describe("commitTrack", () => {
@@ -66,12 +66,13 @@ describe("windowCells", () => {
 });
 
 describe("dataset injection", () => {
-  test("agents source exposes its own tracks, not deep time's", () => {
-    const src = createAgentsSource();
-    expect(src.title).toBe("agents");
-    expect(src.categories.map((c) => c.cat)).toEqual([
-      "human", "claude", "codex", "other", "bot",
-    ]);
+  test("git-history source tracks are its repos, not deep time's cats", () => {
+    const src = createGitHistorySource({ repos: ["a/x", "b/y"] });
+    expect(src.title).toBe("git history");
+    expect(src.categories.map((c) => c.cat)).toEqual(["a/x", "b/y"]);
+    expect(src.categories.map((c) => c.label)).toEqual(["x", "y"]);
+    // distinct colors per repo track
+    expect(new Set(src.categories.map((c) => c.color)).size).toBe(2);
   });
   test("deep-time default is untouched by the parameterization", () => {
     const src = createTimelineSource();

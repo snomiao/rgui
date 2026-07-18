@@ -3,7 +3,7 @@
  * Dogfoods src/lane exactly as a consumer would: two 1-D datasets (a synthetic
  * folder tree and a synthetic time series) behind one dataset-blind engine.
  */
-import { createAgentsSource } from "./lane/agents.js";
+import { createGitHistorySource } from "./lane/githistory.js";
 import { createLane, type LaneSource } from "./lane/lane.js";
 import { createTimelineSource } from "./lane/timeline.js";
 import type { TimelineFold, TimelineSource } from "./lane/timeline.js";
@@ -235,9 +235,9 @@ const buildSeries = () =>
   });
 
 const timeSource: TimelineSource = createTimelineSource();
-// the agents timeline is repo-swappable (↵ in the repo box replaces it)
-let agentsRepos = ["snomiao/rgui"];
-let agentsSource: TimelineSource = createAgentsSource({ repos: agentsRepos });
+// the git-history timeline is repo-swappable (↵ in the repo box replaces it)
+let gitRepos = ["snomiao/rgui"];
+let gitSource: TimelineSource = createGitHistorySource({ repos: gitRepos });
 const treeSource = createTreeSource(genTree(0x51a1));
 
 // ── lazy provider demo: the same generated repo behind a paginated, ────────
@@ -286,14 +286,14 @@ const lazyTreeSource = createLazyTreeSource(demoProvider(genTree(0x51a1)), {
 const sources: Record<string, LaneSource> = {
   tree: treeSource,
   time: timeSource,
-  agents: agentsSource,
+  git: gitSource,
   series: buildSeries(),
 };
 // timeline-engine sources share their chrome (filters, fold, axis, search);
 // whatever backs `current` right now is the one the chrome talks to
 const timelines: Record<string, TimelineSource> = {
   time: timeSource,
-  agents: agentsSource,
+  git: gitSource,
 };
 const activeTimeline = (): TimelineSource | null => timelines[current] ?? null;
 // the demo trees mutate/materialize asynchronously — repaint on change
@@ -316,8 +316,8 @@ function parseHash() {
 // lane/index.html; the build copies it into each subdir). The path names
 // the dataset; the hash keeps only the view (y/z). Legacy #src= links
 // still resolve, then canonicalize to the path form on the first write.
-const PATH_TO_SRC: Record<string, string> = { tree: "tree", time: "time", signal: "series", agents: "agents" };
-const SRC_TO_PATH: Record<string, string> = { tree: "tree", time: "time", series: "signal", agents: "agents" };
+const PATH_TO_SRC: Record<string, string> = { tree: "tree", time: "time", signal: "series", git: "git", agents: "git" }; // agents = legacy path
+const SRC_TO_PATH: Record<string, string> = { tree: "tree", time: "time", series: "signal", git: "git" };
 const lanePath = (key: string) => `/lane/${SRC_TO_PATH[key] ?? key}/`;
 function srcFromPath(): string | null {
   const m = /\/lane\/([a-z]+)\/?/.exec(location.pathname);
@@ -373,13 +373,13 @@ timeSource.setOnUpdate(() => {
 });
 // commit subjects stay English — feeding hundreds of live-fetched subjects
 // through the on-device translator would swamp it for little gain
-function wireAgents(src: TimelineSource) {
+function wireGit(src: TimelineSource) {
   src.setOnUpdate(() => {
     lane.invalidate();
-    updateAgentsStat();
+    updateGitStat();
   });
 }
-wireAgents(agentsSource);
+wireGit(gitSource);
 
 // ── dataset switcher ──────────────────────────────────────────────────────
 const seg = document.querySelector<HTMLDivElement>("#dataset")!;
@@ -413,17 +413,17 @@ function buildFilterChips(tl: TimelineSource) {
 const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
 const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
-// the tree and agents views share the one status span — remember the tree's
+// the tree and git-history views share the one status span — remember the tree's
 // text so switching datasets restores it instead of leaking the other's
 let treeStatText = "↵ load any GitHub repo";
 function setTreeStat(s: string) {
   treeStatText = s;
   if (current === "tree") repoStat.textContent = s;
 }
-function updateAgentsStat() {
-  if (current !== "agents") return;
+function updateGitStat() {
+  if (current !== "git") return;
   repoStat.textContent =
-    `${agentsRepos.join(" ")} · ${agentsSource.eventCount().toLocaleString()} commits`;
+    `${gitRepos.join(" ")} · ${gitSource.eventCount().toLocaleString()} commits`;
 }
 const axisBtn = document.querySelector<HTMLButtonElement>("#axis");
 const foldBtn = document.querySelector<HTMLButtonElement>("#fold");
@@ -549,11 +549,11 @@ function refreshChrome() {
   }
   filters.style.display = tl ? "flex" : "none";
   searchWrap.style.display = tl ? "" : "none";
-  // the repo box serves both repo-backed views: tree (files) + agents (commits)
-  const repoable = current === "tree" || current === "agents";
+  // the repo box serves both repo-backed views: tree (files) + git history (commits)
+  const repoable = current === "tree" || current === "git";
   repoInput.style.display = repoable ? "" : "none";
   repoStat.style.display = repoable ? "" : "none";
-  if (current === "agents") updateAgentsStat();
+  if (current === "git") updateGitStat();
   else if (current === "tree") repoStat.textContent = treeStatText;
   for (const b of seg.querySelectorAll("button")) {
     b.setAttribute("aria-pressed", String(b.dataset.src === current));
@@ -806,23 +806,23 @@ function parseRepo(s: string): { owner: string; repo: string } | null {
   return m ? { owner: m[1]!, repo: m[2]!.replace(/\.git$/, "") } : null;
 }
 
-// swap in a fresh agents timeline for a new repo set (same pattern as the
+// swap in a fresh git-history timeline for a new repo set (same pattern as the
 // tree demo: sources are cheap, replacing one beats teaching it to reset)
-function installAgentsSource(repos: string[]) {
-  agentsRepos = repos;
-  agentsSource = createAgentsSource({ repos });
-  sources.agents = agentsSource;
-  timelines.agents = agentsSource;
-  wireAgents(agentsSource);
-  agentsSource.setGlide(prefs.glide);
-  agentsSource.setHeatCells(prefs.heat);
-  Object.assign(window as object, { agentsSource });
-  if (current === "agents") {
-    lane.setSource(agentsSource);
+function installGitSource(repos: string[]) {
+  gitRepos = repos;
+  gitSource = createGitHistorySource({ repos });
+  sources.git = gitSource;
+  timelines.git = gitSource;
+  wireGit(gitSource);
+  gitSource.setGlide(prefs.glide);
+  gitSource.setHeatCells(prefs.heat);
+  Object.assign(window as object, { gitSource });
+  if (current === "git") {
+    lane.setSource(gitSource);
     lane.fit();
   }
   refreshChrome(); // rebuilds the track chips for the new source
-  updateAgentsStat();
+  updateGitStat();
 }
 
 let repoToken = 0; // guards against out-of-order loads
@@ -864,13 +864,13 @@ async function loadRepo(owner: string, repo: string) {
 }
 repoInput.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
-  if (current === "agents") {
+  if (current === "git") {
     // commit-history view: accept one or many repos (space/comma separated);
     // empty input restores the default
     const raw = repoInput.value.trim();
     const parsed = (raw ? raw.split(/[\s,]+/) : ["snomiao/rgui"]).map(parseRepo);
     if (parsed.length && parsed.every(Boolean)) {
-      installAgentsSource(parsed.map((p) => `${p!.owner}/${p!.repo}`));
+      installGitSource(parsed.map((p) => `${p!.owner}/${p!.repo}`));
     } else {
       repoStat.textContent = "bad repo";
     }
@@ -1081,4 +1081,4 @@ void setLang(savedLang);
 applyPrefs();
 
 // expose for host debugging / e2e
-Object.assign(window as object, { lane, timeSource, agentsSource, treeSource, lazyTreeSource });
+Object.assign(window as object, { lane, timeSource, gitSource, treeSource, lazyTreeSource });

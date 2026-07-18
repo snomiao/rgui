@@ -1,16 +1,14 @@
 /**
- * rgui lane demo dataset — agent activity ("what did my agents do?").
+ * rgui lane demo dataset — git commit history of any GitHub repo.
  *
- * The first real consumer of the generic timeline engine: tracks are AUTHORS
- * (the human plus each coding agent), events are commits pulled lazily from
- * the GitHub API for a set of repos. Attribution comes from commit trailers —
- * `Co-Authored-By: Claude …` / `…Codex…` — the same convention the agents
- * already stamp on their work, so the demo reads its own provenance.
+ * A pure history view on the generic timeline engine: one TRACK PER REPO,
+ * events are commits pulled lazily from the GitHub API. Point it at several
+ * repos and their histories run side by side; the fold ladder turns a busy
+ * month into per-repo day/hour heat cells, and zooming into an afternoon
+ * spreads it back into readable commit subjects.
  *
- * Commits land at minute precision, so the calendar fold ladder and the
- * adaptive zoom clamp get real dense recent data: zoom out and the last month
- * folds into week/day heat cells per agent; zoom in and a single afternoon of
- * pair-work spreads into readable commit subjects.
+ * Commits land at minute precision, so the calendar folds and the adaptive
+ * zoom clamp get real dense recent data.
  *
  * Demo-side module: it fetches (GitHub REST). The lane/timeline engine stays
  * I/O-free — everything arrives through the TimelineDataset.fetch hook.
@@ -29,15 +27,22 @@ const DAY = 1 / 365.25; // years
 const MIN = DAY / 1440; // years
 const GIT_ERA = 3; // years back the fetcher bothers looking
 
-const TRACKS: CatMeta[] = [
-  { cat: "human", label: "Human", color: "#ffd21c" },
-  { cat: "claude", label: "Claude", color: "#d97757" },
-  { cat: "codex", label: "Codex", color: "#10a37f" },
-  { cat: "other", label: "Other agents", color: "#60a5fa" },
-  { cat: "bot", label: "Bots", color: "#8b949e" },
+/** track colors, assigned to repos in input order */
+const REPO_COLORS = [
+  "#60a5fa",
+  "#f3820d",
+  "#2dd4bf",
+  "#f472b6",
+  "#ffd21c",
+  "#b25ce0",
+  "#8b949e",
 ];
 
-/** which track a commit belongs to, from its message trailers + author */
+/**
+ * Which author lane a commit belongs to, from its message trailers + author.
+ * Unused by the history view (history only — no agent tracks) but kept
+ * exported: it's the attribution rule an agent-activity consumer would use.
+ */
 export function commitTrack(message: string, author: string): string {
   const a = author.toLowerCase();
   if (/\[bot\]|semantic-release|github-actions|dependabot/.test(a)) return "bot";
@@ -97,7 +102,7 @@ function commitEvents(
         label: subject,
         detail: `${repo} · ${author}`,
         imp: commitImp(subject),
-        cat: commitTrack(msg, author),
+        cat: repo,
         // commit timestamps are exact to the minute — a wider span would
         // paint half-day uncertainty bands over precise data at deep zoom
         span: MIN,
@@ -127,22 +132,29 @@ export function windowCells(
   return cells;
 }
 
-export interface AgentsSourceOptions {
+export interface GitHistoryOptions {
   /** GitHub repos to read, as "owner/name" (default: the rgui repo itself) */
   repos?: string[];
 }
 
-export function createAgentsSource(
-  opts: AgentsSourceOptions = {},
+export function createGitHistorySource(
+  opts: GitHistoryOptions = {},
 ): TimelineSource {
   const repos = opts.repos ?? ["snomiao/rgui"];
   const seen = new Set<string>(); // commit shas already ingested
+
+  const tracks: CatMeta[] = repos.map((repo, i) => ({
+    cat: repo,
+    label: repo.split("/")[1] ?? repo,
+    color: REPO_COLORS[i % REPO_COLORS.length]!,
+  }));
 
   function fetchCommits(view: LaneView, api: TimelineFetchApi) {
     const { top, bot } = api.winYBP(view);
     if (bot > GIT_ERA) return; // whole window predates the repos
     for (const cell of windowCells(Math.min(top, GIT_ERA), bot)) {
       for (const repo of repos) {
+        if (!api.enabled(repo)) continue; // toggled-off repos don't fetch
         api.lazyFetch(
           `gh:${repo}:${cell.bot.toPrecision(6)}:${cell.top.toPrecision(6)}`,
           `https://api.github.com/repos/${repo}/commits?since=${api.isoOf(cell.top)}&until=${api.isoOf(cell.bot)}&per_page=100`,
@@ -153,8 +165,8 @@ export function createAgentsSource(
   }
 
   const dataset: TimelineDataset = {
-    title: "agents",
-    tracks: TRACKS,
+    title: "git history",
+    tracks,
     statics: [],
     oldestYBP: GIT_ERA,
     futureYears: 7 * DAY,
