@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitImp, commitTrack, createGitHistorySource, gqlRows, windowCells } from "./githistory.js";
+import { commitImp, commitTrack, createGitHistorySource, gqlRows, parseRepoSpec, windowCells } from "./githistory.js";
 import { createTimelineSource } from "./timeline.js";
 
 describe("commitTrack", () => {
@@ -62,6 +62,30 @@ describe("windowCells", () => {
   });
   test("future-only bound clamps at now", () => {
     for (const c of windowCells(0.02, -0.01)) expect(c.bot).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("parseRepoSpec", () => {
+  test("plain and branch specs", () => {
+    expect(parseRepoSpec("torvalds/linux")).toEqual({ path: "torvalds/linux" });
+    expect(parseRepoSpec("snomiao/rgui/tree/main")).toEqual({
+      path: "snomiao/rgui",
+      ref: "main",
+    });
+    expect(parseRepoSpec("o/r/tree/feat/nested-branch")).toEqual({
+      path: "o/r",
+      ref: "feat/nested-branch",
+    });
+  });
+  test("branch specs get their own track labels and cats", () => {
+    const src = createGitHistorySource({
+      repos: ["snomiao/rgui", "snomiao/rgui/tree/dev"],
+    });
+    expect(src.categories.map((c) => c.label)).toEqual(["rgui", "rgui@dev"]);
+    expect(src.categories.map((c) => c.cat)).toEqual([
+      "snomiao/rgui",
+      "snomiao/rgui/tree/dev",
+    ]);
   });
 });
 

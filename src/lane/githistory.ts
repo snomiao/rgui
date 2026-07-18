@@ -27,6 +27,13 @@ const DAY = 1 / 365.25; // years
 const MIN = DAY / 1440; // years
 const GIT_ERA = 3; // years back the fetcher bothers looking
 
+/** split a repo spec — "owner/name" or "owner/name/tree/branch" */
+export function parseRepoSpec(spec: string): { path: string; ref?: string } {
+  const m = /^([^/\s]+\/[^/\s]+)(?:\/tree\/(.+))?$/.exec(spec.trim());
+  if (!m) return { path: spec.trim() };
+  return m[2] ? { path: m[1]!, ref: m[2] } : { path: m[1]! };
+}
+
 /** track colors, assigned to repos in input order */
 const REPO_COLORS = [
   "#60a5fa",
@@ -85,39 +92,43 @@ type GhCommit = {
 // in a single query — but always requires auth, so this path lights up only
 // when the host passes graphql: true (i.e. a token is installed).
 const GQL_URL = "https://api.github.com/graphql";
-const GQL_QUERY =
-  "query($owner:String!,$name:String!,$since:GitTimestamp!,$until:GitTimestamp!,$cursor:String){" +
-  "repository(owner:$owner,name:$name){defaultBranchRef{target{... on Commit{" +
+const GQL_HISTORY =
+  "target{... on Commit{" +
   "history(since:$since,until:$until,first:100,after:$cursor){" +
   "pageInfo{hasNextPage endCursor}" +
   "nodes{oid message additions deletions committedDate author{name user{login}}}" +
-  "}}}}}}";
+  "}}}";
+/** the ref-less query reads the default branch; with $ref it reads that branch */
+const GQL_QUERY =
+  "query($owner:String!,$name:String!,$since:GitTimestamp!,$until:GitTimestamp!,$cursor:String){" +
+  `repository(owner:$owner,name:$name){defaultBranchRef{${GQL_HISTORY}}}}`;
+const GQL_QUERY_REF =
+  "query($owner:String!,$name:String!,$ref:String!,$since:GitTimestamp!,$until:GitTimestamp!,$cursor:String){" +
+  `repository(owner:$owner,name:$name){ref(qualifiedName:$ref){${GQL_HISTORY}}}}`;
 
 /** normalize a GraphQL history response to REST-shaped rows + a next cursor */
 export function gqlRows(data: unknown): { rows: GhCommit[]; next: string | null } {
-  const h = (
-    data as {
-      data?: {
-        repository?: {
-          defaultBranchRef?: {
-            target?: {
-              history?: {
-                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-                nodes?: Array<{
-                  oid: string;
-                  message?: string;
-                  additions?: number;
-                  deletions?: number;
-                  committedDate?: string;
-                  author?: { name?: string; user?: { login?: string } | null } | null;
-                }>;
-              };
-            };
-          };
-        };
+  type RefNode = {
+    target?: {
+      history?: {
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+        nodes?: Array<{
+          oid: string;
+          message?: string;
+          additions?: number;
+          deletions?: number;
+          committedDate?: string;
+          author?: { name?: string; user?: { login?: string } | null } | null;
+        }>;
       };
+    };
+  };
+  const repo = (
+    data as {
+      data?: { repository?: { defaultBranchRef?: RefNode; ref?: RefNode } };
     }
-  )?.data?.repository?.defaultBranchRef?.target?.history;
+  )?.data?.repository;
+  const h = (repo?.defaultBranchRef ?? repo?.ref)?.target?.history;
   if (!h?.nodes) return { rows: [], next: null };
   return {
     rows: h.nodes.flatMap((n) =>
@@ -237,13 +248,15 @@ function commitEvents(
         ? commitImp(subject)
         : Math.min(0.9, commitImp(subject) + Math.log2(1 + lines) / 50);
     const sized = c.stats ? ` · +${c.stats.additions} −${c.stats.deletions}` : "";
+    const spec = parseRepoSpec(repo);
+    const disp = spec.ref ? `${spec.path}@${spec.ref}` : spec.path;
     return [
       {
         y: api.ybpOfMs(tMs),
         tMs,
         precision: { kind: "calendar", unit: "minute" } as const,
         label: subject,
-        detail: `${repo} · ${author}${sized}`,
+        detail: `${disp} · ${author}${sized}`,
         imp,
         cat: repo,
         // commit timestamps are exact to the minute — a wider span would
@@ -303,11 +316,15 @@ export function createGitHistorySource(
   const seen = new Set<string>(); // commit shas already ingested
   const usedKeys = new Set<string>(); // cell pages already served (cache or net)
 
-  const tracks: CatMeta[] = repos.map((repo, i) => ({
-    cat: repo,
-    label: repo.split("/")[1] ?? repo,
-    color: REPO_COLORS[i % REPO_COLORS.length]!,
-  }));
+  const tracks: CatMeta[] = repos.map((repo, i) => {
+    const { path, ref } = parseRepoSpec(repo);
+    const name = path.split("/")[1] ?? path;
+    return {
+      cat: repo,
+      label: ref ? `${name}@${ref}` : name,
+      color: REPO_COLORS[i % REPO_COLORS.length]!,
+    };
+  });
 
   // fetch one page of a cell; a FULL page means the cell has more history —
   // chain the next page (GitHub serves newest-first within since/until), so a
@@ -341,8 +358,9 @@ export function createGitHistorySource(
       chain(cached.next);
       return;
     }
+    const { path, ref } = parseRepoSpec(repo);
     if (opts.graphql) {
-      const [owner, name] = repo.split("/");
+      const [owner, name] = path.split("/");
       api.lazyFetch(
         key,
         GQL_URL,
@@ -358,10 +376,11 @@ export function createGitHistorySource(
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            query: GQL_QUERY,
+            query: ref ? GQL_QUERY_REF : GQL_QUERY,
             variables: {
               owner,
               name,
+              ...(ref ? { ref } : {}),
               since: api.isoOf(cell.top),
               until: api.isoOf(cell.bot),
               cursor: cursor ?? null,
@@ -373,7 +392,8 @@ export function createGitHistorySource(
     }
     api.lazyFetch(
       key,
-      `https://api.github.com/repos/${repo}/commits?since=${api.isoOf(cell.top)}&until=${api.isoOf(cell.bot)}&per_page=100&page=${page}`,
+      `https://api.github.com/repos/${path}/commits?since=${api.isoOf(cell.top)}&until=${api.isoOf(cell.bot)}&per_page=100&page=${page}` +
+        (ref ? `&sha=${encodeURIComponent(ref)}` : ""),
       (data) => {
         if (!Array.isArray(data)) return []; // rate-limited / error body
         usedKeys.add(key);

@@ -631,7 +631,8 @@ function refreshChrome() {
   searchWrap.style.display = tl ? "" : "none";
   // the repo box serves both repo-backed views: tree (files) + git history (commits)
   const repoable = current === "tree" || current === "git";
-  repoInput.style.display = repoable ? "" : "none";
+  const repoWrap = document.querySelector<HTMLDivElement>("#repowrap");
+  if (repoWrap) repoWrap.style.display = repoable ? "" : "none";
   repoStat.style.display = repoable ? "" : "none";
   // the token input lives INSIDE the tutorial panel; the toolbar carries
   // only the "?" button, lit when a token is active
@@ -893,12 +894,19 @@ function buildFileTree(name: string, entries: GhEntry[]): FileNode {
   }
   return root;
 }
-function parseRepo(s: string): { owner: string; repo: string } | null {
+function parseRepo(
+  s: string,
+): { owner: string; repo: string; branch?: string } | null {
+  const t = s.trim();
   const m =
-    s.trim().match(/github\.com[/:]([^/]+)\/([^/#?\s]+)/) ??
-    s.trim().match(/^([^/\s]+)\/([^/\s]+)$/);
-  return m ? { owner: m[1]!, repo: m[2]!.replace(/\.git$/, "") } : null;
+    t.match(/github\.com[/:]([^/]+)\/([^/#?\s]+)(?:\/tree\/([^#?\s]+))?/) ??
+    t.match(/^([^/\s]+)\/([^/\s]+)(?:\/tree\/([^\s]+))?$/);
+  return m
+    ? { owner: m[1]!, repo: m[2]!.replace(/\.git$/, ""), branch: m[3] }
+    : null;
 }
+const repoSpecOf = (p: { owner: string; repo: string; branch?: string }) =>
+  `${p.owner}/${p.repo}` + (p.branch ? `/tree/${p.branch}` : "");
 
 // swap in a fresh git-history timeline for a new repo set (same pattern as the
 // tree demo: sources are cheap, replacing one beats teaching it to reset)
@@ -921,14 +929,18 @@ function installGitSource(repos: string[]) {
 }
 
 let repoToken = 0; // guards against out-of-order loads
-async function loadRepo(owner: string, repo: string) {
+async function loadRepo(owner: string, repo: string, branchArg?: string) {
   const my = ++repoToken;
   setTreeStat("loading…");
   try {
-    const info = await fetch(`https://api.github.com/repos/${owner}/${repo}`).then(
-      (r) => (r.ok ? r.json() : null),
-    );
-    const branch = info?.default_branch ?? "HEAD";
+    // an explicit /tree/branch spec skips the default-branch lookup
+    let branch = branchArg;
+    if (!branch) {
+      const info = await fetch(`https://api.github.com/repos/${owner}/${repo}`).then(
+        (r) => (r.ok ? r.json() : null),
+      );
+      branch = info?.default_branch ?? "HEAD";
+    }
     const tree = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`,
     ).then((r) => (r.ok ? r.json() : null));
@@ -957,23 +969,187 @@ async function loadRepo(owner: string, repo: string) {
     if (my === repoToken) setTreeStat("load failed");
   }
 }
-repoInput.addEventListener("keydown", (e) => {
-  if (e.key !== "Enter") return;
+// commit the box's content for the current view
+function loadRepoBox() {
   if (current === "git") {
-    // commit-history view: accept one or many repos (space/comma separated);
+    // commit-history view: accept one or many specs (space/comma separated);
     // empty input restores the default
     const raw = repoInput.value.trim();
-    const parsed = (raw ? raw.split(/[\s,]+/) : ["snomiao/rgui"]).map(parseRepo);
+    const parsed = (raw ? raw.split(/[\s,]+/) : DEFAULT_GIT_REPOS).map(parseRepo);
     if (parsed.length && parsed.every(Boolean)) {
-      installGitSource(parsed.map((p) => `${p!.owner}/${p!.repo}`));
+      const specs = parsed.map((p) => repoSpecOf(p!));
+      specs.forEach(pushRepoHistory);
+      installGitSource(specs);
     } else {
       repoStat.textContent = "bad repo";
     }
     return;
   }
   const parsed = parseRepo(repoInput.value);
-  if (parsed) loadRepo(parsed.owner, parsed.repo);
-  else repoStat.textContent = "bad repo";
+  if (parsed) {
+    pushRepoHistory(repoSpecOf(parsed));
+    void loadRepo(parsed.owner, parsed.repo, parsed.branch);
+  } else repoStat.textContent = "bad repo";
+}
+
+// ── repo omnibox: dropdown suggestions ────────────────────────────────────
+// Sources by shape of the LAST space-separated segment (the git view holds
+// several specs in one box): recents always; "owner/…" lists that owner's
+// repos; "owner/repo/…" lists branches; anything else falls back to GitHub
+// repo search (its own rate-limit pool). Enter uses the typed text unless a
+// suggestion is highlighted with the arrow keys.
+const repoSuggestEl = document.querySelector<HTMLDivElement>("#repoSuggest");
+type RepoHit = { value: string; det?: string };
+let repoHits: RepoHit[] = [];
+let repoIdx = -1;
+const REPO_HISTORY_KEY = "lane-repo-history";
+let repoHistory: string[] = [];
+try {
+  const h = JSON.parse(localStorage.getItem(REPO_HISTORY_KEY) ?? "[]");
+  if (Array.isArray(h)) repoHistory = h.filter((s) => typeof s === "string");
+} catch { /* corrupted history → empty */ }
+function pushRepoHistory(spec: string) {
+  repoHistory = [spec, ...repoHistory.filter((s) => s !== spec)].slice(0, 12);
+  try { localStorage.setItem(REPO_HISTORY_KEY, JSON.stringify(repoHistory)); } catch { /* private mode */ }
+}
+const ownerRepoCache = new Map<string, { name: string; stars: number }[]>();
+const branchListCache = new Map<string, string[]>();
+let suggestGen = 0;
+let suggestTimer = 0;
+function repoSegment(): { start: number; text: string } {
+  const v = repoInput.value;
+  const start = v.lastIndexOf(" ") + 1;
+  return { start, text: v.slice(start) };
+}
+function renderRepoSuggest() {
+  if (!repoSuggestEl) return;
+  repoSuggestEl.innerHTML = repoHits
+    .map(
+      (h, i) =>
+        `<div class="hit${i === repoIdx ? " active" : ""}" data-i="${i}">` +
+        `<span>${esc(h.value)}</span>` +
+        (h.det ? `<span class="det">${esc(h.det)}</span>` : "") +
+        `</div>`,
+    )
+    .join("");
+}
+function closeRepoSuggest() {
+  repoHits = [];
+  repoIdx = -1;
+  renderRepoSuggest();
+}
+async function ghJson(url: string): Promise<unknown> {
+  try {
+    const r = await fetch(url);
+    return r.ok ? r.json() : null;
+  } catch {
+    return null;
+  }
+}
+async function computeRepoSuggest() {
+  const gen = ++suggestGen;
+  const q = repoSegment().text.trim();
+  const hits: RepoHit[] = [];
+  const have = new Set<string>();
+  const push = (h: RepoHit) => {
+    if (!have.has(h.value) && hits.length < 8) {
+      have.add(h.value);
+      hits.push(h);
+    }
+  };
+  for (const s of repoHistory)
+    if (!q || s.toLowerCase().includes(q.toLowerCase())) push({ value: s, det: "recent" });
+  const mBranch = /^([^/\s]+\/[^/\s]+)\/(?:tree\/?)?([^/\s]*)$/.exec(q);
+  const mOwner = /^([^/\s]+)\/([^/\s]*)$/.exec(q);
+  if (mBranch) {
+    const path = mBranch[1]!;
+    let branches = branchListCache.get(path);
+    if (!branches) {
+      const data = await ghJson(`https://api.github.com/repos/${path}/branches?per_page=100`);
+      if (gen !== suggestGen) return;
+      branches = Array.isArray(data)
+        ? (data as { name: string }[]).map((b) => b.name)
+        : [];
+      branchListCache.set(path, branches);
+    }
+    for (const b of branches)
+      if (b.toLowerCase().startsWith(mBranch[2]!.toLowerCase()))
+        push({ value: `${path}/tree/${b}`, det: "branch" });
+  } else if (mOwner) {
+    const owner = mOwner[1]!;
+    let list = ownerRepoCache.get(owner);
+    if (!list) {
+      const data = await ghJson(
+        `https://api.github.com/users/${owner}/repos?sort=updated&per_page=100`,
+      );
+      if (gen !== suggestGen) return;
+      list = Array.isArray(data)
+        ? (data as { full_name: string; stargazers_count: number }[]).map((r) => ({
+            name: r.full_name,
+            stars: r.stargazers_count,
+          }))
+        : [];
+      ownerRepoCache.set(owner, list);
+    }
+    for (const r of list)
+      if (r.name.toLowerCase().startsWith(q.toLowerCase()))
+        push({ value: r.name, det: `⭐ ${r.stars}` });
+  } else if (q.length >= 2) {
+    const data = await ghJson(
+      `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&per_page=8`,
+    );
+    if (gen !== suggestGen) return;
+    const items =
+      (data as { items?: { full_name: string; stargazers_count: number }[] })?.items ?? [];
+    for (const r of items) push({ value: r.full_name, det: `⭐ ${r.stargazers_count}` });
+  }
+  if (gen !== suggestGen) return;
+  repoHits = hits;
+  repoIdx = -1; // typed text wins on Enter until the user arrows down
+  renderRepoSuggest();
+}
+function applyRepoHit(h: RepoHit) {
+  const { start } = repoSegment();
+  repoInput.value = repoInput.value.slice(0, start) + h.value;
+  closeRepoSuggest();
+  loadRepoBox();
+}
+repoInput.addEventListener("input", () => {
+  clearTimeout(suggestTimer);
+  suggestTimer = window.setTimeout(() => void computeRepoSuggest(), 250);
+});
+repoInput.addEventListener("focus", () => void computeRepoSuggest());
+repoInput.addEventListener("blur", () => setTimeout(closeRepoSuggest, 140));
+repoSuggestEl?.addEventListener("mousedown", (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>(".hit");
+  if (!el) return;
+  e.preventDefault(); // keep focus so blur doesn't wipe the list mid-click
+  applyRepoHit(repoHits[+el.dataset.i!]!);
+});
+repoInput.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" && repoHits.length) {
+    repoIdx = Math.min(repoHits.length - 1, repoIdx + 1);
+    renderRepoSuggest();
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "ArrowUp" && repoHits.length) {
+    repoIdx = Math.max(-1, repoIdx - 1);
+    renderRepoSuggest();
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape") {
+    closeRepoSuggest();
+    return;
+  }
+  if (e.key !== "Enter") return;
+  if (repoIdx >= 0 && repoHits[repoIdx]) {
+    applyRepoHit(repoHits[repoIdx]!);
+    return;
+  }
+  closeRepoSuggest();
+  loadRepoBox();
 });
 // Don't fetch a multi-MB repo tree on load — the synthetic tree (with built-in
 // content) is the instant default; a real GitHub repo is one ↵ away.
