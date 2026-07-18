@@ -503,6 +503,8 @@ export interface TimelineSource extends LaneSource {
   setEnabled(cat: Cat, on: boolean): void;
   /** substring search over event labels/details, ranked by importance */
   find(query: string, limit?: number): SearchHit[];
+  /** how many events are loaded (statics + everything ingested so far) */
+  eventCount(): number;
   /** called when lazily-fetched events arrive (host wires it to invalidate) */
   setOnUpdate(fn: () => void): void;
   /** every English UI string (labels/details/headers/eras/cycles), for i18n */
@@ -2262,6 +2264,7 @@ export function createTimelineSource(
       logAxis = on;
       onUpdate();
     },
+    eventCount: () => points.length,
     eventAt(sx, sy, view) {
       // a visible label is a hover target for its event (either mode)
       for (const l of foldLabelRects) {

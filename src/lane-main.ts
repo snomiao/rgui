@@ -235,7 +235,9 @@ const buildSeries = () =>
   });
 
 const timeSource: TimelineSource = createTimelineSource();
-const agentsSource: TimelineSource = createAgentsSource();
+// the agents timeline is repo-swappable (↵ in the repo box replaces it)
+let agentsRepos = ["snomiao/rgui"];
+let agentsSource: TimelineSource = createAgentsSource({ repos: agentsRepos });
 const treeSource = createTreeSource(genTree(0x51a1));
 
 // ── lazy provider demo: the same generated repo behind a paginated, ────────
@@ -371,7 +373,13 @@ timeSource.setOnUpdate(() => {
 });
 // commit subjects stay English — feeding hundreds of live-fetched subjects
 // through the on-device translator would swamp it for little gain
-agentsSource.setOnUpdate(() => lane.invalidate());
+function wireAgents(src: TimelineSource) {
+  src.setOnUpdate(() => {
+    lane.invalidate();
+    updateAgentsStat();
+  });
+}
+wireAgents(agentsSource);
 
 // ── dataset switcher ──────────────────────────────────────────────────────
 const seg = document.querySelector<HTMLDivElement>("#dataset")!;
@@ -405,6 +413,18 @@ function buildFilterChips(tl: TimelineSource) {
 const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
 const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
+// the tree and agents views share the one status span — remember the tree's
+// text so switching datasets restores it instead of leaking the other's
+let treeStatText = "↵ load any GitHub repo";
+function setTreeStat(s: string) {
+  treeStatText = s;
+  if (current === "tree") repoStat.textContent = s;
+}
+function updateAgentsStat() {
+  if (current !== "agents") return;
+  repoStat.textContent =
+    `${agentsRepos.join(" ")} · ${agentsSource.eventCount().toLocaleString()} commits`;
+}
 const axisBtn = document.querySelector<HTMLButtonElement>("#axis");
 const foldBtn = document.querySelector<HTMLButtonElement>("#fold");
 
@@ -529,8 +549,12 @@ function refreshChrome() {
   }
   filters.style.display = tl ? "flex" : "none";
   searchWrap.style.display = tl ? "" : "none";
-  repoInput.style.display = current === "tree" ? "" : "none";
-  repoStat.style.display = current === "tree" ? "" : "none";
+  // the repo box serves both repo-backed views: tree (files) + agents (commits)
+  const repoable = current === "tree" || current === "agents";
+  repoInput.style.display = repoable ? "" : "none";
+  repoStat.style.display = repoable ? "" : "none";
+  if (current === "agents") updateAgentsStat();
+  else if (current === "tree") repoStat.textContent = treeStatText;
   for (const b of seg.querySelectorAll("button")) {
     b.setAttribute("aria-pressed", String(b.dataset.src === current));
   }
@@ -782,10 +806,29 @@ function parseRepo(s: string): { owner: string; repo: string } | null {
   return m ? { owner: m[1]!, repo: m[2]!.replace(/\.git$/, "") } : null;
 }
 
+// swap in a fresh agents timeline for a new repo set (same pattern as the
+// tree demo: sources are cheap, replacing one beats teaching it to reset)
+function installAgentsSource(repos: string[]) {
+  agentsRepos = repos;
+  agentsSource = createAgentsSource({ repos });
+  sources.agents = agentsSource;
+  timelines.agents = agentsSource;
+  wireAgents(agentsSource);
+  agentsSource.setGlide(prefs.glide);
+  agentsSource.setHeatCells(prefs.heat);
+  Object.assign(window as object, { agentsSource });
+  if (current === "agents") {
+    lane.setSource(agentsSource);
+    lane.fit();
+  }
+  refreshChrome(); // rebuilds the track chips for the new source
+  updateAgentsStat();
+}
+
 let repoToken = 0; // guards against out-of-order loads
 async function loadRepo(owner: string, repo: string) {
   const my = ++repoToken;
-  repoStat.textContent = "loading…";
+  setTreeStat("loading…");
   try {
     const info = await fetch(`https://api.github.com/repos/${owner}/${repo}`).then(
       (r) => (r.ok ? r.json() : null),
@@ -796,7 +839,7 @@ async function loadRepo(owner: string, repo: string) {
     ).then((r) => (r.ok ? r.json() : null));
     if (my !== repoToken) return; // superseded
     if (!tree?.tree) {
-      repoStat.textContent = "repo not found";
+      setTreeStat("repo not found");
       return;
     }
     const root = buildFileTree(`${owner}/${repo}`, tree.tree as GhEntry[]);
@@ -811,15 +854,28 @@ async function loadRepo(owner: string, repo: string) {
     src.setOnUpdate(() => lane.invalidate());
     sources.tree = src;
     if (current === "tree") lane.setSource(src);
-    repoStat.textContent =
+    setTreeStat(
       `${(tree.tree as GhEntry[]).length.toLocaleString()} entries` +
-      (tree.truncated ? " (truncated)" : "");
+        (tree.truncated ? " (truncated)" : ""),
+    );
   } catch {
-    if (my === repoToken) repoStat.textContent = "load failed";
+    if (my === repoToken) setTreeStat("load failed");
   }
 }
 repoInput.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
+  if (current === "agents") {
+    // commit-history view: accept one or many repos (space/comma separated);
+    // empty input restores the default
+    const raw = repoInput.value.trim();
+    const parsed = (raw ? raw.split(/[\s,]+/) : ["snomiao/rgui"]).map(parseRepo);
+    if (parsed.length && parsed.every(Boolean)) {
+      installAgentsSource(parsed.map((p) => `${p!.owner}/${p!.repo}`));
+    } else {
+      repoStat.textContent = "bad repo";
+    }
+    return;
+  }
   const parsed = parseRepo(repoInput.value);
   if (parsed) loadRepo(parsed.owner, parsed.repo);
   else repoStat.textContent = "bad repo";

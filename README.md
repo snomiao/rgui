@@ -43,7 +43,9 @@ API to React, Vue, Svelte, or plain DOM.
 Run `bun run dev`, then open one of the multi-page demo routes:
 
 - `/` — the 2D readable-grid node graph
-- `/lane/` — the 1D semantic-zoom lane
+- `/lane/` — the 1D semantic-zoom lane: `/lane/tree/` (folder tree of any
+  GitHub repo), `/lane/time/` (deep time), `/lane/agents/` (commit history of
+  any GitHub repo, tracked per author/agent), `/lane/signal/` (time series)
 - `/cube/` — a 4x4x4 parallel- or cross-eye stereo number puzzle with a live
   RG merge lab and switchable matched/shared/split binocular wire labels
 - `/world/` — a walkable stereoscopic voxel-room prototype with focus-depth
