@@ -333,6 +333,22 @@ is framework-agnostic pure functions and plain data.
   agent-yes, otoji, and other systems in one canvas without moving transport/execution
   policy into rgui. See [docs/federation.md](docs/federation.md)
 - **Layout** (`core/layout`): `layoutGraph`
+- **Lane — 1-D semantic zoom** (`lane`): `createLane` + `LaneSource` — the RG flow along a
+  single axis; zooming in means "more detail", never "bigger". Ships the fold kernel proven
+  by the [lane demos](https://rgui.snomiao.com/lane/): per-directory fold ladders with
+  asymmetric hysteresis (`chooseTreeFold`, `chunkRows`, kind buckets, `heatRampColor`),
+  calendar fold projectors year⇄month⇄week⇄day⇄hour plus decade/century/millennium
+  (`foldYearProjector` …, `projectWindow`, `precisionWindow` — precision-aware, so
+  uncertain deep-time events never fold into false precision), schema folding for
+  homogeneous collections (`detectSchema`, `updateSchemaRegistry`, `nextSchemaState`),
+  progressive content disclosure by indent/heading level (`contentLevels`,
+  `discloseLevel`), and dynamic stick-breaking tree spaces (`createTreeSource`,
+  `createLazyTreeSource`). Data arrives via host-supplied hooks (`TreeProvider`,
+  `fetchContent`) — the lane kernel itself does no I/O.
+- **TreeProvider** (`lane/treeprovider`): `TreeListingStore` + the `TreeProvider` protocol —
+  lazy, paginated, abortable listing of any hierarchical namespace with honest
+  unknown/partial/complete states and version-drift restarts. Filesystem-shaped today,
+  but nothing in it is fs-specific.
 - **Renderers** (`render`): Canvas 2D layers, `createWebGPUGridRenderer` (grid underlay),
   panels (`panelLayout`/`drawPanels`), HTML overlays (`createOverlayManager`),
   `KIND_COLOR`/`CATEGORY_COLOR` + `kindColor`/`categoryColor`
