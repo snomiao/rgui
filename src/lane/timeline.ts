@@ -570,6 +570,13 @@ export interface TimelineDataset {
   oldestYBP?: number;
   /** years after present the axis extends to (default 1e10) */
   futureYears?: number;
+  /**
+   * initial-fit window bias, in years before present (top = older edge,
+   * bot ≤ 0 reaches into the future). The full extent stays reachable by
+   * scrolling — this only frames the opening view, e.g. a git dataset
+   * opening on the recent weeks instead of its whole multi-year extent.
+   */
+  fitYBP?: { top: number; bot: number };
   /** per-frame lazy-loading hook (demo/host side — the engine never fetches) */
   fetch?: (view: LaneView, api: TimelineFetchApi) => void;
 }
@@ -2377,6 +2384,10 @@ export function createTimelineSource(
       if (fold !== "none") {
         const r = foldRows();
         return { min: r.min - 0.5, max: r.max + 0.5 };
+      }
+      if (ds?.fitYBP) {
+        // dataset-biased opening frame (axis-aware via worldOf)
+        return { min: worldOf(ds.fitYBP.top), max: worldOf(ds.fitYBP.bot) };
       }
       return {
         min: worldOf(OLDEST) * 1.01,

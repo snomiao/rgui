@@ -236,7 +236,14 @@ const buildSeries = () =>
 
 const timeSource: TimelineSource = createTimelineSource();
 // the git-history timeline is repo-swappable (↵ in the repo box replaces it)
-let gitRepos = ["snomiao/rgui"];
+const DEFAULT_GIT_REPOS = ["snomiao/rgui"];
+// shareable git view: #r=owner/repo,owner/repo names the repo set in the URL
+const hashRepos = (() => {
+  const r = new URLSearchParams(location.hash.slice(1)).get("r");
+  const list = r?.split(",").map((s) => s.trim()).filter(Boolean);
+  return list?.length ? list : null;
+})();
+let gitRepos = hashRepos ?? DEFAULT_GIT_REPOS;
 let gitSource: TimelineSource = createGitHistorySource({ repos: gitRepos });
 const treeSource = createTreeSource(genTree(0x51a1));
 
@@ -332,7 +339,12 @@ function writeHash() {
   const p = new URLSearchParams();
   p.set("y", lane.view.scrollY.toPrecision(8));
   p.set("z", lane.view.zoomY.toPrecision(6));
-  history.replaceState(null, "", lanePath(current) + "#" + p.toString());
+  // non-default repo sets ride the hash so the git view is shareable
+  if (current === "git" && gitRepos.join(",") !== DEFAULT_GIT_REPOS.join(","))
+    p.set("r", gitRepos.join(","));
+  // keep / and , literal — legal in a fragment, and the URL stays readable
+  const h = p.toString().replace(/%2F/gi, "/").replace(/%2C/gi, ",");
+  history.replaceState(null, "", lanePath(current) + "#" + h);
 }
 function scheduleHash() {
   clearTimeout(hashTimer);
@@ -346,6 +358,12 @@ window.addEventListener("popstate", () => {
     lane.setSource(sources[key]!);
     refreshChrome();
   }
+  // a navigated-to git URL may name a different repo set
+  const rp = new URLSearchParams(location.hash.slice(1)).get("r");
+  const wantRepos = rp?.split(",").map((s) => s.trim()).filter(Boolean);
+  const repos = wantRepos?.length ? wantRepos : DEFAULT_GIT_REPOS;
+  if (current === "git" && repos.join(",") !== gitRepos.join(","))
+    installGitSource(repos);
   const r = parseHash();
   if (r.scrollY != null || r.zoomY != null) {
     lane.setView({ scrollY: r.scrollY ?? undefined, zoomY: r.zoomY ?? undefined });
@@ -413,6 +431,8 @@ function buildFilterChips(tl: TimelineSource) {
 const searchWrap = document.querySelector<HTMLDivElement>("#searchwrap")!;
 const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
 const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
+// a shared #r= URL pre-fills the repo box with its repo set
+if (hashRepos) repoInput.value = gitRepos.join(" ");
 // the tree and git-history views share the one status span — remember the tree's
 // text so switching datasets restores it instead of leaking the other's
 let treeStatText = "↵ load any GitHub repo";
@@ -810,6 +830,7 @@ function parseRepo(s: string): { owner: string; repo: string } | null {
 // tree demo: sources are cheap, replacing one beats teaching it to reset)
 function installGitSource(repos: string[]) {
   gitRepos = repos;
+  if (repoInput.value.trim() !== repos.join(" ")) repoInput.value = repos.join(" ");
   gitSource = createGitHistorySource({ repos });
   sources.git = gitSource;
   timelines.git = gitSource;

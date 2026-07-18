@@ -122,7 +122,11 @@ export function windowCells(
   topYBP: number,
   botYBP: number,
 ): Array<{ top: number; bot: number }> {
-  let size = 1 / 32; // ≈11 days minimum cell
+  // ≈1.4-day minimum cell: one page chain (4 × 100 commits) per cell is the
+  // coverage unit, so the floor bounds how dense a repo can be before sampling
+  // starts — the old 11-day floor showed only the newest 100 of ~2.5k linux
+  // commits per cell. linux ≈ 300 commits/1.4d, within one chain.
+  let size = 1 / 256;
   while (size < topYBP - botYBP) size *= 2;
   const lo = Math.floor(Math.max(0, botYBP) / size);
   const hi = Math.floor(topYBP / size);
@@ -149,17 +153,38 @@ export function createGitHistorySource(
     color: REPO_COLORS[i % REPO_COLORS.length]!,
   }));
 
+  // fetch one page of a cell; a FULL page means the cell has more history —
+  // chain the next page (GitHub serves newest-first within since/until), so a
+  // busy repo like linux fills in beyond the first 100 instead of silently
+  // sampling. PAGE_CAP bounds the chain: unauthenticated GitHub allows only
+  // 60 req/h, so exhaustive history is not on the table — the cap trades
+  // completeness for staying usable across zooms.
+  const PAGE_CAP = 4;
+  function fetchCell(
+    repo: string,
+    cell: { top: number; bot: number },
+    api: TimelineFetchApi,
+    page: number,
+  ) {
+    const key = `gh:${repo}:${cell.bot.toPrecision(6)}:${cell.top.toPrecision(6)}:p${page}`;
+    api.lazyFetch(
+      `${key}`,
+      `https://api.github.com/repos/${repo}/commits?since=${api.isoOf(cell.top)}&until=${api.isoOf(cell.bot)}&per_page=100&page=${page}`,
+      (data) => {
+        const full = Array.isArray(data) && data.length === 100;
+        if (full && page < PAGE_CAP) fetchCell(repo, cell, api, page + 1);
+        return commitEvents(data, repo, api, seen);
+      },
+    );
+  }
+
   function fetchCommits(view: LaneView, api: TimelineFetchApi) {
     const { top, bot } = api.winYBP(view);
     if (bot > GIT_ERA) return; // whole window predates the repos
     for (const cell of windowCells(Math.min(top, GIT_ERA), bot)) {
       for (const repo of repos) {
         if (!api.enabled(repo)) continue; // toggled-off repos don't fetch
-        api.lazyFetch(
-          `gh:${repo}:${cell.bot.toPrecision(6)}:${cell.top.toPrecision(6)}`,
-          `https://api.github.com/repos/${repo}/commits?since=${api.isoOf(cell.top)}&until=${api.isoOf(cell.bot)}&per_page=100`,
-          (data) => commitEvents(data, repo, api, seen),
-        );
+        fetchCell(repo, cell, api, 1);
       }
     }
   }
@@ -170,7 +195,12 @@ export function createGitHistorySource(
     statics: [],
     oldestYBP: GIT_ERA,
     futureYears: 7 * DAY,
+    // open on the recent weeks — the whole era stays reachable by scrolling
+    fitYBP: { top: 45 * DAY, bot: -2 * DAY },
     fetch: fetchCommits,
   };
-  return createTimelineSource({ logAxis: true, dataset });
+  // linear axis by default: git history is a human-scale linear record —
+  // symlog's decade compression just crams it against "now" (taku). The
+  // toolbar's axis button still offers log.
+  return createTimelineSource({ logAxis: false, dataset });
 }
