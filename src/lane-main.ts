@@ -3,7 +3,7 @@
  * Dogfoods src/lane exactly as a consumer would: two 1-D datasets (a synthetic
  * folder tree and a synthetic time series) behind one dataset-blind engine.
  */
-import { createGitHistorySource } from "./lane/githistory.js";
+import { createGitHistorySource, gitCacheStats } from "./lane/githistory.js";
 import { createLane, type LaneSource } from "./lane/lane.js";
 import { createTimelineSource } from "./lane/timeline.js";
 import type { TimelineFold, TimelineSource } from "./lane/timeline.js";
@@ -22,8 +22,12 @@ const SHORT: Record<string, string> = {
   "ll.thespacedevs.com": "spacedevs",
 };
 function renderNet() {
+  const cache = gitCacheStats();
+  const cacheLine = cache.entries
+    ? `\n<span class="dim">cache</span> ${(cache.bytes / 1024).toFixed(0)} KB · ${cache.entries} win`
+    : "";
   if (!net.total) {
-    netEl.textContent = "";
+    netEl.innerHTML = cacheLine.trimStart();
     return;
   }
   const via = [...net.hosts.entries()]
@@ -32,8 +36,14 @@ function renderNet() {
   netEl.innerHTML =
     `<span class="dim">net</span> ${net.inflight} live · ${net.total} req` +
     (net.err ? ` · <span class="hi">${net.err} err</span>` : "") +
-    (via ? `\n<span class="dim">via</span> ${via}` : "");
+    (via ? `\n<span class="dim">via</span> ${via}` : "") +
+    cacheLine;
 }
+// optional GitHub token: raises the API limit from 60 to 5,000 req/h. Kept
+// in localStorage, injected below for api.github.com only.
+const GH_TOKEN_KEY = "lane-gh-token";
+let ghToken = localStorage.getItem(GH_TOKEN_KEY) ?? "";
+
 const _fetch = window.fetch.bind(window);
 const trackedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
   let host = "?";
@@ -43,6 +53,15 @@ const trackedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
   } catch {
     /* ignore */
   }
+  if (host === "api.github.com" && ghToken) {
+    init = {
+      ...init,
+      headers: {
+        ...(init?.headers as Record<string, string> | undefined),
+        Authorization: `Bearer ${ghToken}`,
+      },
+    };
+  }
   net.inflight++;
   net.total++;
   net.hosts.set(host, (net.hosts.get(host) ?? 0) + 1);
@@ -51,6 +70,9 @@ const trackedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
     .then(
       (r) => {
         if (!r.ok) net.err++;
+        // rate-limited without a token → walk the user through getting one
+        if ((r.status === 403 || r.status === 429) && host === "api.github.com")
+          maybeShowTokenPanel();
         return r;
       },
       (e) => {
@@ -64,6 +86,7 @@ const trackedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
     });
 };
 window.fetch = Object.assign(trackedFetch, { preconnect: _fetch.preconnect });
+renderNet(); // a fully cache-served load makes no fetches — still show the cache line
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
 const debug = document.querySelector<HTMLDivElement>("#debug")!;
@@ -244,7 +267,7 @@ const hashRepos = (() => {
   return list?.length ? list : null;
 })();
 let gitRepos = hashRepos ?? DEFAULT_GIT_REPOS;
-let gitSource: TimelineSource = createGitHistorySource({ repos: gitRepos });
+let gitSource: TimelineSource = createGitHistorySource({ repos: gitRepos, pageCap: ghToken ? 12 : 4, graphql: !!ghToken });
 const treeSource = createTreeSource(genTree(0x51a1));
 
 // ── lazy provider demo: the same generated repo behind a paginated, ────────
@@ -433,6 +456,40 @@ const repoInput = document.querySelector<HTMLInputElement>("#repo")!;
 const repoStat = document.querySelector<HTMLSpanElement>("#repostat")!;
 // a shared #r= URL pre-fills the repo box with its repo set
 if (hashRepos) repoInput.value = gitRepos.join(" ");
+
+// ── GitHub token input + read-only-token tutorial panel ───────────────────
+const ghTokenInput = document.querySelector<HTMLInputElement>("#ghtoken");
+const tokenHelpBtn = document.querySelector<HTMLButtonElement>("#ghtokenHelp");
+const tokenPanel = document.querySelector<HTMLDivElement>("#tokenPanel");
+if (ghTokenInput) ghTokenInput.value = ghToken;
+let tokenPanelAutoShown = false;
+function maybeShowTokenPanel() {
+  // auto-open once per session, and only when a token would actually help
+  if (tokenPanelAutoShown || ghToken || !tokenPanel) return;
+  tokenPanelAutoShown = true;
+  tokenPanel.style.display = "";
+}
+tokenHelpBtn?.addEventListener("click", () => {
+  if (!tokenPanel) return;
+  tokenPanel.style.display = tokenPanel.style.display === "none" ? "" : "none";
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!tokenPanel || tokenPanel.style.display === "none") return;
+  const t = e.target as Node;
+  if (tokenPanel.contains(t) || t === tokenHelpBtn || t === ghTokenInput) return;
+  tokenPanel.style.display = "none";
+});
+ghTokenInput?.addEventListener("change", () => {
+  ghToken = ghTokenInput.value.trim();
+  try {
+    if (ghToken) localStorage.setItem(GH_TOKEN_KEY, ghToken);
+    else localStorage.removeItem(GH_TOKEN_KEY);
+  } catch { /* private mode */ }
+  if (tokenPanel) tokenPanel.style.display = "none";
+  // fresh source: rate-limited windows were marked attempted and would
+  // otherwise never refetch; the new one also gets the deeper page chain
+  installGitSource(gitRepos);
+});
 // the tree and git-history views share the one status span — remember the tree's
 // text so switching datasets restores it instead of leaking the other's
 let treeStatText = "↵ load any GitHub repo";
@@ -573,6 +630,16 @@ function refreshChrome() {
   const repoable = current === "tree" || current === "git";
   repoInput.style.display = repoable ? "" : "none";
   repoStat.style.display = repoable ? "" : "none";
+  if (ghTokenInput) ghTokenInput.style.display = repoable ? "" : "none";
+  if (tokenHelpBtn) tokenHelpBtn.style.display = repoable ? "" : "none";
+  // one box, two views: remember each view's text and swap on dataset switch
+  if (repoable && repoInput.dataset.view !== current && document.activeElement !== repoInput) {
+    if (repoInput.dataset.view) repoInput.dataset[`text_${repoInput.dataset.view}`] = repoInput.value;
+    repoInput.value =
+      repoInput.dataset[`text_${current}`] ??
+      (current === "git" ? gitRepos.join(" ") : repoInput.value);
+    repoInput.dataset.view = current;
+  }
   if (current === "git") updateGitStat();
   else if (current === "tree") repoStat.textContent = treeStatText;
   for (const b of seg.querySelectorAll("button")) {
@@ -831,7 +898,7 @@ function parseRepo(s: string): { owner: string; repo: string } | null {
 function installGitSource(repos: string[]) {
   gitRepos = repos;
   if (repoInput.value.trim() !== repos.join(" ")) repoInput.value = repos.join(" ");
-  gitSource = createGitHistorySource({ repos });
+  gitSource = createGitHistorySource({ repos, pageCap: ghToken ? 12 : 4, graphql: !!ghToken });
   sources.git = gitSource;
   timelines.git = gitSource;
   wireGit(gitSource);

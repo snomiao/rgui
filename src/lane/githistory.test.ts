@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitImp, commitTrack, createGitHistorySource, windowCells } from "./githistory.js";
+import { commitImp, commitTrack, createGitHistorySource, gqlRows, windowCells } from "./githistory.js";
 import { createTimelineSource } from "./timeline.js";
 
 describe("commitTrack", () => {
@@ -62,6 +62,50 @@ describe("windowCells", () => {
   });
   test("future-only bound clamps at now", () => {
     for (const c of windowCells(0.02, -0.01)) expect(c.bot).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("gqlRows", () => {
+  const payload = {
+    data: {
+      repository: {
+        defaultBranchRef: {
+          target: {
+            history: {
+              pageInfo: { hasNextPage: true, endCursor: "abc123" },
+              nodes: [
+                {
+                  oid: "deadbeef",
+                  message: "feat: big thing\n\nCo-Authored-By: Claude <n@a>",
+                  additions: 1200,
+                  deletions: 300,
+                  committedDate: "2026-07-01T12:00:00Z",
+                  author: { name: "Sno", user: { login: "snomiao" } },
+                },
+                { oid: null, committedDate: null }, // malformed row dropped
+              ],
+            },
+          },
+        },
+      },
+    },
+  };
+  test("normalizes history nodes to REST-shaped rows with stats", () => {
+    const { rows, next } = gqlRows(payload);
+    expect(rows.length).toBe(1);
+    const r = rows[0]!;
+    expect(r.sha).toBe("deadbeef");
+    expect(r.author?.login).toBe("snomiao");
+    expect(r.commit.author?.date).toBe("2026-07-01T12:00:00Z");
+    expect(r.stats).toEqual({ additions: 1200, deletions: 300 });
+    expect(next).toBe("abc123");
+  });
+  test("last page yields next=null; error body yields empty", () => {
+    const done = JSON.parse(JSON.stringify(payload)) as typeof payload;
+    done.data.repository.defaultBranchRef.target.history.pageInfo.hasNextPage = false;
+    expect(gqlRows(done).next).toBeNull();
+    expect(gqlRows({ errors: [{ message: "bad" }] })).toEqual({ rows: [], next: null });
+    expect(gqlRows(null)).toEqual({ rows: [], next: null });
   });
 });
 

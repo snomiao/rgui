@@ -583,8 +583,14 @@ export interface TimelineDataset {
 
 /** helpers the engine lends a dataset's fetch hook */
 export interface TimelineFetchApi {
-  /** fetch a URL once per key (dedup + in-flight cap) and ingest the result */
-  lazyFetch(key: string, url: string, mapFn: (data: unknown) => Ev[]): void;
+  /** fetch a URL once per key (dedup + in-flight cap) and ingest the result;
+   *  `init` allows non-GET requests (e.g. a GraphQL POST) */
+  lazyFetch(
+    key: string,
+    url: string,
+    mapFn: (data: unknown) => Ev[],
+    init?: RequestInit,
+  ): void;
   /** visible window in years-before-present (top = older edge) */
   winYBP(view: LaneView): { top: number; bot: number };
   /** ISO timestamp of a years-before-present offset */
@@ -689,12 +695,17 @@ export function createTimelineSource(
   // a small concurrency cap keeps us polite to the open endpoints — blocked
   // fetches simply retry on a later frame via maybeFetch
   const MAX_LAZY_INFLIGHT = 4;
-  function lazyFetch(key: string, url: string, mapFn: (data: unknown) => Ev[]) {
+  function lazyFetch(
+    key: string,
+    url: string,
+    mapFn: (data: unknown) => Ev[],
+    init?: RequestInit,
+  ) {
     if (fetchedKeys.has(key) || inflightKeys.has(key)) return;
     if (inflightKeys.size >= MAX_LAZY_INFLIGHT) return;
     fetchedKeys.add(key);
     inflightKeys.add(key);
-    fetch(url)
+    fetch(url, init)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data) ingest(mapFn(data));
