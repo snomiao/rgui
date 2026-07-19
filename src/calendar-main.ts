@@ -2,25 +2,28 @@
  * rgui calendar demo — a calendar where ZOOM replaces view switching.
  *
  * One lane on the linear time axis: the per-track fold ladder renders year ⇄
- * month ⇄ week ⇄ day continuously, so there is no view switcher — pinch or
- * wheel is the navigation. All calendars overlay in ONE grid (mobile-first;
- * three side-by-side tracks would each be too narrow to fold on a phone),
- * tinted per source calendar via the engine's per-event color override;
- * chips toggle calendars and rebuild the source (the same replace-the-source
- * pattern the tree and git demos use).
+ * month ⇄ week ⇄ day continuously — pinch or wheel is the navigation. All
+ * calendars overlay in ONE grid (mobile-first), tinted per source calendar
+ * via the engine's per-event color override; chips toggle calendars through
+ * the replace-the-source pattern.
  *
- * Gesture grammar, identical on desktop and mobile:
- *   drag / flick        → pan (navigation stays cheapest)
- *   press-hold ~260ms   → create: ghost snaps to the slot, drag sizes it,
- *                         release opens the title sheet (Alt+drag = instant)
- *   tap an event        → detail sheet (rename / delete)
+ * Input grammar, split by POINTER TYPE (taku spec):
+ *   mouse / pen  left-drag  → select the event span (Google-Calendar style);
+ *                             the viewport pans with wheel / keys / pinch
+ *   touch finger drag/flick → pan (navigation stays cheapest on phones)
+ *   tap / click empty slot  → 30-min placeholder
+ *   tap / click an event    → detail panel (rename / delete)
+ * The placeholder is pure UI STATE (resizable via its handles, nothing saved)
+ * until the create panel's save; the panel floats next to the grid when
+ * there's room and snaps to the bottom on phones.
  *
- * Import: drop an .ics anywhere, 📂 file picker (the only mobile path), or a
- * webcal/https URL — CORS failures say exactly that. Export merges visible
- * events into one .ics. Everything autosaves to localStorage; the file is
- * interchange, not the save mechanism.
+ * The display TIME ZONE is a preference (⚙ → searchable IANA list). The fold
+ * projectors are UTC-based, so the demo presents timestamps to the engine in
+ * a SHIFTED frame — wall time in the chosen zone reads as UTC — which makes
+ * day rows break at that zone's midnight. All-day events stay unshifted
+ * (their date is zone-free and already sits on the UTC day boundary).
  */
-import { parseIcs, serializeIcs, type IcsEvent } from "./calendar/ics.js";
+import { parseIcs, serializeIcs, zoneOffsetMs, type IcsEvent } from "./calendar/ics.js";
 import { createLane } from "./lane/lane.js";
 import {
   createTimelineSource,
@@ -30,6 +33,65 @@ import {
 import { screenToWorldY } from "./lane/view.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#viewer")!;
+
+// ── preferences ───────────────────────────────────────────────────────────
+const PREFS_KEY = "rgui-calendar-prefs";
+const systemTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const prefs: { tz?: string; theme: "auto" | "light" | "dark" } = { theme: "auto" };
+try {
+  Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}"));
+} catch { /* defaults */ }
+function persistPrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    localStorage.setItem("rgui-theme-mode", prefs.theme);
+  } catch { /* private mode */ }
+}
+
+// ── theme: auto follows the OS, and follows OS CHANGES live ───────────────
+const osLight = matchMedia("(prefers-color-scheme: light)");
+const resolveTheme = (): "light" | "dark" =>
+  prefs.theme === "auto" ? (osLight.matches ? "light" : "dark") : prefs.theme;
+function applyTheme() {
+  const t = resolveTheme();
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("rgui-theme", t); } catch { /* other pages read this */ }
+  lane?.setTheme(t);
+  themeSel.value = prefs.theme;
+}
+osLight.addEventListener("change", () => {
+  if (prefs.theme === "auto") applyTheme();
+});
+
+// ── time zone shift frame ─────────────────────────────────────────────────
+let tz = prefs.tz ?? systemTz;
+const offAt = (ms: number): number => {
+  try {
+    return zoneOffsetMs(ms, tz);
+  } catch {
+    return zoneOffsetMs(ms, (tz = systemTz));
+  }
+};
+const toShifted = (ms: number) => ms + offAt(ms);
+const fromShifted = (s: number) => {
+  let real = s - offAt(s);
+  real = s - offAt(real); // refine once across DST edges
+  return real;
+};
+
+let fmt!: Intl.DateTimeFormat;
+let fmtDay!: Intl.DateTimeFormat;
+function makeFormatters() {
+  fmt = new Intl.DateTimeFormat(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit", timeZone: tz,
+  });
+  // all-day dates are zone-free — format their UTC calendar date as-is
+  fmtDay = new Intl.DateTimeFormat(undefined, {
+    weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
+  });
+}
+makeFormatters();
 
 // ── model ─────────────────────────────────────────────────────────────────
 interface CalMeta {
@@ -41,7 +103,7 @@ interface CalMeta {
 type CalEvent = IcsEvent & { calId: string };
 
 const PALETTE = ["#60a5fa", "#f3820d", "#2dd4bf", "#f472b6", "#ffd21c", "#b25ce0", "#7dd3fc"];
-const MINE = "mine"; // the built-in calendar drag-created events land in
+const MINE = "mine";
 
 let calendars: CalMeta[] = [];
 let events: CalEvent[] = [];
@@ -50,7 +112,7 @@ const STORE_KEY = "rgui-calendar";
 function persist() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({ calendars, events }));
-  } catch { /* private mode / quota — session-only then */ }
+  } catch { /* quota — session-only */ }
 }
 try {
   const s = JSON.parse(localStorage.getItem(STORE_KEY) ?? "null");
@@ -65,8 +127,7 @@ function ensureCalendar(id: string, name: string): CalMeta {
   const hit = calById(id);
   if (hit) return hit;
   const cal: CalMeta = {
-    id,
-    name,
+    id, name,
     color: PALETTE[calendars.length % PALETTE.length]!,
     enabled: true,
   };
@@ -74,20 +135,12 @@ function ensureCalendar(id: string, name: string): CalMeta {
   return cal;
 }
 
-// ── time helpers (mirror the engine's linear axis) ────────────────────────
-const SPY = 31556952; // seconds per Julian year (engine constant)
-const nowMs = Date.now(); // same page load as the engine's PRESENT_EPOCH
-const yOfMs = (ms: number) => (nowMs - ms) / 1000 / SPY;
+// ── engine mapping (linear axis, shifted frame) ───────────────────────────
+const SPY = 31556952;
+const nowMs = Date.now();
 const DAY_Y = 1 / 365.25;
 const SNAP_MS = 15 * 60_000;
 const snap = (ms: number) => Math.round(ms / SNAP_MS) * SNAP_MS;
-const fmt = new Intl.DateTimeFormat(undefined, {
-  weekday: "short", month: "short", day: "numeric",
-  hour: "2-digit", minute: "2-digit",
-});
-const fmtDay = new Intl.DateTimeFormat(undefined, {
-  weekday: "short", month: "short", day: "numeric",
-});
 const fmtRange = (e: CalEvent) =>
   e.allDay
     ? `${fmtDay.format(e.startMs)} · all day`
@@ -95,9 +148,10 @@ const fmtRange = (e: CalEvent) =>
 
 function toEv(e: CalEvent): TimelineEvent {
   const cal = calById(e.calId);
+  const t = e.allDay ? e.startMs : toShifted(e.startMs);
   return {
-    y: yOfMs(e.startMs),
-    tMs: e.startMs,
+    y: (toShifted(nowMs) - t) / 1000 / SPY,
+    tMs: t,
     precision: e.allDay
       ? { kind: "calendar", unit: "day" }
       : { kind: "calendar", unit: "minute" },
@@ -106,11 +160,10 @@ function toEv(e: CalEvent): TimelineEvent {
     imp: e.allDay ? 0.6 : 0.5,
     cat: "cal",
     color: cal?.color,
-    span: DAY_Y / 1440, // exact times — no uncertainty band
+    span: DAY_Y / 1440,
   };
 }
 
-// ── source (rebuilt wholesale on every change) ────────────────────────────
 let source: TimelineSource;
 function buildSource(): TimelineSource {
   const visible = events.filter((e) => calById(e.calId)?.enabled !== false);
@@ -122,7 +175,6 @@ function buildSource(): TimelineSource {
       statics: visible.map(toEv),
       oldestYBP: 2,
       futureYears: 2,
-      // a calendar looks FORWARD: yesterday through the coming week
       fitYBP: { top: 1.2 * DAY_Y, bot: -6 * DAY_Y },
     },
   });
@@ -143,15 +195,30 @@ function rebuild(keepView = true) {
 source = buildSource();
 const lane = createLane(canvas, {
   source,
-  theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
+  theme: resolveTheme(),
   maxDpr: 2,
+  onFrame: () => {
+    updateGhost();
+    updateHover();
+  },
 });
 source.setOnUpdate(() => lane.invalidate());
 
-// ── chrome ────────────────────────────────────────────────────────────────
+// real time under a screen y / screen y of a real time — via the shift frame
+const timeAtY = (sy: number): number | null => {
+  const s = source.tMsForWorld(screenToWorldY(lane.view, sy));
+  return s == null ? null : fromShifted(s);
+};
+const yAtTime = (ms: number): number => {
+  const w = source.worldForTMs(toShifted(ms));
+  return (w - lane.view.scrollY) * lane.view.zoomY;
+};
+
+// ── chrome basics ─────────────────────────────────────────────────────────
 const chipsEl = document.querySelector<HTMLDivElement>("#chips")!;
 const emptyEl = document.querySelector<HTMLDivElement>("#empty")!;
 const toastsEl = document.querySelector<HTMLDivElement>("#toasts")!;
+const themeSel = document.querySelector<HTMLSelectElement>("#themeSel")!;
 
 function toast(msg: string, ms = 3200) {
   const el = document.createElement("div");
@@ -181,10 +248,56 @@ function renderChips() {
 }
 
 document.querySelector<HTMLButtonElement>("#theme-toggle")?.addEventListener("click", () => {
-  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  document.documentElement.dataset.theme = next;
-  localStorage.setItem("rgui-theme", next);
-  lane.setTheme(next);
+  prefs.theme = prefs.theme === "auto" ? "light" : prefs.theme === "light" ? "dark" : "auto";
+  persistPrefs();
+  applyTheme();
+  toast(`theme: ${prefs.theme}`);
+});
+
+// ── preferences panel (⚙): time-zone omnibox + theme ──────────────────────
+const prefsPanel = document.querySelector<HTMLDivElement>("#prefsPanel")!;
+const tzInput = document.querySelector<HTMLInputElement>("#tzInput")!;
+const tzList = document.querySelector<HTMLDataListElement>("#tzList")!;
+{
+  let zones: string[] = [];
+  try {
+    zones = (Intl as unknown as { supportedValuesOf(k: string): string[] }).supportedValuesOf("timeZone");
+  } catch { /* older engines: free-text input still works */ }
+  tzList.innerHTML = zones.map((z) => `<option value="${z}"></option>`).join("");
+  tzInput.placeholder = `System (${systemTz})`;
+  if (prefs.tz) tzInput.value = prefs.tz;
+}
+document.querySelector("#prefsBtn")?.addEventListener("click", () => {
+  prefsPanel.style.display = prefsPanel.style.display === "flex" ? "none" : "flex";
+});
+document.addEventListener("pointerdown", (e) => {
+  if (prefsPanel.style.display !== "flex") return;
+  const t = e.target as Node;
+  if (prefsPanel.contains(t) || (t as HTMLElement).id === "prefsBtn") return;
+  prefsPanel.style.display = "none";
+});
+function applyTz(next: string | undefined) {
+  const target = next?.trim() || undefined;
+  if (target) {
+    try {
+      zoneOffsetMs(Date.now(), target);
+    } catch {
+      toast(`unknown time zone: ${target}`);
+      return;
+    }
+  }
+  prefs.tz = target;
+  tz = target ?? systemTz;
+  makeFormatters();
+  persistPrefs();
+  rebuild();
+  toast(`time zone: ${tz}`);
+}
+tzInput.addEventListener("change", () => applyTz(tzInput.value));
+themeSel.addEventListener("change", () => {
+  prefs.theme = themeSel.value as typeof prefs.theme;
+  persistPrefs();
+  applyTheme();
 });
 
 // ── import: file picker · drag-drop · URL ─────────────────────────────────
@@ -199,7 +312,6 @@ function importText(text: string, fallbackName: string) {
   }
   const name = (cal.name ?? fallbackName).replace(/\.ics$/i, "");
   const meta = ensureCalendar(`ics:${name}`, name);
-  // re-import replaces that calendar's events (refresh semantics)
   events = events.filter((e) => e.calId !== meta.id);
   for (const e of cal.events) events.push({ ...e, calId: meta.id });
   rebuild();
@@ -211,15 +323,12 @@ function importText(text: string, fallbackName: string) {
 }
 
 function focusRange(minMs: number, maxMs: number) {
-  const w1 = source.worldForTMs(minMs);
-  const w2 = source.worldForTMs(maxMs);
+  const w1 = source.worldForTMs(toShifted(minMs));
+  const w2 = source.worldForTMs(toShifted(maxMs));
   const lo = Math.min(w1, w2);
   const span = Math.max(Math.abs(w2 - w1), DAY_Y);
   const pad = span * 0.08;
-  lane.setView({
-    zoomY: lane.view.height / (span + pad * 2),
-    scrollY: lo - pad,
-  });
+  lane.setView({ zoomY: lane.view.height / (span + pad * 2), scrollY: lo - pad });
 }
 
 document.querySelector<HTMLButtonElement>("#importBtn")?.addEventListener("click", () => fileInput.click());
@@ -227,7 +336,6 @@ fileInput.addEventListener("change", async () => {
   for (const f of fileInput.files ?? []) importText(await f.text(), f.name);
   fileInput.value = "";
 });
-
 window.addEventListener("dragover", (e) => {
   if (![...(e.dataTransfer?.types ?? [])].includes("Files")) return;
   e.preventDefault();
@@ -274,208 +382,285 @@ document.querySelector<HTMLButtonElement>("#saveBtn")?.addEventListener("click",
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 });
 
-// ── create: press-and-hold drag (unified desktop + mobile) ────────────────
+// ── placeholder (UI state until saved) + input grammar ────────────────────
 const ghostEl = document.querySelector<HTMLDivElement>("#ghost")!;
-const HOLD_MS = 260;
-const MOVE_TOL = 7;
+const ghostLabel = document.querySelector<HTMLSpanElement>("#ghostLabel")!;
+const cellhlEl = document.querySelector<HTMLDivElement>("#cellhl")!;
 
-const timeAtY = (sy: number): number | null =>
-  source.tMsForWorld(screenToWorldY(lane.view, sy));
-const yAtTime = (ms: number): number => {
-  const w = source.worldForTMs(ms);
-  return (w - lane.view.scrollY) * lane.view.zoomY;
-};
-
-let pending: { x: number; y: number; id: number; timer: number } | null = null;
-let creating: { t0: number; t1: number; id: number } | null = null;
+let ph: { t0: number; t1: number } | null = null; // the placeholder span (real ms)
+let op: { kind: "size" | "resize"; edge?: "top" | "bottom"; id: number } | null = null;
 let suppressClickUntil = 0;
 
+function phBounds(): { a: number; b: number } | null {
+  if (!ph) return null;
+  const a = Math.min(ph.t0, ph.t1);
+  return { a, b: Math.max(ph.t0, ph.t1, a + SNAP_MS) };
+}
 function updateGhost() {
-  if (!creating) {
+  const b = phBounds();
+  if (!b) {
     ghostEl.style.display = "none";
     return;
   }
-  const a = Math.min(creating.t0, creating.t1);
-  const b = Math.max(creating.t0, creating.t1, a + SNAP_MS);
-  const y0 = yAtTime(a);
-  const y1 = yAtTime(b);
   const rect = canvas.getBoundingClientRect();
+  const y0 = yAtTime(b.a);
+  const y1 = yAtTime(b.b);
   ghostEl.style.display = "block";
-  ghostEl.style.left = `${rect.left + 90}px`;
+  ghostEl.style.left = `${rect.left + 92}px`;
   ghostEl.style.right = "12px";
   ghostEl.style.width = "auto";
   ghostEl.style.top = `${rect.top + Math.min(y0, y1)}px`;
-  ghostEl.style.height = `${Math.max(Math.abs(y1 - y0), 14)}px`;
-  ghostEl.textContent = `${fmt.format(a)} → ${fmt.format(b)}`;
+  ghostEl.style.height = `${Math.max(Math.abs(y1 - y0), 16)}px`;
+  ghostLabel.textContent = `${fmt.format(b.a)} → ${fmt.format(b.b)}`;
+  if (createSheet.style.display === "flex") positionSheet(createSheet, rect.top + (y0 + y1) / 2);
 }
-
-let handingOff = false; // the synthetic pan-ending pointerup must not finish a create
-function startCreate(x: number, y: number, pointerId: number) {
-  const t = timeAtY(y);
-  if (t == null || !Number.isFinite(t)) return;
-  // hand the gesture over: end the lane's pan (same pointer id) — the view
-  // moved ≤ MOVE_TOL px, which reads as stillness
-  handingOff = true;
-  canvas.dispatchEvent(new PointerEvent("pointerup", { pointerId, bubbles: true }));
-  handingOff = false;
-  creating = { t0: snap(t), t1: snap(t) + 30 * 60_000, id: pointerId };
+function dropPlaceholder() {
+  ph = null;
+  op = null;
   updateGhost();
+  closeCreateSheet();
 }
 
+function beginPlaceholder(t: number, id: number | null, kind: "size" | "tap") {
+  const t0 = snap(t);
+  ph = { t0, t1: t0 + (kind === "tap" ? 30 * 60_000 : SNAP_MS) };
+  if (id != null && kind === "size") op = { kind: "size", id };
+  updateGhost();
+  if (kind === "tap") openCreateSheet();
+}
+
+// pointer-type grammar (capture phase so the lane never sees create drags)
 canvas.addEventListener(
   "pointerdown",
   (e) => {
     if (!e.isPrimary || e.button !== 0) return;
-    if (e.altKey) {
-      // desktop power path: Alt+drag creates immediately
-      e.stopPropagation();
-      e.preventDefault();
-      startCreate(e.offsetX, e.offsetY, e.pointerId);
-      return;
-    }
-    const id = e.pointerId;
-    const x = e.offsetX;
-    const y = e.offsetY;
-    pending = {
-      x, y, id,
-      timer: window.setTimeout(() => {
-        pending = null;
-        startCreate(x, y, id);
-      }, HOLD_MS),
-    };
+    const draggish = e.pointerType === "mouse" || e.pointerType === "pen";
+    if (!draggish) return; // touch: the lane pans; taps handled on click
+    const rect = canvas.getBoundingClientRect();
+    const sy = e.clientY - rect.top;
+    // a press on an existing event is an inspect-click, not a create-drag
+    if (source.eventAt(e.clientX - rect.left, sy, lane.view)) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const t = timeAtY(sy);
+    if (t == null || !Number.isFinite(t)) return;
+    closeDetail();
+    beginPlaceholder(t, e.pointerId, "size");
   },
   { capture: true },
 );
 canvas.addEventListener(
   "pointermove",
   (e) => {
-    if (pending && e.pointerId === pending.id) {
-      if (Math.hypot(e.offsetX - pending.x, e.offsetY - pending.y) > MOVE_TOL) {
-        clearTimeout(pending.timer);
-        pending = null; // it's a pan — the lane already has it
-      }
-    }
-    if (creating && e.pointerId === creating.id) {
+    if (op && e.pointerId === op.id && ph) {
       e.stopPropagation();
       e.preventDefault();
-      const t = timeAtY(e.offsetY);
-      if (t != null && Number.isFinite(t)) creating.t1 = snap(t);
+      const rect = canvas.getBoundingClientRect();
+      const t = timeAtY(e.clientY - rect.top);
+      if (t == null || !Number.isFinite(t)) return;
+      if (op.kind === "size") ph.t1 = snap(t);
+      else if (op.edge === "top") ph.t0 = snap(t);
+      else ph.t1 = snap(t);
       updateGhost();
     }
   },
   { capture: true },
 );
 function endPointer(e: PointerEvent) {
-  if (pending && e.pointerId === pending.id) {
-    clearTimeout(pending.timer);
-    pending = null;
-  }
-  if (creating && e.pointerId === creating.id && !handingOff) {
-    e.stopPropagation();
-    const a = Math.min(creating.t0, creating.t1);
-    const b = Math.max(creating.t0, creating.t1, a + SNAP_MS);
-    creating = null;
-    updateGhost();
-    suppressClickUntil = performance.now() + 400;
-    openCreateSheet(a, b);
-  }
+  if (!op || e.pointerId !== op.id) return;
+  e.stopPropagation();
+  const wasSize = op.kind === "size";
+  op = null;
+  suppressClickUntil = performance.now() + 400;
+  if (wasSize) openCreateSheet();
+  updateGhost();
 }
 canvas.addEventListener("pointerup", endPointer, { capture: true });
 canvas.addEventListener("pointercancel", endPointer, { capture: true });
 
-// ── sheets ────────────────────────────────────────────────────────────────
+// placeholder resize handles (both edges, any pointer type — incl. touch)
+for (const h of ghostEl.querySelectorAll<HTMLDivElement>(".handle")) {
+  h.addEventListener("pointerdown", (e) => {
+    if (!ph) return;
+    e.stopPropagation();
+    e.preventDefault();
+    h.setPointerCapture(e.pointerId);
+    const edge = h.dataset.edge as "top" | "bottom";
+    // normalize so t0 = top edge, t1 = bottom edge before grabbing one
+    const b = phBounds()!;
+    ph.t0 = b.a;
+    ph.t1 = b.b;
+    op = { kind: "resize", edge, id: e.pointerId };
+  });
+  h.addEventListener("pointermove", (e) => {
+    if (!op || op.kind !== "resize" || e.pointerId !== op.id || !ph) return;
+    const rect = canvas.getBoundingClientRect();
+    const t = timeAtY(e.clientY - rect.top);
+    if (t == null || !Number.isFinite(t)) return;
+    if (op.edge === "top") ph.t0 = snap(t);
+    else ph.t1 = snap(t);
+    updateGhost();
+  });
+  h.addEventListener("pointerup", (e) => {
+    if (op?.kind === "resize" && e.pointerId === op.id) op = null;
+  });
+}
+
+// ── hover: crosshair companion — highlight the grid cell under the pointer
+let hoverPos: { x: number; y: number } | null = null;
+canvas.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "touch") return; // no hover on touch
+  hoverPos = { x: e.offsetX, y: e.offsetY };
+  updateHover();
+});
+canvas.addEventListener("pointerleave", () => {
+  hoverPos = null;
+  updateHover();
+});
+function updateHover() {
+  const cell = hoverPos && !op ? source.gridAt(hoverPos.x, hoverPos.y, lane.view) : null;
+  if (!cell) {
+    cellhlEl.style.display = "none";
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  cellhlEl.style.display = "block";
+  cellhlEl.style.left = `${rect.left + cell.x0}px`;
+  cellhlEl.style.width = `${cell.x1 - cell.x0}px`;
+  cellhlEl.style.top = `${rect.top + cell.y0}px`;
+  cellhlEl.style.height = `${cell.y1 - cell.y0}px`;
+}
+
+// ── create / detail panels: floating when there's room, bottom sheet else ─
+function positionSheet(sheet: HTMLElement, anchorY: number) {
+  const wide = innerWidth >= 700;
+  sheet.classList.toggle("floating", wide);
+  if (!wide) {
+    sheet.style.left = "";
+    sheet.style.top = "";
+    return;
+  }
+  const w = 300;
+  const pad = 12;
+  sheet.style.left = `${innerWidth - w - pad - 8}px`;
+  const h = sheet.offsetHeight || 190;
+  sheet.style.top = `${Math.max(54, Math.min(innerHeight - h - pad, anchorY - h / 2))}px`;
+}
+
 const createSheet = document.querySelector<HTMLDivElement>("#createSheet")!;
 const createTitle = document.querySelector<HTMLInputElement>("#createTitle")!;
 const createTime = document.querySelector<HTMLDivElement>("#createTime")!;
-let draft: { startMs: number; endMs: number } | null = null;
 
-function openCreateSheet(startMs: number, endMs: number) {
-  draft = { startMs, endMs };
-  createTitle.value = "";
-  createTime.textContent = `${fmt.format(startMs)} → ${fmt.format(endMs)}`;
+function openCreateSheet() {
+  const b = phBounds();
+  if (!b) return;
+  createTitle.value = createTitle.value; // keep half-typed titles across resizes
+  createTime.textContent = `${fmt.format(b.a)} → ${fmt.format(b.b)}`;
   createSheet.style.display = "flex";
+  positionSheet(createSheet, yAtTime((b.a + b.b) / 2) + canvas.getBoundingClientRect().top);
   createTitle.focus();
 }
 function closeCreateSheet() {
   createSheet.style.display = "none";
-  draft = null;
+  createTitle.value = "";
 }
-document.querySelector("#createCancel")?.addEventListener("click", closeCreateSheet);
+document.querySelector("#createCancel")?.addEventListener("click", dropPlaceholder);
 document.querySelector("#createSave")?.addEventListener("click", saveDraft);
 createTitle.addEventListener("keydown", (e) => {
   if (e.key === "Enter") saveDraft();
-  if (e.key === "Escape") closeCreateSheet();
+  if (e.key === "Escape") dropPlaceholder();
 });
 function saveDraft() {
-  if (!draft) return;
+  const b = phBounds();
+  if (!b) return;
   ensureCalendar(MINE, "My events");
   events.push({
     uid: `mine-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`,
     summary: createTitle.value.trim() || "New event",
-    startMs: draft.startMs,
-    endMs: draft.endMs,
+    startMs: b.a,
+    endMs: b.b,
     allDay: false,
     calId: MINE,
   });
-  closeCreateSheet();
+  dropPlaceholder();
   rebuild();
 }
 
-// ＋ button: default 1-h event at the viewport center (discoverability path)
+// keep the create-time line fresh while resizing
+const createTimeSync = () => {
+  const b = phBounds();
+  if (b && createSheet.style.display === "flex")
+    createTime.textContent = `${fmt.format(b.a)} → ${fmt.format(b.b)}`;
+  requestAnimationFrame(createTimeSync);
+};
+requestAnimationFrame(createTimeSync);
+
+// ＋ button: placeholder at the viewport center (discoverability path)
 document.querySelector<HTMLButtonElement>("#newBtn")?.addEventListener("click", () => {
   const t = timeAtY(lane.view.height / 2);
   if (t == null) return;
-  const start = snap(t);
-  openCreateSheet(start, start + 60 * 60_000);
+  beginPlaceholder(t, null, "tap");
 });
 
-// ── tap-to-inspect ────────────────────────────────────────────────────────
+// ── tap / click: inspect an event, or drop a placeholder on empty grid ────
 const detailSheet = document.querySelector<HTMLDivElement>("#detailSheet")!;
 const detailTitle = document.querySelector<HTMLInputElement>("#detailTitle")!;
 const detailTime = document.querySelector<HTMLDivElement>("#detailTime")!;
 const detailCal = document.querySelector<HTMLDivElement>("#detailCal")!;
 let inspected: CalEvent | null = null;
 
+function closeDetail() {
+  detailSheet.style.display = "none";
+  inspected = null;
+}
+
 canvas.addEventListener("click", (e) => {
   if (performance.now() < suppressClickUntil) return;
   const rect = canvas.getBoundingClientRect();
-  const hit = source.eventAt(e.clientX - rect.left, e.clientY - rect.top, lane.view);
-  if (!hit) {
-    detailSheet.style.display = "none";
-    inspected = null;
+  const sx = e.clientX - rect.left;
+  const sy = e.clientY - rect.top;
+  const hit = source.eventAt(sx, sy, lane.view);
+  if (hit) {
+    if (ph) dropPlaceholder();
+    const t = timeAtY(sy) ?? 0;
+    const candidates = events.filter((ev) => ev.summary.startsWith(hit.title));
+    candidates.sort((a, b) => Math.abs(a.startMs - t) - Math.abs(b.startMs - t));
+    const ev = candidates[0];
+    if (!ev) return;
+    inspected = ev;
+    detailTitle.value = ev.summary;
+    detailTime.textContent = fmtRange(ev);
+    detailCal.textContent =
+      `calendar: ${calById(ev.calId)?.name ?? ev.calId}` +
+      (ev.recurring ? " · recurring (first instance)" : "");
+    detailSheet.style.display = "flex";
+    positionSheet(detailSheet, e.clientY);
     return;
   }
-  // resolve the hit title back to a model event; ties break by proximity to
-  // the time under the pointer
-  const t = timeAtY(e.clientY - rect.top) ?? 0;
-  const candidates = events.filter((ev) => ev.summary.startsWith(hit.title));
-  candidates.sort((a, b) => Math.abs(a.startMs - t) - Math.abs(b.startMs - t));
-  const ev = candidates[0];
-  if (!ev) return;
-  inspected = ev;
-  detailTitle.value = ev.summary;
-  detailTime.textContent = fmtRange(ev);
-  detailCal.textContent = `calendar: ${calById(ev.calId)?.name ?? ev.calId}` + (ev.recurring ? " · recurring (first instance)" : "");
-  detailSheet.style.display = "flex";
+  if (ph) {
+    dropPlaceholder(); // click-away discards the pending span
+    return;
+  }
+  closeDetail();
+  const t = timeAtY(sy);
+  if (t == null || !Number.isFinite(t)) return;
+  beginPlaceholder(t, null, "tap"); // tap/click on empty grid → 30-min span
 });
 document.querySelector("#detailClose")?.addEventListener("click", () => {
   applyRename();
-  detailSheet.style.display = "none";
-  inspected = null;
+  closeDetail();
 });
 document.querySelector("#detailDelete")?.addEventListener("click", () => {
   if (!inspected) return;
   events = events.filter((e) => e !== inspected);
-  detailSheet.style.display = "none";
-  inspected = null;
+  closeDetail();
   rebuild();
   toast("event deleted");
 });
 detailTitle.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     applyRename();
-    detailSheet.style.display = "none";
-    inspected = null;
+    closeDetail();
   }
 });
 function applyRename() {
@@ -487,7 +672,78 @@ function applyRename() {
   }
 }
 
+// ── search omnibox (⌘K / Ctrl+K) ──────────────────────────────────────────
+const qEl = document.querySelector<HTMLInputElement>("#q")!;
+const qSuggest = document.querySelector<HTMLDivElement>("#qsuggest")!;
+type Hit = ReturnType<TimelineSource["find"]>[number];
+let qHits: Hit[] = [];
+let qIdx = -1;
+
+const esc = (s: string) =>
+  s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+function renderQ() {
+  qSuggest.innerHTML = qHits
+    .map(
+      (h, i) =>
+        `<div class="hit${i === qIdx ? " active" : ""}" data-i="${i}">` +
+        `<span class="swatch" style="background:${h.color}"></span>` +
+        `<span>${esc(h.label)}</span>` +
+        (h.detail ? `<span class="det">${esc(h.detail.split(" · ")[1] ?? h.detail)}</span>` : "") +
+        `</div>`,
+    )
+    .join("");
+}
+function clearQ() {
+  qHits = [];
+  qIdx = -1;
+  renderQ();
+}
+function focusHit(h: Hit) {
+  lane.focus({ center: h.center, zoom: lane.view.height / h.scale });
+  source.setPulse(h);
+  clearQ();
+  qEl.blur();
+}
+qEl.addEventListener("input", () => {
+  const q = qEl.value.trim();
+  qHits = q ? source.find(q, 8) : [];
+  qIdx = qHits.length ? 0 : -1;
+  renderQ();
+});
+qEl.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") {
+    qIdx = Math.min(qHits.length - 1, qIdx + 1);
+    renderQ();
+    e.preventDefault();
+  } else if (e.key === "ArrowUp") {
+    qIdx = Math.max(0, qIdx - 1);
+    renderQ();
+    e.preventDefault();
+  } else if (e.key === "Enter") {
+    if (qHits[qIdx]) focusHit(qHits[qIdx]!);
+  } else if (e.key === "Escape") {
+    qEl.value = "";
+    clearQ();
+    qEl.blur();
+  }
+});
+qEl.addEventListener("blur", () => setTimeout(clearQ, 140));
+qSuggest.addEventListener("mousedown", (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>(".hit");
+  if (!el) return;
+  e.preventDefault();
+  focusHit(qHits[+el.dataset.i!]!);
+});
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    qEl.focus();
+    qEl.select();
+  }
+});
+
 // ── boot ──────────────────────────────────────────────────────────────────
+applyTheme();
 renderChips();
 emptyEl.style.display = events.length ? "none" : "";
 if (events.length) rebuild(false);

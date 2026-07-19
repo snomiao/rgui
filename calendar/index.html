@@ -11,9 +11,12 @@
       content="rgui calendar — a calendar where zoom replaces view switching. Year, month, week and day are one continuous fold; drop an .ics to import, press-and-hold a slot to create, export back to .ics."
     />
     <script>
+      // theme BEFORE first paint: explicit choice wins, else follow the OS
+      const themeMode = localStorage.getItem("rgui-theme-mode") ?? "auto";
       document.documentElement.dataset.theme =
-        localStorage.getItem("rgui-theme") ??
-        (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        themeMode === "light" || themeMode === "dark"
+          ? themeMode
+          : matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
     </script>
     <style>
       :root {
@@ -41,7 +44,8 @@
       html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
       #viewer {
         position: relative; z-index: 1; display: block;
-        width: 100vw; height: 100vh; touch-action: none; cursor: ns-resize;
+        width: 100vw; height: 100vh; touch-action: none;
+        cursor: crosshair; /* the cursor IS the time pointer */
       }
       #bar {
         position: fixed; top: 10px; left: 10px; right: 10px; z-index: 30;
@@ -103,15 +107,74 @@
         color: var(--text); font: 700 17px/1.6 ui-monospace, Menlo, monospace;
         pointer-events: none; text-align: center;
       }
-      /* drag-create ghost */
+      /* hovered grid cell highlight */
+      #cellhl {
+        position: fixed; z-index: 15; display: none; pointer-events: none;
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+        border-radius: 3px;
+      }
+      /* creation placeholder (UI state until saved) */
       #ghost {
         position: fixed; z-index: 20; display: none; pointer-events: none;
         border: 1.5px solid var(--accent); border-radius: 5px;
         background: color-mix(in srgb, var(--accent) 22%, transparent);
         color: var(--text); font: 600 11px/1.4 ui-monospace, Menlo, monospace;
-        padding: 2px 6px; overflow: hidden;
+        padding: 2px 6px; overflow: visible;
       }
-      /* bottom sheet (create + detail) */
+      #ghost .handle {
+        position: absolute; left: 50%; transform: translateX(-50%);
+        width: 26px; height: 14px; border-radius: 7px;
+        background: var(--accent); opacity: 0.9;
+        pointer-events: auto; cursor: ns-resize; touch-action: none;
+      }
+      #ghost .handle.top { top: -8px; }
+      #ghost .handle.bottom { bottom: -8px; }
+      /* search omnibox */
+      #qwrap { position: relative; }
+      #q {
+        width: 140px; padding: 7px 10px; border: 1px solid var(--border);
+        border-radius: 7px; background: var(--panel); color: var(--text);
+        font: 500 12px/1 ui-monospace, Menlo, monospace; outline: none;
+      }
+      #q:focus { border-color: var(--accent); width: 200px; }
+      #q::placeholder { color: var(--text-faint); }
+      #qsuggest {
+        position: absolute; top: 38px; left: 0; min-width: 260px;
+        display: none; flex-direction: column;
+        background: var(--panel-strong); border: 1px solid var(--border);
+        border-radius: 7px; overflow: hidden; max-height: 240px; overflow-y: auto;
+        z-index: 65;
+      }
+      #qsuggest:not(:empty) { display: flex; }
+      #qsuggest .hit {
+        display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+        cursor: pointer; border-bottom: 1px solid var(--border);
+        font: 500 12px/1.3 ui-monospace, Menlo, monospace; color: var(--text);
+      }
+      #qsuggest .hit:last-child { border-bottom: 0; }
+      #qsuggest .hit:hover, #qsuggest .hit.active {
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      #qsuggest .hit .swatch { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+      #qsuggest .hit .det { color: var(--text-faint); font-size: 10px; margin-left: auto; }
+      /* preferences panel */
+      #prefsPanel {
+        position: fixed; top: 54px; right: 10px; z-index: 65;
+        display: none; flex-direction: column; gap: 10px; min-width: 250px;
+        background: var(--panel-strong); border: 1px solid var(--border);
+        border-radius: 10px; padding: 12px 14px;
+        font: 500 12px/1.6 ui-monospace, Menlo, monospace; color: var(--text);
+      }
+      #prefsPanel label { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); }
+      #prefsPanel input, #prefsPanel select {
+        padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
+        background: transparent; color: var(--text);
+        font: 500 12px/1 ui-monospace, Menlo, monospace; outline: none;
+      }
+      #prefsPanel input:focus, #prefsPanel select:focus { border-color: var(--accent); }
+      /* create/detail panel: bottom sheet by default (mobile / tight space);
+         .floating pins it next to the placeholder when there's room */
       .sheet {
         position: fixed; z-index: 60; left: 50%; bottom: 18px;
         transform: translateX(-50%);
@@ -138,6 +201,10 @@
       }
       .sheet button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
       .sheet button.danger { color: #f85149; border-color: #f85149; }
+      .sheet.floating {
+        left: auto; bottom: auto; transform: none;
+        width: 300px;
+      }
       /* toasts */
       #toasts {
         position: fixed; z-index: 70; left: 50%; top: 58px; transform: translateX(-50%);
@@ -180,19 +247,45 @@
       </nav>
       <div id="chips"></div>
       <div class="grow"></div>
+      <div id="qwrap">
+        <input id="q" type="search" placeholder="search ⌘K" autocomplete="off" spellcheck="false" />
+        <div id="qsuggest"></div>
+      </div>
       <input id="calurl" type="text" placeholder="webcal/ics URL ↵" autocomplete="off" spellcheck="false" />
       <button class="icon-btn" id="importBtn" title="Import an .ics file">📂 import</button>
       <input id="file" type="file" accept=".ics,text/calendar" multiple style="display: none" />
       <button class="icon-btn" id="saveBtn" title="Download everything visible as .ics">⬇ save</button>
       <button class="icon-btn" id="newBtn" title="New event at the viewport center">＋</button>
+      <button class="icon-btn" id="prefsBtn" title="Preferences">⚙</button>
       <a id="wordmark" href="/">RGUI<span> · calendar</span></a>
-      <button class="icon-btn" id="theme-toggle" title="Toggle theme" style="border-radius: 50%">◐</button>
+      <button class="icon-btn" id="theme-toggle" title="Theme: auto → light → dark" style="border-radius: 50%">◐</button>
     </div>
+    <div id="prefsPanel">
+      <div style="font-weight: 700">Preferences</div>
+      <label>
+        time zone
+        <input id="tzInput" list="tzList" placeholder="System" autocomplete="off" spellcheck="false" />
+        <datalist id="tzList"></datalist>
+      </label>
+      <label>
+        theme
+        <select id="themeSel">
+          <option value="auto">auto (follow system)</option>
+          <option value="light">light</option>
+          <option value="dark">dark</option>
+        </select>
+      </label>
+    </div>
+    <div id="cellhl"></div>
     <div id="drop">drop .ics to import<br /><span style="font-size:13px; color: var(--text-muted)">events land in their own calendar chip</span></div>
-    <div id="ghost"></div>
+    <div id="ghost">
+      <span id="ghostLabel"></span>
+      <div class="handle top" data-edge="top"></div>
+      <div class="handle bottom" data-edge="bottom"></div>
+    </div>
     <div id="empty">
       drop an .ics file · paste a calendar URL<br />
-      or <b>press-and-hold</b> an empty slot to create your first event<br />
+      or <b>drag</b> (mouse/pen) · <b>tap</b> (touch) an empty slot to create<br />
       <span style="font-size:12px; color: var(--text-faint)">zoom is the view switch — year ⇄ month ⇄ week ⇄ day</span>
     </div>
     <div class="sheet" id="createSheet">

@@ -550,6 +550,17 @@ export interface TimelineSource extends LaneSource {
   find(query: string, limit?: number): SearchHit[];
   /** how many events are loaded (statics + everything ingested so far) */
   eventCount(): number;
+  /**
+   * the fold grid cell under a screen point (per-track fold mode): its
+   * screen rect plus the time window it spans. Hosts use it for hover
+   * highlights and slot-snapped creation. Null when the pointer is outside
+   * a folded track band or no fold level is readable there.
+   */
+  gridAt(
+    sx: number,
+    sy: number,
+    view: LaneView,
+  ): { x0: number; x1: number; y0: number; y1: number; t0: number; t1: number } | null;
   /** called when lazily-fetched events arrive (host wires it to invalidate) */
   setOnUpdate(fn: () => void): void;
   /** every English UI string (labels/details/headers/eras/cycles), for i18n */
@@ -2404,6 +2415,59 @@ export function createTimelineSource(
       onUpdate();
     },
     eventCount: () => points.length,
+    gridAt(sx, sy, view) {
+      if (fold !== "none" || !trackFold) return null;
+      const rem = remPx();
+      const tracks = activeTracks(view);
+      const tr = tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
+      if (!tr || tr.meta.cat === "periodic") return null;
+      if (!trackWideEnough(tr.meta.cat, tr.w, rem)) return null;
+      const contentW = trackContentW(tr.w, rem);
+      const cx0 = trackContentX0(tr.x0, rem);
+      if (sx < cx0 || sx > cx0 + contentW) return null;
+      const tPointer = tMsOfYbp(yBPof(screenToWorldY(view, sy)));
+      const tCenter = tMsOfYbp(yBPof(screenToWorldY(view, view.height / 2)));
+      if (!Number.isFinite(tPointer) || !Number.isFinite(tCenter)) return null;
+      // same level pick as the band chrome: finest readable at the center
+      for (const lf of LADDER_FINE_FIRST) {
+        const fv = FOLD_VIEWS[lf];
+        const div = chooseDivision(fv, contentW, rem);
+        if (!div) continue;
+        const pc = fv.projector.project(tCenter);
+        if (!pc) continue;
+        const s0 = foldRowStartMs(lf, pc.rowIndex);
+        const s1 = foldRowStartMs(lf, pc.rowIndex + 1);
+        if (!Number.isFinite(s0) || !Number.isFinite(s1)) continue;
+        const b0 = worldToScreenY(view, worldOf(ybpOfTMs(s0)));
+        const b1 = worldToScreenY(view, worldOf(ybpOfTMs(s1)));
+        if (Math.abs(b1 - b0) < rem) continue;
+        const pp = fv.projector.project(tPointer);
+        if (!pp) return null;
+        const slots = div.slots;
+        const slot = Math.max(
+          0,
+          Math.min(Math.ceil(slots) - 1, Math.floor(Math.min(0.999999, (sx - cx0) / contentW) * slots)),
+        );
+        const rs = foldRowStartMs(lf, pp.rowIndex);
+        const re = foldRowStartMs(lf, pp.rowIndex + 1);
+        if (!Number.isFinite(rs) || !Number.isFinite(re)) return null;
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(rs)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(re)));
+        // slot → time linearly within the row (exact for hour/day rows; an
+        // approximation for uneven month divisions — fine for a highlight)
+        const t0 = rs + ((re - rs) * slot) / slots;
+        const t1 = rs + ((re - rs) * Math.min(slot + 1, slots)) / slots;
+        return {
+          x0: cx0 + (slot / slots) * contentW,
+          x1: cx0 + (Math.min(slot + 1, slots) / slots) * contentW,
+          y0: Math.min(ya, yb),
+          y1: Math.max(ya, yb),
+          t0,
+          t1,
+        };
+      }
+      return null;
+    },
     eventAt(sx, sy, view) {
       // a visible label is a hover target for its event (either mode)
       for (const l of foldLabelRects) {

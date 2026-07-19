@@ -84,7 +84,7 @@ const escapeText = (s: string): string =>
 // ── date-times ────────────────────────────────────────────────────────────
 
 /** UTC offset (ms) of an IANA zone at a given instant, via Intl */
-function zoneOffsetMs(ms: number, tz: string): number {
+export function zoneOffsetMs(ms: number, tz: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     year: "numeric", month: "2-digit", day: "2-digit",
