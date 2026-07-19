@@ -46,6 +46,11 @@ Run `bun run dev`, then open one of the multi-page demo routes:
 - `/lane/` — the 1D semantic-zoom lane: `/lane/tree/` (folder tree of any
   GitHub repo), `/lane/time/` (deep time), `/lane/git/` (commit history of
   any GitHub repo, one track per repo), `/lane/signal/` (time series)
+- `/calendar/` — a calendar where zoom replaces view switching: year ⇄ month ⇄
+  week ⇄ day as one continuous fold. Drop or fetch an `.ics` to import
+  (recurring events expanded, all-day events as day bands), press-and-hold a
+  slot to create, tap to rename/delete, export back to `.ics`; everything
+  autosaves locally
 - `/cube/` — a 4x4x4 parallel- or cross-eye stereo number puzzle with a live
   RG merge lab and switchable matched/shared/split binocular wire labels
 - `/world/` — a walkable stereoscopic voxel-room prototype with focus-depth

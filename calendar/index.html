@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>rgui · calendar — semantic-zoom calendar</title>
+    <link rel="icon" type="image/gif" href="/assets/rgui-icon-32.gif" />
+    <link rel="alternate icon" type="image/png" href="/assets/rgui-icon-32.png" />
+    <meta
+      name="description"
+      content="rgui calendar — a calendar where zoom replaces view switching. Year, month, week and day are one continuous fold; drop an .ics to import, press-and-hold a slot to create, export back to .ics."
+    />
+    <script>
+      document.documentElement.dataset.theme =
+        localStorage.getItem("rgui-theme") ??
+        (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+    </script>
+    <style>
+      :root {
+        --bg: #101a2d;
+        --text: #e7eef7;
+        --text-dim: #bfd0e4;
+        --text-muted: #91a9c7;
+        --text-faint: #5e7698;
+        --border: #345275;
+        --panel: rgba(12, 25, 44, 0.88);
+        --panel-strong: rgba(14, 29, 50, 0.96);
+        --accent: #ffd447;
+      }
+      :root[data-theme="light"] {
+        --bg: #f4ca79;
+        --text: #342715;
+        --text-dim: #5b4325;
+        --text-muted: #7f6034;
+        --text-faint: #a9844c;
+        --border: #c99b4b;
+        --panel: rgba(255, 239, 190, 0.9);
+        --panel-strong: rgba(255, 245, 211, 0.97);
+        --accent: #8b2fc9;
+      }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+      #viewer {
+        position: relative; z-index: 1; display: block;
+        width: 100vw; height: 100vh; touch-action: none; cursor: ns-resize;
+      }
+      #bar {
+        position: fixed; top: 10px; left: 10px; right: 10px; z-index: 30;
+        display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        pointer-events: none;
+      }
+      #bar > * { pointer-events: auto; }
+      .demo-nav {
+        display: inline-flex; align-items: center;
+        border: 1px solid var(--border); border-radius: 7px; background: var(--panel);
+      }
+      .demo-nav select {
+        min-height: 32px; padding: 0 30px 0 10px; border: 0; border-radius: 7px;
+        appearance: none;
+        background:
+          linear-gradient(45deg, transparent 50%, var(--text-dim) 50%) right 14px center / 5px 5px no-repeat,
+          linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) right 9px center / 5px 5px no-repeat,
+          transparent;
+        color: var(--text); font: 700 12px/1 ui-monospace, Menlo, monospace;
+        cursor: pointer; outline: none;
+      }
+      .icon-btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        min-width: 34px; height: 34px; padding: 0 10px;
+        border: 1px solid var(--border); border-radius: 7px;
+        background: var(--panel); color: var(--text-dim);
+        font: 600 12px/1 ui-monospace, Menlo, monospace;
+        cursor: pointer; text-decoration: none; white-space: nowrap;
+        transition: border-color 120ms, color 120ms;
+      }
+      .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+      #calurl {
+        width: 150px; padding: 7px 10px; border: 1px solid var(--border);
+        border-radius: 7px; background: var(--panel); color: var(--text);
+        font: 500 12px/1 ui-monospace, Menlo, monospace; outline: none;
+      }
+      #calurl:focus { border-color: var(--accent); }
+      #calurl::placeholder { color: var(--text-faint); }
+      #chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+      .chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        border: 1px solid var(--border); border-radius: 999px;
+        background: var(--panel); color: var(--text-dim);
+        font: 600 11px/1 ui-monospace, Menlo, monospace;
+        padding: 6px 11px; cursor: pointer;
+      }
+      .chip[aria-pressed="false"] { opacity: 0.45; }
+      .chip .swatch { width: 9px; height: 9px; border-radius: 50%; }
+      .grow { flex: 1; }
+      #wordmark { font-weight: 700; font-size: 13px; color: var(--text); text-decoration: none; }
+      #wordmark span { color: var(--text-muted); font-weight: 500; }
+      /* full-window drop hint */
+      #drop {
+        position: fixed; inset: 0; z-index: 50; display: none;
+        align-items: center; justify-content: center;
+        background: color-mix(in srgb, var(--bg) 55%, transparent);
+        border: 3px dashed var(--accent); border-radius: 14px; margin: 10px;
+        color: var(--text); font: 700 17px/1.6 ui-monospace, Menlo, monospace;
+        pointer-events: none; text-align: center;
+      }
+      /* drag-create ghost */
+      #ghost {
+        position: fixed; z-index: 20; display: none; pointer-events: none;
+        border: 1.5px solid var(--accent); border-radius: 5px;
+        background: color-mix(in srgb, var(--accent) 22%, transparent);
+        color: var(--text); font: 600 11px/1.4 ui-monospace, Menlo, monospace;
+        padding: 2px 6px; overflow: hidden;
+      }
+      /* bottom sheet (create + detail) */
+      .sheet {
+        position: fixed; z-index: 60; left: 50%; bottom: 18px;
+        transform: translateX(-50%);
+        width: min(440px, calc(100vw - 24px)); box-sizing: border-box;
+        display: none; flex-direction: column; gap: 10px;
+        background: var(--panel-strong); border: 1px solid var(--border);
+        border-radius: 12px; padding: 14px 16px;
+        font: 500 13px/1.5 ui-monospace, Menlo, monospace; color: var(--text);
+        box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+      }
+      .sheet input[type="text"] {
+        width: 100%; box-sizing: border-box; padding: 9px 11px;
+        border: 1px solid var(--border); border-radius: 7px;
+        background: transparent; color: var(--text);
+        font: 600 14px/1 ui-monospace, Menlo, monospace; outline: none;
+      }
+      .sheet input[type="text"]:focus { border-color: var(--accent); }
+      .sheet .row { display: flex; gap: 8px; align-items: center; }
+      .sheet .dim { color: var(--text-muted); font-size: 12px; }
+      .sheet button {
+        flex: 1; padding: 9px 0; border: 1px solid var(--border); border-radius: 7px;
+        background: transparent; color: var(--text-dim);
+        font: 700 12px/1 ui-monospace, Menlo, monospace; cursor: pointer;
+      }
+      .sheet button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+      .sheet button.danger { color: #f85149; border-color: #f85149; }
+      /* toasts */
+      #toasts {
+        position: fixed; z-index: 70; left: 50%; top: 58px; transform: translateX(-50%);
+        display: flex; flex-direction: column; gap: 6px; pointer-events: none;
+      }
+      .toast {
+        background: var(--panel-strong); border: 1px solid var(--border);
+        border-radius: 9px; padding: 9px 14px;
+        font: 600 12px/1.4 ui-monospace, Menlo, monospace; color: var(--text);
+        opacity: 0; transition: opacity 200ms; max-width: 80vw;
+      }
+      .toast.show { opacity: 1; }
+      /* empty-state hint */
+      #empty {
+        position: fixed; z-index: 10; left: 50%; top: 46%;
+        transform: translate(-50%, -50%);
+        color: var(--text-muted); font: 600 14px/2 ui-monospace, Menlo, monospace;
+        text-align: center; pointer-events: none;
+      }
+      @media (max-width: 640px) {
+        #calurl { width: 100px; }
+        .icon-btn { padding: 0 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewer"></canvas>
+    <div id="bar">
+      <nav class="demo-nav">
+        <select id="demo-nav" aria-label="rgui demo switch">
+          <option value="/">2D Graph</option>
+          <option value="/lane/tree/">1D Lane · Tree</option>
+          <option value="/lane/time/">1D Lane · Deep time</option>
+          <option value="/lane/git/">1D Lane · Git history</option>
+          <option value="/lane/signal/">1D Lane · Signal</option>
+          <option value="/calendar/" selected>Calendar</option>
+          <option value="/cube/">3D Cube</option>
+          <option value="/world/">3D World</option>
+        </select>
+      </nav>
+      <div id="chips"></div>
+      <div class="grow"></div>
+      <input id="calurl" type="text" placeholder="webcal/ics URL ↵" autocomplete="off" spellcheck="false" />
+      <button class="icon-btn" id="importBtn" title="Import an .ics file">📂 import</button>
+      <input id="file" type="file" accept=".ics,text/calendar" multiple style="display: none" />
+      <button class="icon-btn" id="saveBtn" title="Download everything visible as .ics">⬇ save</button>
+      <button class="icon-btn" id="newBtn" title="New event at the viewport center">＋</button>
+      <a id="wordmark" href="/">RGUI<span> · calendar</span></a>
+      <button class="icon-btn" id="theme-toggle" title="Toggle theme" style="border-radius: 50%">◐</button>
+    </div>
+    <div id="drop">drop .ics to import<br /><span style="font-size:13px; color: var(--text-muted)">events land in their own calendar chip</span></div>
+    <div id="ghost"></div>
+    <div id="empty">
+      drop an .ics file · paste a calendar URL<br />
+      or <b>press-and-hold</b> an empty slot to create your first event<br />
+      <span style="font-size:12px; color: var(--text-faint)">zoom is the view switch — year ⇄ month ⇄ week ⇄ day</span>
+    </div>
+    <div class="sheet" id="createSheet">
+      <input id="createTitle" type="text" placeholder="event title" autocomplete="off" />
+      <div class="dim" id="createTime"></div>
+      <div class="row">
+        <button id="createCancel">cancel</button>
+        <button id="createSave" class="primary">save</button>
+      </div>
+    </div>
+    <div class="sheet" id="detailSheet">
+      <input id="detailTitle" type="text" autocomplete="off" />
+      <div class="dim" id="detailTime"></div>
+      <div class="dim" id="detailCal"></div>
+      <div class="row">
+        <button id="detailDelete" class="danger">delete</button>
+        <button id="detailClose" class="primary">close</button>
+      </div>
+    </div>
+    <div id="toasts"></div>
+    <script type="module" src="/src/calendar-main.ts"></script>
+    <script>
+      document.querySelector("#demo-nav")?.addEventListener("change", (e) => {
+        location.href = e.target.value;
+      });
+    </script>
+  </body>
+</html>

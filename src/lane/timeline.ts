@@ -148,6 +148,14 @@ interface Ev {
    * load-bearing (CVD-safe). Below the gate it stays the single mass dot.
    */
   split?: { add: number; del: number };
+  /**
+   * per-event color override (hex). Lets several sources overlay in ONE
+   * track — e.g. a calendar lane tinting events by their source calendar —
+   * while the track keeps its own hue for aggregates. Glyphs, labels-dots
+   * and search swatches use it; heat cells stay track-hued (they merge
+   * events across colors).
+   */
+  color?: string;
 }
 
 // mass ladder: powers-of-16 rungs (≤15 lines · ≤255 · ≤4095 · beyond) — a
@@ -655,6 +663,7 @@ export function createTimelineSource(
     catMeta.map((m) => [m.cat, m.color]),
   ) as Record<Cat, string>;
   const colorOf = (cat: Cat) => catColor[cat] ?? "#888888";
+  const evColor = (e: Ev) => e.color ?? colorOf(e.cat);
   // mass-known events grow on the discrete dot ladder and brighten on the
   // track's heat ramp — the single-event end of the heat-cell vocabulary.
   // Shared by every glyph path (per-track fold, continuous rail, global
@@ -664,8 +673,8 @@ export function createTimelineSource(
     return {
       r: MASS_DOT_R[mb]!,
       fill: mb
-        ? heatRampColor(colorOf(e.cat), MASS_RAMP_N[mb]!, dark)
-        : colorOf(e.cat),
+        ? heatRampColor(evColor(e), MASS_RAMP_N[mb]!, dark)
+        : evColor(e),
     };
   };
   // two-tone +/− disclosure: from rung 2 up (glyph ≥ ~4.4px) a split-known
@@ -1522,6 +1531,7 @@ export function createTimelineSource(
       if (sy < HEADER_H - 2 || sy > H + 2) continue;
       const infl = influenceOf(e);
       if (vspan > infl * influenceDots()) continue; // out of influence → hidden
+      const color = evColor(e); // per-event override (overlaid calendars)
       const future = e.cat === "future";
       const inScale = vspan <= infl; // zoomed in enough to earn a label
 
@@ -2272,7 +2282,7 @@ export function createTimelineSource(
       if (!enabled.has(e.cat)) continue;
       const g = foldGlyphPos(e, view);
       if (!g || g.p.rowIndex < yearTop - 1 || g.p.rowIndex > yearBot + 1) continue;
-      const color = colorOf(e.cat);
+      const color = evColor(e);
       let gx = g.x;
       let gy = g.y;
       if (foldAnim) {
@@ -2492,7 +2502,7 @@ export function createTimelineSource(
               label: e.label,
               detail: e.detail,
               cat: e.cat,
-              color: colorOf(e.cat),
+              color: evColor(e),
               center: p.rowIndex,
               scale: 1.6,
               phase: p.phase0,
@@ -2504,7 +2514,7 @@ export function createTimelineSource(
         label: e.label,
         detail: e.detail,
         cat: e.cat,
-        color: colorOf(e.cat),
+        color: evColor(e),
         center: worldOf(e.y),
         scale: ctxWorld(e),
       }));

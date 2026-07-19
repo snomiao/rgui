@@ -52,6 +52,7 @@ export default defineConfig({
         lane: root + "lane/index.html",
         cube: root + "cube/index.html",
         world: root + "world/index.html",
+        calendar: root + "calendar/index.html",
       },
     },
   },
