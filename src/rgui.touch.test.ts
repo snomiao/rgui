@@ -130,6 +130,47 @@ describe("two-finger touch navigation", () => {
     viewer.destroy();
   });
 
+  test("a second finger can neither move nor finish another finger's node drag", () => {
+    const { viewer, canvas } = boot();
+    // finger 1 grabs the node (spans 100..356 x 0..192)
+    canvas.dispatchEvent(touch("pointerdown", 1, 150, 50));
+    const x0 = viewer.graph.nodes[0]!.x;
+    // finger 2 lands far away and sweeps — the node must not teleport
+    canvas.dispatchEvent(touch("pointerdown", 2, 600, 500));
+    canvas.dispatchEvent(touch("pointermove", 2, 700, 520));
+    expect(viewer.graph.nodes[0]!.x).toBe(x0);
+    // finger 2 lifting must not fire the drag's End path (drag survives);
+    // finger 1 can still move the node afterwards
+    canvas.dispatchEvent(touch("pointerup", 2, 700, 520));
+    canvas.dispatchEvent(touch("pointermove", 1, 214, 50));
+    expect(viewer.graph.nodes[0]!.x).not.toBe(x0);
+    viewer.destroy();
+  });
+
+  test("owner pointercancel commits the move via onNodeMoveEnd", () => {
+    const canvas0 = document.createElement("canvas");
+    const c = canvas0 as unknown as Record<string, unknown>;
+    c.getContext = () => stubCtx();
+    c.setPointerCapture = () => {};
+    c.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
+    Object.defineProperty(canvas0, "clientWidth", { value: 800 });
+    Object.defineProperty(canvas0, "clientHeight", { value: 600 });
+    document.body.appendChild(canvas0);
+    const ends: Array<{ id: string; x: number }> = [];
+    const viewer = createRgui(canvas0, {
+      graph: mkGraph(),
+      onNodeMoveEnd: (id, at) => ends.push({ id, x: at.x }),
+    });
+    viewer.setView({ x: 0, y: 0, k: 1 });
+    canvas0.dispatchEvent(touch("pointerdown", 1, 150, 50));
+    canvas0.dispatchEvent(touch("pointermove", 1, 214, 50));
+    const moved = viewer.graph.nodes[0]!.x;
+    canvas0.dispatchEvent(touch("pointercancel", 1, 214, 50));
+    // the live mutation is committed, not silently abandoned
+    expect(ends).toEqual([{ id: "a", x: moved }]);
+    viewer.destroy();
+  });
+
   test("one-finger touch still marquee-selects on empty canvas", () => {
     const { viewer, canvas } = boot();
     // sweep a marquee over the node (node spans 100..356 x 0..192 in view)

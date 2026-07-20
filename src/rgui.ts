@@ -1426,12 +1426,59 @@ export function createRgui(
 
   /** capture-safe: a pointer can be gone by capture time (pen lifted,
    * synthetic events) — losing capture is fine, throwing mid-drag is not */
-  const capturePointer = (ev: PointerEvent) => {
+  /** the pointer that owns the live `drag`; events from other pointers must
+   * never advance, finish, or cancel it (a stray second finger used to
+   * teleport node drags and fire End callbacks from the wrong finger) */
+  let dragPointerId: number | null = null;
+
+  /** keep receiving this pointer's events without claiming drag ownership */
+  const holdPointer = (ev: PointerEvent) => {
     try {
       canvas.setPointerCapture(ev.pointerId);
     } catch {
       /* no active pointer */
     }
+  };
+
+  const capturePointer = (ev: PointerEvent) => {
+    dragPointerId = ev.pointerId; // this pointer owns the drag being created
+    holdPointer(ev);
+  };
+
+  /** commit a canceled OWNER drag: mutations already happened live, so emit
+   * the same End callbacks pointerup would (hosts persist on End); transient
+   * gestures (marquee/wire/smartLink/panelItem) are simply discarded */
+  const commitCanceledDrag = () => {
+    if (!drag) return;
+    if (drag.type === "node") {
+      if (drag.moved) {
+        options.onNodeMoveEnd?.(drag.node.id, { x: drag.node.x, y: drag.node.y });
+        for (const c of drag.subtree) options.onNodeMoveEnd?.(c.id, { x: c.x, y: c.y });
+      }
+    } else if (drag.type === "group") {
+      if (drag.moved) for (const n of drag.nodes) options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
+    } else if (drag.type === "pseudo") {
+      if (drag.moved)
+        for (const m of drag.pseudo.members) {
+          const n = baseOf(m);
+          options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
+        }
+    } else if (drag.type === "resize") {
+      if (drag.moved)
+        options.onNodeResizeEnd?.(drag.node.id, {
+          x: drag.node.x,
+          y: drag.node.y,
+          w: drag.node.w,
+          h: nodeHeight(drag.node),
+          scale: contentScale(drag.node),
+        });
+    } else if (drag.type === "panel") {
+      if (drag.moved && typeof drag.panel.anchor === "object")
+        options.onPanelMove?.(drag.panel, drag.panel.anchor);
+    }
+    drag = null;
+    dragPointerId = null;
+    invalidate();
   };
 
   // ---- touch navigation: two fingers = pan + pinch-zoom --------------------
@@ -1455,6 +1502,7 @@ export function createRgui(
   } | null = null;
 
   const beginPinch = () => {
+    cancelFly(); // freeze the exact transform the pinch anchors against
     const ids = [...touchPoints.keys()];
     const a = ids[0]!;
     const b = ids[1]!;
@@ -1505,7 +1553,7 @@ export function createRgui(
   const onPointerDown = (ev: PointerEvent) => {
     if (ev.pointerType === "touch") {
       touchPoints.set(ev.pointerId, { x: ev.offsetX, y: ev.offsetY });
-      capturePointer(ev);
+      holdPointer(ev); // track only — ownership belongs to drag creation
       if (touchPoints.size >= 2) {
         // promotion: a live marquee is discarded without side effects; other
         // drag types (node/resize/wire) keep running and this finger is inert
@@ -1715,6 +1763,8 @@ export function createRgui(
       }
       if (touchNav) return; // inert extra fingers / latched tail
     }
+    // a live drag belongs to exactly one pointer — other pointers are inert
+    if (drag && dragPointerId !== null && ev.pointerId !== dragPointerId) return;
     const [vx0, vy0] = toView(ev.offsetX, ev.offsetY);
     pointer = { sx: vx0, sy: vy0 };
     if (!drag) {
@@ -1898,6 +1948,9 @@ export function createRgui(
       if (wasNav) return; // nav fingers never produce clicks or selections
     }
     if (!drag) return;
+    // only the owning pointer may finish the drag
+    if (dragPointerId !== null && ev.pointerId !== dragPointerId) return;
+    dragPointerId = null;
     if (drag.type === "resize") {
       if (drag.moved)
         options.onNodeResizeEnd?.(drag.node.id, {
@@ -2120,13 +2173,10 @@ export function createRgui(
   // a canceled touch (palm rejection, browser gesture steal) must not leave a
   // stuck drag or a half-tracked finger behind
   canvas.addEventListener("pointercancel", (ev: PointerEvent) => {
-    if (ev.pointerType === "touch") {
-      releaseTouch(ev);
-      if (drag) {
-        drag = null;
-        invalidate();
-      }
-    }
+    if (ev.pointerType === "touch") releaseTouch(ev);
+    // non-owning pointers (palm rejection on another finger) leave the drag
+    // alone; the owner's cancel commits what already mutated live
+    if (drag && (dragPointerId === null || ev.pointerId === dragPointerId)) commitCanceledDrag();
   });
   // the browser must never pinch-zoom the page or synthesize scrolls from
   // canvas touches — all touch gestures belong to the state machine above
