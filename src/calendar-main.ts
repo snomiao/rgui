@@ -425,7 +425,11 @@ const handleStart = document.querySelector<HTMLDivElement>("#handleStart")!;
 const handleEnd = document.querySelector<HTMLDivElement>("#handleEnd")!;
 const cellhlEl = document.querySelector<HTMLDivElement>("#cellhl")!;
 
-let ph: { t0: number; t1: number } | null = null; // placeholder span (real ms)
+// the active span (real ms): a NEW placeholder, or — with `editing` set — a
+// saved event picked up for move/resize (committed back on release)
+let ph: { t0: number; t1: number; editing?: CalEvent } | null = null;
+// a press on an event that hasn't crossed the drag threshold yet
+let evPending: { ev: CalEvent; x: number; y: number; id: number } | null = null;
 let op:
   | { kind: "size"; id: number; level: string | null }
   | { kind: "resize"; edge: "start" | "end"; id: number; level: string | null }
@@ -472,10 +476,12 @@ function updateGhost() {
   const first = rects[0];
   const last = rects[rects.length - 1];
   if (first && last) {
-    handleStart.style.left = `${rect.left + first.x0}px`;
-    handleStart.style.top = `${rect.top + first.y0}px`;
-    handleEnd.style.left = `${rect.left + last.x1}px`;
-    handleEnd.style.top = `${rect.top + last.y1}px`;
+    // handles sit a step INSIDE the span: centered on the boundary they'd
+    // read as the neighboring row, and a 1px drag would jump a whole day
+    handleStart.style.left = `${rect.left + first.x0 + 8}px`;
+    handleStart.style.top = `${rect.top + Math.min(first.y0 + 8, (first.y0 + first.y1) / 2)}px`;
+    handleEnd.style.left = `${rect.left + last.x1 - 8}px`;
+    handleEnd.style.top = `${rect.top + Math.max(last.y1 - 8, (last.y0 + last.y1) / 2)}px`;
     ghostLabel.style.left = `${rect.left + first.x0 + 6}px`;
     ghostLabel.style.top = `${rect.top + first.y0 - 20}px`;
     ghostLabel.textContent = `${fmt.format(b.a)} → ${fmt.format(b.b)}`;
@@ -509,8 +515,15 @@ canvas.addEventListener(
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
-    // a press on an existing event is an inspect-click, not a create-drag
-    if (source.eventAt(sx, sy, lane.view)) return;
+    // a press on an existing event: a still release inspects (click), a
+    // drag past the threshold PICKS THE EVENT UP and moves it on the grid
+    const overEv = resolveEventHit(sx, sy);
+    if (overEv) {
+      e.stopPropagation();
+      e.preventDefault();
+      evPending = { ev: overEv, x: sx, y: sy, id: e.pointerId };
+      return;
+    }
     e.stopPropagation();
     e.preventDefault();
     const t = timeAtPoint(sx, sy);
@@ -523,6 +536,23 @@ canvas.addEventListener(
 canvas.addEventListener(
   "pointermove",
   (e) => {
+    if (evPending && e.pointerId === evPending.id) {
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      if (Math.hypot(sx - evPending.x, sy - evPending.y) > 6) {
+        const { ev } = evPending;
+        evPending = null;
+        const t = timeAtPoint(sx, sy);
+        if (t != null && Number.isFinite(t)) {
+          closeDetail();
+          closeCreateSheet();
+          ph = { t0: ev.startMs, t1: ev.endMs, editing: ev };
+          op = { kind: "move", id: e.pointerId, lastT: t, level: levelAt(sx, sy) };
+          updateGhost();
+        }
+      }
+    }
     if (op && "id" in op && e.pointerId === op.id && ph) {
       e.stopPropagation();
       e.preventDefault();
@@ -550,7 +580,25 @@ function applyOpTime(t: number) {
   }
   updateGhost();
 }
+// write the edited span back into its saved event (one rebuild per release)
+function commitEdit() {
+  if (!ph?.editing) return;
+  const b = phBounds()!;
+  const ev = ph.editing;
+  if (ev.allDay) {
+    // all-day events live on whole date boundaries, whatever the snap says
+    const D = 86400_000;
+    ev.startMs = Math.round(b.a / D) * D;
+    ev.endMs = Math.max(ev.startMs + D, Math.round(b.b / D) * D);
+  } else {
+    ev.startMs = b.a;
+    ev.endMs = b.b;
+  }
+  rebuild();
+  if (inspected === ev) detailTime.textContent = fmtRange(ev);
+}
 function endPointer(e: PointerEvent) {
+  if (evPending && e.pointerId === evPending.id) evPending = null; // still press → click inspects
   if (!op || !("id" in op) || e.pointerId !== op.id) return;
   e.stopPropagation();
   const was = op.kind;
@@ -562,7 +610,8 @@ function endPointer(e: PointerEvent) {
   }
   op = null;
   suppressClickUntil = performance.now() + 400;
-  if (was === "size") openCreateSheet();
+  if (ph?.editing) commitEdit();
+  else if (was === "size") openCreateSheet();
   updateGhost();
 }
 canvas.addEventListener("pointerup", endPointer, { capture: true });
@@ -616,7 +665,11 @@ for (const h of [handleStart, handleEnd]) {
     if (t != null && Number.isFinite(t)) applyOpTime(t);
   });
   h.addEventListener("pointerup", (e) => {
-    if (op?.kind === "resize" && e.pointerId === op.id) op = null;
+    if (op?.kind === "resize" && e.pointerId === op.id) {
+      op = null;
+      if (ph?.editing) commitEdit();
+      updateGhost();
+    }
   });
 }
 
@@ -686,7 +739,7 @@ createTitle.addEventListener("keydown", (e) => {
 });
 function saveDraft() {
   const b = phBounds();
-  if (!b) return;
+  if (!b || ph?.editing) return; // edits commit on release, not via the sheet
   ensureCalendar(MINE, "My events");
   events.push({
     uid: `mine-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`,
@@ -726,21 +779,30 @@ let inspected: CalEvent | null = null;
 function closeDetail() {
   detailSheet.style.display = "none";
   inspected = null;
+  if (ph?.editing) {
+    ph = null;
+    updateGhost();
+  }
 }
 
+function resolveEventHit(sx: number, sy: number): CalEvent | null {
+  const hit = source.eventAt(sx, sy, lane.view);
+  if (!hit) return null;
+  const t = timeAtPoint(sx, sy) ?? 0;
+  const candidates = events.filter(
+    (ev) => ev.summary.startsWith(hit.title) && calById(ev.calId)?.enabled !== false,
+  );
+  candidates.sort((a, b) => Math.abs(a.startMs - t) - Math.abs(b.startMs - t));
+  return candidates[0] ?? null;
+}
 canvas.addEventListener("click", (e) => {
   if (performance.now() < suppressClickUntil) return;
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
-  const hit = source.eventAt(sx, sy, lane.view);
-  if (hit) {
+  const ev = resolveEventHit(sx, sy);
+  if (ev) {
     if (ph) dropPlaceholder();
-    const t = timeAtY(sy) ?? 0;
-    const candidates = events.filter((ev) => ev.summary.startsWith(hit.title));
-    candidates.sort((a, b) => Math.abs(a.startMs - t) - Math.abs(b.startMs - t));
-    const ev = candidates[0];
-    if (!ev) return;
     inspected = ev;
     detailTitle.value = ev.summary;
     detailTime.textContent = fmtRange(ev);
@@ -749,14 +811,20 @@ canvas.addEventListener("click", (e) => {
       (ev.recurring ? " · recurring (first instance)" : "");
     detailSheet.style.display = "flex";
     positionSheet(detailSheet, e.clientY);
+    // selection ghost: the event's span grows handles — resize/move it
+    // directly (this is also the touch path to moving events)
+    ph = { t0: ev.startMs, t1: ev.endMs, editing: ev };
+    updateGhost();
     return;
   }
   if (ph) {
-    dropPlaceholder(); // click-away discards the pending span
+    const wasEditing = !!ph.editing;
+    dropPlaceholder(); // click-away deselects / discards the pending span
+    if (wasEditing) closeDetail();
     return;
   }
   closeDetail();
-  const t = timeAtY(sy);
+  const t = timeAtPoint(sx, sy);
   if (t == null || !Number.isFinite(t)) return;
   beginPlaceholder(t, null, "tap"); // tap/click on empty grid → 30-min span
 });
