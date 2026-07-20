@@ -59,9 +59,29 @@ export interface FileNode {
 }
 
 /** optional hooks for lazy content loading (e.g. from a GitHub repo) */
+/** a decoded image a host's loadImage hook hands the tree to draw */
+export interface TreeImage {
+  width: number;
+  height: number;
+  /** the frame to draw at `nowMs` — static images ignore the argument */
+  frame(nowMs: number): CanvasImageSource;
+  /** animated (GIF): the tree schedules repaints while it is visible */
+  animated?: boolean;
+  /** release decoder/bitmap resources when LRU-evicted */
+  close?(): void;
+}
+
 export interface TreeOptions {
   /** fetch a file's text by its `path`; null/throw → leave it unloaded */
   fetchContent?: (path: string) => Promise<string | null>;
+  /**
+   * load an image file's pixels by `path` — host-supplied like fetchContent
+   * (the lib never fetches). Requested lazily once the file's band is tall
+   * enough to show a thumbnail; results are LRU-cached and drawn letterboxed.
+   * Animated sources (GIFs) return `animated: true` and a time-indexed
+   * `frame(nowMs)` — the tree repaints while one is visible.
+   */
+  loadImage?: (path: string) => Promise<TreeImage | null>;
   /** called after lazily-loaded content arrives (host wires it to invalidate) */
   onUpdate?: () => void;
   /**
@@ -109,6 +129,9 @@ interface TNode {
   path: string; // repo-relative path (for lazy content fetch)
   tried: boolean; // content load attempted?
   loading: boolean; // fetch in flight?
+  img?: TreeImage | null; // decoded image (media files; LRU-evicted)
+  imgLoading?: boolean;
+  imgTried?: boolean;
   /**
    * fraction of the PARENT's interval this node owns (stick-breaking
    * coordinates — TODO.md「区間分割座標」). Derived from sibling weights,
@@ -363,6 +386,8 @@ const TEXT_EXT = new Set([
 ]);
 const isText = (t: TNode) =>
   t.ext === "" || TEXT_EXT.has(t.ext) || TEXT_EXT.has(t.name.toLowerCase());
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "bmp", "ico"]);
+const isImage = (t: TNode) => IMAGE_EXT.has(t.ext);
 
 export function createTreeSource(
   root: FileNode,
@@ -433,6 +458,59 @@ function createTreeSourceImpl(
         inflight--;
         onUpdate();
       });
+  }
+
+  // ── image previews: lazy load + LRU cache + repaint driver ────────────────
+  // Same discipline as text: only visible, readable-scale media files load
+  // (min band height), few at a time, and a small LRU bounds decoded memory.
+  const IMG_LRU_MAX = 24;
+  const IMG_MAX_INFLIGHT = 3;
+  const imgLru: TNode[] = []; // oldest first
+  let imgInflight = 0;
+  function loadImageFor(t: TNode) {
+    if (t.imgTried || t.imgLoading || !opts.loadImage || !t.path) return;
+    if (imgInflight >= IMG_MAX_INFLIGHT) return; // retried next frame
+    t.imgLoading = true;
+    imgInflight++;
+    Promise.resolve(opts.loadImage(t.path))
+      .then((img) => {
+        t.imgTried = true;
+        t.img = img;
+        if (img) {
+          imgLru.push(t);
+          while (imgLru.length > IMG_LRU_MAX) {
+            const old = imgLru.shift()!;
+            old.img?.close?.();
+            old.img = undefined;
+            old.imgTried = false; // may reload if scrolled back to
+          }
+        }
+      })
+      .catch(() => {
+        t.imgTried = true;
+      })
+      .finally(() => {
+        t.imgLoading = false;
+        imgInflight--;
+        onUpdate();
+      });
+  }
+  const touchImgLru = (t: TNode) => {
+    const i = imgLru.indexOf(t);
+    if (i >= 0 && i !== imgLru.length - 1) {
+      imgLru.splice(i, 1);
+      imgLru.push(t);
+    }
+  };
+  // one repaint per frame while an animated image is on screen
+  let animScheduled = false;
+  function scheduleAnimFrame() {
+    if (animScheduled) return;
+    animScheduled = true;
+    requestAnimationFrame(() => {
+      animScheduled = false;
+      onUpdate();
+    });
   }
 
   // ── shared layout (the treeFoldPos choke point) ───────────────────────
@@ -649,6 +727,22 @@ function createTreeSourceImpl(
     // content region below the header
     const top = sy0 + headerH;
     if (sy1 - top < 8) return;
+    // media files: the readable abstraction of an image IS the image — load
+    // lazily once the band affords a thumbnail, draw letterboxed
+    if (isImage(t) && opts.loadImage) {
+      if (!t.img && !t.imgTried && h >= 48) loadImageFor(t);
+      if (t.img) {
+        drawImageBox(ctx, t, x + 8, top + 4, right - 8, sy1 - 6, env);
+        return;
+      }
+      if (t.imgLoading) {
+        ctx.font = "10px ui-monospace, Menlo, monospace";
+        ctx.fillStyle = theme.textFaint;
+        ctx.fillText("loading…", x + 18, top + 10);
+        return;
+      }
+      // failed / too small yet → generic block below
+    }
     // lazily pull the file's real text once its row is tall enough to read it
     // (only visible files reach here, and only readable-scale ones fetch)
     if (!t.lines.length && !t.tried && h >= 60 && isText(t)) loadContent(t);
@@ -660,6 +754,42 @@ function createTreeSourceImpl(
     } else if (h >= 90) {
       drawPreview(ctx, x + 18, top + 6, right - 6, sy1 - 8, color, theme);
     }
+  }
+
+  /** letterboxed image thumbnail, clipped to the viewport slice of the band */
+  function drawImageBox(
+    ctx: CanvasRenderingContext2D,
+    t: TNode,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    env: LaneEnv,
+  ) {
+    const img = t.img!;
+    touchImgLru(t);
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w < 8 || h < 8 || !img.width || !img.height) return;
+    const scale = Math.min(w / img.width, h / img.height, 4); // cap upscale 4×
+    const dw = img.width * scale;
+    const dh = img.height * scale;
+    const dx = x0 + (w - dw) / 2;
+    const dy = y0 + (h - dh) / 2;
+    const H = env.size.height;
+    if (dy > H + 2 || dy + dh < -2) return; // fully off-screen
+    ctx.save();
+    // clip to the visible slice so huge zoomed bands don't paint off-canvas
+    ctx.beginPath();
+    ctx.rect(x0, Math.max(y0, -2), w, Math.min(y1, H + 2) - Math.max(y0, -2));
+    ctx.clip();
+    try {
+      ctx.drawImage(img.frame(performance.now()), dx, dy, dw, dh);
+    } catch {
+      /* decoder hiccup — skip this frame */
+    }
+    ctx.restore();
+    if (img.animated) scheduleAnimFrame();
   }
 
   /**

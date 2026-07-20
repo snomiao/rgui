@@ -9,7 +9,7 @@ import { createTimelineSource } from "./lane/timeline.js";
 import type { TimelineFold, TimelineSource } from "./lane/timeline.js";
 import { FOLD_PERIOD_MS } from "./lane/temporal.js";
 import { createSeriesSource } from "./lane/timeseries.js";
-import { createLazyTreeSource, createTreeSource, type FileNode } from "./lane/tree.js";
+import { createLazyTreeSource, createTreeSource, type FileNode, type TreeImage } from "./lane/tree.js";
 import type { TreeProvider, TreeProviderEntry } from "./lane/treeprovider.js";
 
 // ── network monitor: show every external fetch in the debug panel ─────────
@@ -156,10 +156,11 @@ function genTree(seed: number): FileNode {
     return out.join("\n");
   }
 
+  let fileSeq = 0; // unique path per file → distinct procedural preview art
   const file = (base: string, exts: string[], min = 1, max = 80): FileNode => {
     const ext = pick(exts);
     const size = kb(min, max);
-    const node: FileNode = { name: `${base}.${ext}`, size };
+    const node: FileNode = { name: `${base}.${ext}`, size, path: `syn/${fileSeq++}/${base}.${ext}` };
     if (!BINARY.has(ext)) {
       node.content = genCode(base, Math.max(6, Math.min(110, Math.round(size / 220))));
     }
@@ -268,7 +269,110 @@ const hashRepos = (() => {
 })();
 let gitRepos = hashRepos ?? DEFAULT_GIT_REPOS;
 let gitSource: TimelineSource = createGitHistorySource({ repos: gitRepos, pageCap: ghToken ? 12 : 4, graphql: !!ghToken });
-const treeSource = createTreeSource(genTree(0x51a1));
+// ── tree image previews ───────────────────────────────────────────────────
+// The lib draws whatever loadImage hands it (scope guard: hosts do the I/O).
+// GitHub repos decode real bytes; the synthetic tree gets procedural art so
+// the default demo shows the feature offline — .gif ones animate.
+
+/** blob → TreeImage: animated GIF via ImageDecoder (Chromium), else bitmap,
+ *  else an <img> element (SVGs without intrinsic size etc.) */
+async function decodeImage(blob: Blob, path: string): Promise<TreeImage | null> {
+  if (/\.gif$/i.test(path) && "ImageDecoder" in globalThis) {
+    try {
+      return await decodeGif(await blob.arrayBuffer());
+    } catch { /* fall through to first-frame decode */ }
+  }
+  try {
+    const bmp = await createImageBitmap(blob);
+    return { width: bmp.width, height: bmp.height, frame: () => bmp, close: () => bmp.close() };
+  } catch {
+    try {
+      const url = URL.createObjectURL(blob);
+      const el = new Image();
+      await new Promise((res, rej) => {
+        el.onload = res;
+        el.onerror = rej;
+        el.src = url;
+      });
+      const w = el.naturalWidth || 256;
+      const h = el.naturalHeight || 256;
+      return { width: w, height: h, frame: () => el, close: () => URL.revokeObjectURL(url) };
+    } catch {
+      return null;
+    }
+  }
+}
+async function decodeGif(buf: ArrayBuffer): Promise<TreeImage> {
+  // WebCodecs ImageDecoder — Chromium-only for now; callers fall back to a
+  // static first frame elsewhere
+  const Dec = (globalThis as unknown as { ImageDecoder: any }).ImageDecoder;
+  const dec = new Dec({ data: buf, type: "image/gif" });
+  await dec.tracks.ready;
+  const n = Math.min(dec.tracks.selectedTrack?.frameCount ?? 1, 60);
+  const frames: ImageBitmap[] = [];
+  const endsUs: number[] = [];
+  let totalUs = 0;
+  for (let i = 0; i < n; i++) {
+    const { image } = await dec.decode({ frameIndex: i });
+    frames.push(await createImageBitmap(image));
+    totalUs += image.duration ?? 100_000; // default 10 fps when unspecified
+    endsUs.push(totalUs);
+    image.close();
+  }
+  dec.close?.();
+  const totalMs = Math.max(1, totalUs / 1000);
+  return {
+    width: frames[0]!.width,
+    height: frames[0]!.height,
+    animated: frames.length > 1,
+    frame(nowMs) {
+      const tUs = (nowMs % totalMs) * 1000;
+      let i = endsUs.findIndex((e) => tUs < e);
+      if (i < 0) i = frames.length - 1;
+      return frames[i]!;
+    },
+    close() {
+      for (const f of frames) f.close();
+    },
+  };
+}
+/** deterministic offline placeholder art for the synthetic tree */
+function syntheticImage(path: string): TreeImage {
+  let seed = 7;
+  for (const ch of path) seed = (seed * 31 + ch.charCodeAt(0)) | 0;
+  const rnd = mulberry32(seed);
+  const w = 320;
+  const h = 240;
+  const cnv = document.createElement("canvas");
+  cnv.width = w;
+  cnv.height = h;
+  const c2 = cnv.getContext("2d")!;
+  const hue = Math.floor(rnd() * 360);
+  const animated = /\.gif$/i.test(path);
+  const blobs = Array.from({ length: 9 }, () => ({
+    x: rnd() * w,
+    y: rnd() * h,
+    r: 14 + rnd() * 52,
+    dh: rnd() * 90 - 45,
+    sp: 0.4 + rnd() * 1.2,
+  }));
+  const paint = (tMs: number) => {
+    c2.fillStyle = `hsl(${hue} 38% 16%)`;
+    c2.fillRect(0, 0, w, h);
+    for (const b of blobs) {
+      const wob = animated ? Math.sin((tMs / 900) * b.sp + b.x) * 16 : 0;
+      c2.fillStyle = `hsl(${hue + b.dh} 62% ${46 + (animated ? Math.sin((tMs / 1300) * b.sp) * 8 : 0)}%)`;
+      c2.beginPath();
+      c2.arc(b.x + wob, b.y, b.r, 0, Math.PI * 2);
+      c2.fill();
+    }
+  };
+  paint(0);
+  return { width: w, height: h, animated, frame: (now) => (paint(animated ? now : 0), cnv) };
+}
+const syntheticLoadImage = async (path: string) => syntheticImage(path);
+
+const treeSource = createTreeSource(genTree(0x51a1), { loadImage: syntheticLoadImage });
 
 // ── lazy provider demo: the same generated repo behind a paginated, ────────
 // artificially slow TreeProvider — exercises viewport-driven listing,
@@ -311,6 +415,7 @@ function demoProvider(root: FileNode): TreeProvider {
 const lazyTreeSource = createLazyTreeSource(demoProvider(genTree(0x51a1)), {
   rootName: "rgui/",
   pageLimit: 32,
+  loadImage: syntheticLoadImage,
 });
 
 const sources: Record<string, LaneSource> = {
@@ -950,12 +1055,18 @@ async function loadRepo(owner: string, repo: string, branchArg?: string) {
       return;
     }
     const root = buildFileTree(`${owner}/${repo}`, tree.tree as GhEntry[]);
+    const raw = (path: string) =>
+      `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`;
     const src = createTreeSource(root, {
       fetchContent: (path) =>
-        fetch(
-          `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`,
-        )
+        fetch(raw(path))
           .then((r) => (r.ok ? r.text() : null))
+          .catch(() => null),
+      // real pixels for media files — animated GIFs included
+      loadImage: (path) =>
+        fetch(raw(path))
+          .then((r) => (r.ok ? r.blob() : null))
+          .then((b) => (b ? decodeImage(b, path) : null))
           .catch(() => null),
     });
     src.setOnUpdate(() => lane.invalidate());
