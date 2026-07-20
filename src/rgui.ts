@@ -2084,9 +2084,27 @@ export function createRgui(
           else next.add(drag.node.id);
           applySelection(next);
         } else {
-          applySelection(new Set([drag.node.id]));
+            applySelection(new Set([drag.node.id]));
         }
         options.onNodeClick?.(drag.node.id, { x: ev.offsetX, y: ev.offsetY });
+        // touch double-tap = the dblclick maximize (manual detection: taps on
+        // a touch-action:none canvas don't reliably synthesize dblclick)
+        if (ev.pointerType === "touch") {
+          const now = performance.now();
+          if (
+            lastTap &&
+            lastTap.nodeId === drag.node.id &&
+            now - lastTap.at < 350 &&
+            Math.hypot(ev.offsetX - lastTap.x, ev.offsetY - lastTap.y) < 30
+          ) {
+            lastTap = null;
+            const ids = stackIdsOf(drag.node.id);
+            applySelection(new Set(ids));
+            fitToNodes(ids);
+          } else {
+            lastTap = { nodeId: drag.node.id, at: now, x: ev.offsetX, y: ev.offsetY };
+          }
+        }
       }
     } else if (drag.type === "group") {
       if (drag.moved)
@@ -2118,18 +2136,65 @@ export function createRgui(
     invalidate();
   };
 
+  /** ids of the snapped stack a node belongs to (falls back to the node) */
+  const stackIdsOf = (nodeId: string): string[] => {
+    const nodes = lastRg?.nodes ?? dGraph.nodes;
+    const comp = flushComponents(nodes, flushSegments(nodes));
+    const root = comp.get(nodeId);
+    const ids = nodes.filter((n) => comp.get(n.id) === root).map((n) => n.id);
+    return ids.length ? ids : [nodeId];
+  };
+
+  // Double-tap/double-click maximize: glide the viewport to fit the tapped
+  // node (or its snapped stack). Doubling again while still fitted restores
+  // the pre-fit viewport — a maximize/restore toggle.
+  let fitRestore: { view: ViewTransform; key: string } | null = null;
+
+  const fitToNodes = (ids: string[]) => {
+    const key = [...ids].sort().join("|");
+    const nodes = (lastRg?.nodes ?? dGraph.nodes).filter((n) => ids.includes(n.id));
+    if (!nodes.length) return;
+    const x0 = Math.min(...nodes.map((n) => n.x));
+    const y0 = Math.min(...nodes.map((n) => n.y));
+    const x1 = Math.max(...nodes.map((n) => n.x + n.w));
+    const y1 = Math.max(...nodes.map((n) => n.y + nodeHeight(n)));
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    const pad = 48;
+    const k = Math.min((W - 2 * pad) / Math.max(1, x1 - x0), (H - 2 * pad) / Math.max(1, y1 - y0), 1e6);
+    const target: ViewTransform = {
+      x: W / 2 - ((x0 + x1) / 2) * k,
+      y: H / 2 - ((y0 + y1) / 2) * k,
+      k,
+    };
+    const atTarget =
+      Math.abs(view.k - target.k) < 1e-3 * Math.max(1, target.k) &&
+      Math.abs(view.x - target.x) < 2 &&
+      Math.abs(view.y - target.y) < 2;
+    if (fitRestore && fitRestore.key === key && atTarget) {
+      // second double on the same target: restore where the user came from
+      const back = fitRestore.view;
+      fitRestore = null;
+      flyTo(back);
+      return;
+    }
+    fitRestore = { view: { ...view }, key };
+    flyTo(target);
+  };
+
+  /** double-tap detection for touch (browsers don't reliably synthesize
+   * dblclick from taps on a touch-action:none canvas) */
+  let lastTap: { nodeId: string; at: number; x: number; y: number } | null = null;
+
   const onDblClick = (ev: MouseEvent) => {
-    // double-click selects the whole SNAPPED stack the node belongs to
+    // double-click selects the whole SNAPPED stack the node belongs to, and
+    // maximizes the viewport onto it (double again to restore)
     const [vx, vy] = toView(ev.offsetX, ev.offsetY);
     const hit = hitAt(vx, vy);
     if (!hit || hit.type !== "node") return;
-    const nodes = lastRg?.nodes ?? dGraph.nodes;
-    const comp = flushComponents(nodes, flushSegments(nodes));
-    const root = comp.get(hit.node.id);
-    const ids = nodes
-      .filter((n) => comp.get(n.id) === root)
-      .map((n) => n.id);
-    applySelection(new Set(ids.length ? ids : [hit.node.id]));
+    const ids = stackIdsOf(hit.node.id);
+    applySelection(new Set(ids));
+    fitToNodes(ids);
   };
 
   const onContextMenu = (ev: MouseEvent) => {
