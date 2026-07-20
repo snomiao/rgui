@@ -156,6 +156,14 @@ interface Ev {
    * events across colors).
    */
   color?: string;
+  /**
+   * DURATION in ms (distinct from `span`, which is ±uncertainty): the event
+   * truly occupies [tMs, tMs+durMs]. In the per-track fold it renders as
+   * wrapped row fragments behind the glyph — a meeting becomes a block in
+   * its day row, a multi-day event a text-selection ribbon — but only once
+   * the block would be readable (≥ a few px), per the rg rule.
+   */
+  durMs?: number;
 }
 
 // mass ladder: powers-of-16 rungs (≤15 lines · ≤255 · ≤4095 · beyond) — a
@@ -560,7 +568,31 @@ export interface TimelineSource extends LaneSource {
     sx: number,
     sy: number,
     view: LaneView,
-  ): { x0: number; x1: number; y0: number; y1: number; t0: number; t1: number } | null;
+  ): {
+    x0: number;
+    x1: number;
+    y0: number;
+    y1: number;
+    t0: number;
+    t1: number;
+    /** continuous time at the pointer's x within its row (x-y plane inverse) */
+    t: number;
+    /** the fold level the cell belongs to — pass to spanRects to freeze a gesture */
+    level: string;
+  } | null;
+  /**
+   * screen rects of a time span in the current per-track fold: the wrapped
+   * text-selection shape — partial start row, full middle rows, partial end
+   * row. On the continuous axis (or fold unreadable) falls back to one
+   * full-width band over the span's y range. `level` freezes the fold level
+   * (a zoom mid-gesture must not re-pick it under the caller's feet).
+   */
+  spanRects(
+    t0: number,
+    t1: number,
+    view: LaneView,
+    level?: string,
+  ): Array<{ x0: number; x1: number; y0: number; y1: number }>;
   /** called when lazily-fetched events arrive (host wires it to invalidate) */
   setOnUpdate(fn: () => void): void;
   /** every English UI string (labels/details/headers/eras/cycles), for i18n */
@@ -633,6 +665,12 @@ export interface TimelineDataset {
    * opening on the recent weeks instead of its whole multi-year extent.
    */
   fitYBP?: { top: number; bot: number };
+  /**
+   * max fold content measure in rem (default 45, the text-column rule).
+   * Single-track full-page datasets (the calendar) pass Infinity so the
+   * grid fills the viewport edge to edge.
+   */
+  foldMaxContentRem?: number;
   /** per-frame lazy-loading hook (demo/host side — the engine never fetches) */
   fetch?: (view: LaneView, api: TimelineFetchApi) => void;
 }
@@ -1610,6 +1648,42 @@ export function createTimelineSource(
           glide.delete(e); // no stale glide origin while represented by the cell
           continue;
         }
+        // duration block: the event's REAL extent as wrapped row fragments,
+        // drawn once it spans readable pixels (a 30-min meeting appears as a
+        // block at day zoom, stays a dot at month zoom)
+        if (e.durMs && e.durMs > 0) {
+          const rowLen = FOLD_PERIOD_MS[fp.level];
+          const rem3 = remPx();
+          const cw3 = trackContentW(w, rem3);
+          if (rowLen && (e.durMs / rowLen) * cw3 >= 3) {
+            const cx3 = trackContentX0(x0, rem3);
+            const td = tMsOfEv(e);
+            if (td != null) {
+              const { r0, r1 } = visibleRowRange(fp.level, view, H, fp.row);
+              const clipA = Math.max(td, foldRowStartMs(fp.level, r0));
+              const clipB = Math.min(td + e.durMs, foldRowStartMs(fp.level, r1 + 1));
+              if (clipB > clipA) {
+                ctx.fillStyle = withAlpha(color, 0.24);
+                for (const fr3 of projectWindow(fp.level, clipA, clipB).slice(0, 60)) {
+                  const ms0 = foldRowStartMs(fp.level, fr3.rowIndex);
+                  const ms1 = foldRowStartMs(fp.level, fr3.rowIndex + 1);
+                  if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+                  const ya3 = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+                  const yb3 = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+                  const fy0 = Math.max(Math.min(ya3, yb3) + 1, HEADER_H);
+                  const fy1 = Math.min(Math.max(ya3, yb3) - 1, H);
+                  if (fy1 <= fy0) continue;
+                  ctx.fillRect(
+                    cx3 + fr3.phase0 * cw3,
+                    fy0,
+                    Math.max(2, (fr3.phase1 - fr3.phase0) * cw3),
+                    fy1 - fy0,
+                  );
+                }
+              }
+            }
+          }
+        }
         const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
         if (g.moving) anyGliding = true;
         const md = massDot(e);
@@ -2150,12 +2224,57 @@ export function createTimelineSource(
     if (glide.size > 1200) glide.clear(); // safety valve
     return { x, y, moving };
   };
-  const TRACK_FOLD_MAX_CONTENT_REM = 45; // content measure capped like a text column
+  // content measure capped like a text column — right for narrow multi-track
+  // lanes (deep time), wrong for a full-page single-track calendar, so
+  // datasets may override (Infinity = edge to edge)
+  const TRACK_FOLD_MAX_CONTENT_REM = ds?.foldMaxContentRem ?? 45;
   const remPx = () =>
     typeof document !== "undefined"
       ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
       : 16;
   const LADDER_FINE_FIRST = ["hour", "day", "week", "month", "year", "decade", "century", "millennium"] as const;
+
+  // shared geometry for gridAt/spanRects: the folded track under sx (or the
+  // first foldable track when sx is null) and its content strip
+  function trackGridGeom(
+    view: LaneView,
+    sx: number | null,
+  ): { cx0: number; contentW: number; rem: number } | null {
+    if (fold !== "none" || !trackFold) return null;
+    const rem = remPx();
+    const tracks = activeTracks(view);
+    const tr =
+      sx == null
+        ? tracks.find((t) => t.meta.cat !== "periodic" && trackWideEnough(t.meta.cat, t.w, rem))
+        : tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
+    if (!tr || tr.meta.cat === "periodic") return null;
+    if (!trackWideEnough(tr.meta.cat, tr.w, rem)) return null;
+    return { cx0: trackContentX0(tr.x0, rem), contentW: trackContentW(tr.w, rem), rem };
+  }
+  // same level pick as the band chrome: finest level readable at the center
+  function pickFoldLevel(
+    view: LaneView,
+    contentW: number,
+  ): { lf: Exclude<TimelineFold, "none">; div: FoldDivision } | null {
+    const rem = remPx();
+    const tCenter = tMsOfYbp(yBPof(screenToWorldY(view, view.height / 2)));
+    if (!Number.isFinite(tCenter)) return null;
+    for (const lf of LADDER_FINE_FIRST) {
+      const fv = FOLD_VIEWS[lf];
+      const div = chooseDivision(fv, contentW, rem);
+      if (!div) continue;
+      const pc = fv.projector.project(tCenter);
+      if (!pc) continue;
+      const s0 = foldRowStartMs(lf, pc.rowIndex);
+      const s1 = foldRowStartMs(lf, pc.rowIndex + 1);
+      if (!Number.isFinite(s0) || !Number.isFinite(s1)) continue;
+      const b0 = worldToScreenY(view, worldOf(ybpOfTMs(s0)));
+      const b1 = worldToScreenY(view, worldOf(ybpOfTMs(s1)));
+      if (Math.abs(b1 - b0) < rem) continue;
+      return { lf, div };
+    }
+    return null;
+  }
   /** slim y-axis gutter inside a folding track: row labels live here,
    *  uncovered by phase-0 events */
   const Y_GUTTER_REM = 2.6;
@@ -2416,57 +2535,79 @@ export function createTimelineSource(
     },
     eventCount: () => points.length,
     gridAt(sx, sy, view) {
-      if (fold !== "none" || !trackFold) return null;
-      const rem = remPx();
-      const tracks = activeTracks(view);
-      const tr = tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
-      if (!tr || tr.meta.cat === "periodic") return null;
-      if (!trackWideEnough(tr.meta.cat, tr.w, rem)) return null;
-      const contentW = trackContentW(tr.w, rem);
-      const cx0 = trackContentX0(tr.x0, rem);
+      const g = trackGridGeom(view, sx);
+      if (!g) return null;
+      const { cx0, contentW } = g;
       if (sx < cx0 || sx > cx0 + contentW) return null;
       const tPointer = tMsOfYbp(yBPof(screenToWorldY(view, sy)));
-      const tCenter = tMsOfYbp(yBPof(screenToWorldY(view, view.height / 2)));
-      if (!Number.isFinite(tPointer) || !Number.isFinite(tCenter)) return null;
-      // same level pick as the band chrome: finest readable at the center
-      for (const lf of LADDER_FINE_FIRST) {
-        const fv = FOLD_VIEWS[lf];
-        const div = chooseDivision(fv, contentW, rem);
-        if (!div) continue;
-        const pc = fv.projector.project(tCenter);
-        if (!pc) continue;
-        const s0 = foldRowStartMs(lf, pc.rowIndex);
-        const s1 = foldRowStartMs(lf, pc.rowIndex + 1);
-        if (!Number.isFinite(s0) || !Number.isFinite(s1)) continue;
-        const b0 = worldToScreenY(view, worldOf(ybpOfTMs(s0)));
-        const b1 = worldToScreenY(view, worldOf(ybpOfTMs(s1)));
-        if (Math.abs(b1 - b0) < rem) continue;
-        const pp = fv.projector.project(tPointer);
-        if (!pp) return null;
-        const slots = div.slots;
-        const slot = Math.max(
-          0,
-          Math.min(Math.ceil(slots) - 1, Math.floor(Math.min(0.999999, (sx - cx0) / contentW) * slots)),
-        );
-        const rs = foldRowStartMs(lf, pp.rowIndex);
-        const re = foldRowStartMs(lf, pp.rowIndex + 1);
-        if (!Number.isFinite(rs) || !Number.isFinite(re)) return null;
-        const ya = worldToScreenY(view, worldOf(ybpOfTMs(rs)));
-        const yb = worldToScreenY(view, worldOf(ybpOfTMs(re)));
-        // slot → time linearly within the row (exact for hour/day rows; an
-        // approximation for uneven month divisions — fine for a highlight)
-        const t0 = rs + ((re - rs) * slot) / slots;
-        const t1 = rs + ((re - rs) * Math.min(slot + 1, slots)) / slots;
-        return {
-          x0: cx0 + (slot / slots) * contentW,
-          x1: cx0 + (Math.min(slot + 1, slots) / slots) * contentW,
+      if (!Number.isFinite(tPointer)) return null;
+      const picked = pickFoldLevel(view, contentW);
+      if (!picked) return null;
+      const { lf, div } = picked;
+      const fv = FOLD_VIEWS[lf];
+      const pp = fv.projector.project(tPointer);
+      if (!pp) return null;
+      const slots = div.slots;
+      const phase = Math.min(0.999999, Math.max(0, (sx - cx0) / contentW));
+      const slot = Math.max(0, Math.min(Math.ceil(slots) - 1, Math.floor(phase * slots)));
+      const rs = foldRowStartMs(lf, pp.rowIndex);
+      const re = foldRowStartMs(lf, pp.rowIndex + 1);
+      if (!Number.isFinite(rs) || !Number.isFinite(re)) return null;
+      const ya = worldToScreenY(view, worldOf(ybpOfTMs(rs)));
+      const yb = worldToScreenY(view, worldOf(ybpOfTMs(re)));
+      // slot → time linearly within the row (exact for hour/day rows; an
+      // approximation for uneven month divisions — fine for a highlight)
+      const t0 = rs + ((re - rs) * slot) / slots;
+      const t1 = rs + ((re - rs) * Math.min(slot + 1, slots)) / slots;
+      return {
+        x0: cx0 + (slot / slots) * contentW,
+        x1: cx0 + (Math.min(slot + 1, slots) / slots) * contentW,
+        y0: Math.min(ya, yb),
+        y1: Math.max(ya, yb),
+        t0,
+        t1,
+        t: rs + (re - rs) * phase, // x carries time-of-row, y carries the row
+        level: lf,
+      };
+    },
+    spanRects(t0, t1, view, level) {
+      const a = Math.min(t0, t1);
+      const b = Math.max(t0, t1);
+      const g = trackGridGeom(view, null);
+      const continuous = (): Array<{ x0: number; x1: number; y0: number; y1: number }> => {
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(a)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(b)));
+        const x0 = g ? g.cx0 : 0;
+        const x1 = g ? g.cx0 + g.contentW : view.width;
+        return [{ x0, x1, y0: Math.min(ya, yb), y1: Math.max(ya, yb) }];
+      };
+      if (!g) return continuous();
+      const picked = level
+        ? (() => {
+            const fv = FOLD_VIEWS[level as Exclude<TimelineFold, "none">];
+            if (!fv) return null;
+            const div = chooseDivision(fv, g.contentW, g.rem);
+            return div ? { lf: level as Exclude<TimelineFold, "none">, div } : null;
+          })()
+        : pickFoldLevel(view, g.contentW);
+      if (!picked) return continuous();
+      const { lf } = picked;
+      const frags = projectWindow(lf, a, b);
+      const out: Array<{ x0: number; x1: number; y0: number; y1: number }> = [];
+      for (const fr of frags.slice(0, 400)) {
+        const ms0 = foldRowStartMs(lf, fr.rowIndex);
+        const ms1 = foldRowStartMs(lf, fr.rowIndex + 1);
+        if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+        out.push({
+          x0: g.cx0 + fr.phase0 * g.contentW,
+          x1: g.cx0 + fr.phase1 * g.contentW,
           y0: Math.min(ya, yb),
           y1: Math.max(ya, yb),
-          t0,
-          t1,
-        };
+        });
       }
-      return null;
+      return out;
     },
     eventAt(sx, sy, view) {
       // a visible label is a hover target for its event (either mode)

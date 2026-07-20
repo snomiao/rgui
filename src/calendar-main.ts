@@ -149,6 +149,7 @@ const fmtRange = (e: CalEvent) =>
 function toEv(e: CalEvent): TimelineEvent {
   const cal = calById(e.calId);
   const t = e.allDay ? e.startMs : toShifted(e.startMs);
+  const dur = e.allDay ? e.endMs - e.startMs : toShifted(e.endMs) - t;
   return {
     y: (toShifted(nowMs) - t) / 1000 / SPY,
     tMs: t,
@@ -161,6 +162,9 @@ function toEv(e: CalEvent): TimelineEvent {
     cat: "cal",
     color: cal?.color,
     span: DAY_Y / 1440,
+    // real extent → duration blocks in the fold (single-day all-day events
+    // already render as their precision day-band; multi-day ones ribbon)
+    durMs: e.allDay && dur <= 86400_000 ? undefined : dur,
   };
 }
 
@@ -176,6 +180,7 @@ function buildSource(): TimelineSource {
       oldestYBP: 2,
       futureYears: 2,
       fitYBP: { top: 1.2 * DAY_Y, bot: -6 * DAY_Y },
+      foldMaxContentRem: Infinity, // full-page grid — no text-column cap
     },
   });
   src.setOnUpdate(() => lane.invalidate());
@@ -197,6 +202,7 @@ const lane = createLane(canvas, {
   source,
   theme: resolveTheme(),
   maxDpr: 2,
+  zoomIndicator: false, // the crosshair + cell highlight are the affordance
   onFrame: () => {
     updateGhost();
     updateHover();
@@ -204,10 +210,17 @@ const lane = createLane(canvas, {
 });
 source.setOnUpdate(() => lane.invalidate());
 
-// real time under a screen y / screen y of a real time — via the shift frame
+// real time under a screen point — X-Y aware: in the folded grid the row
+// comes from Y and the time-of-day from X (gridAt.t); the continuous axis
+// falls back to the y-only mapping
 const timeAtY = (sy: number): number | null => {
   const s = source.tMsForWorld(screenToWorldY(lane.view, sy));
   return s == null ? null : fromShifted(s);
+};
+const timeAtPoint = (sx: number, sy: number): number | null => {
+  const cell = source.gridAt(sx, sy, lane.view);
+  if (cell) return fromShifted(cell.t);
+  return timeAtY(sy);
 };
 const yAtTime = (ms: number): number => {
   const w = source.worldForTMs(toShifted(ms));
@@ -383,13 +396,26 @@ document.querySelector<HTMLButtonElement>("#saveBtn")?.addEventListener("click",
 });
 
 // ── placeholder (UI state until saved) + input grammar ────────────────────
+// The span renders as WRAPPED ROW FRAGMENTS (text-selection shape) via
+// spanRects: X = time within the day row, Y = the day. Creating, resizing
+// and moving all read the pointer in that x-y plane.
 const ghostEl = document.querySelector<HTMLDivElement>("#ghost")!;
+const ghostFrags = document.querySelector<HTMLDivElement>("#ghostFrags")!;
 const ghostLabel = document.querySelector<HTMLSpanElement>("#ghostLabel")!;
+const handleStart = document.querySelector<HTMLDivElement>("#handleStart")!;
+const handleEnd = document.querySelector<HTMLDivElement>("#handleEnd")!;
 const cellhlEl = document.querySelector<HTMLDivElement>("#cellhl")!;
 
-let ph: { t0: number; t1: number } | null = null; // the placeholder span (real ms)
-let op: { kind: "size" | "resize"; edge?: "top" | "bottom"; id: number } | null = null;
+let ph: { t0: number; t1: number } | null = null; // placeholder span (real ms)
+let op:
+  | { kind: "size"; id: number; level: string | null }
+  | { kind: "resize"; edge: "start" | "end"; id: number; level: string | null }
+  | { kind: "move"; id: number; lastT: number; level: string | null }
+  | null = null;
 let suppressClickUntil = 0;
+
+const levelAt = (sx: number, sy: number): string | null =>
+  source.gridAt(sx, sy, lane.view)?.level ?? null;
 
 function phBounds(): { a: number; b: number } | null {
   if (!ph) return null;
@@ -403,16 +429,40 @@ function updateGhost() {
     return;
   }
   const rect = canvas.getBoundingClientRect();
-  const y0 = yAtTime(b.a);
-  const y1 = yAtTime(b.b);
+  const rects = source.spanRects(
+    toShifted(b.a),
+    toShifted(b.b),
+    lane.view,
+    op?.level ?? undefined,
+  );
   ghostEl.style.display = "block";
-  ghostEl.style.left = `${rect.left + 92}px`;
-  ghostEl.style.right = "12px";
-  ghostEl.style.width = "auto";
-  ghostEl.style.top = `${rect.top + Math.min(y0, y1)}px`;
-  ghostEl.style.height = `${Math.max(Math.abs(y1 - y0), 16)}px`;
-  ghostLabel.textContent = `${fmt.format(b.a)} → ${fmt.format(b.b)}`;
-  if (createSheet.style.display === "flex") positionSheet(createSheet, rect.top + (y0 + y1) / 2);
+  // rebuild the fragment stack (a handful of divs — cheap)
+  while (ghostFrags.children.length > rects.length) ghostFrags.lastChild!.remove();
+  while (ghostFrags.children.length < rects.length) {
+    const d = document.createElement("div");
+    d.className = "frag";
+    ghostFrags.appendChild(d);
+  }
+  rects.forEach((r, i) => {
+    const d = ghostFrags.children[i] as HTMLDivElement;
+    d.style.left = `${rect.left + r.x0}px`;
+    d.style.top = `${rect.top + r.y0}px`;
+    d.style.width = `${Math.max(r.x1 - r.x0, 6)}px`;
+    d.style.height = `${Math.max(r.y1 - r.y0, 10)}px`;
+  });
+  const first = rects[0];
+  const last = rects[rects.length - 1];
+  if (first && last) {
+    handleStart.style.left = `${rect.left + first.x0}px`;
+    handleStart.style.top = `${rect.top + first.y0}px`;
+    handleEnd.style.left = `${rect.left + last.x1}px`;
+    handleEnd.style.top = `${rect.top + last.y1}px`;
+    ghostLabel.style.left = `${rect.left + first.x0 + 6}px`;
+    ghostLabel.style.top = `${rect.top + first.y0 - 20}px`;
+    ghostLabel.textContent = `${fmt.format(b.a)} → ${fmt.format(b.b)}`;
+    if (createSheet.style.display === "flex")
+      positionSheet(createSheet, rect.top + (first.y0 + last.y1) / 2);
+  }
 }
 function dropPlaceholder() {
   ph = null;
@@ -421,10 +471,10 @@ function dropPlaceholder() {
   closeCreateSheet();
 }
 
-function beginPlaceholder(t: number, id: number | null, kind: "size" | "tap") {
+function beginPlaceholder(t: number, opNext: typeof op, kind: "size" | "tap") {
   const t0 = snap(t);
   ph = { t0, t1: t0 + (kind === "tap" ? 30 * 60_000 : SNAP_MS) };
-  if (id != null && kind === "size") op = { kind: "size", id };
+  op = opNext;
   updateGhost();
   if (kind === "tap") openCreateSheet();
 }
@@ -437,69 +487,113 @@ canvas.addEventListener(
     const draggish = e.pointerType === "mouse" || e.pointerType === "pen";
     if (!draggish) return; // touch: the lane pans; taps handled on click
     const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
     // a press on an existing event is an inspect-click, not a create-drag
-    if (source.eventAt(e.clientX - rect.left, sy, lane.view)) return;
+    if (source.eventAt(sx, sy, lane.view)) return;
     e.stopPropagation();
     e.preventDefault();
-    const t = timeAtY(sy);
+    const t = timeAtPoint(sx, sy);
     if (t == null || !Number.isFinite(t)) return;
     closeDetail();
-    beginPlaceholder(t, e.pointerId, "size");
+    beginPlaceholder(t, { kind: "size", id: e.pointerId, level: levelAt(sx, sy) }, "size");
   },
   { capture: true },
 );
 canvas.addEventListener(
   "pointermove",
   (e) => {
-    if (op && e.pointerId === op.id && ph) {
+    if (op && "id" in op && e.pointerId === op.id && ph) {
       e.stopPropagation();
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const t = timeAtY(e.clientY - rect.top);
+      const t = timeAtPoint(e.clientX - rect.left, e.clientY - rect.top);
       if (t == null || !Number.isFinite(t)) return;
-      if (op.kind === "size") ph.t1 = snap(t);
-      else if (op.edge === "top") ph.t0 = snap(t);
-      else ph.t1 = snap(t);
-      updateGhost();
+      applyOpTime(t);
     }
   },
   { capture: true },
 );
+function applyOpTime(t: number) {
+  if (!op || !ph) return;
+  if (op.kind === "size") ph.t1 = snap(t);
+  else if (op.kind === "resize") {
+    if (op.edge === "start") ph.t0 = snap(t);
+    else ph.t1 = snap(t);
+  } else {
+    // move: x drags time-of-day, y drags days — both fall out of the same
+    // pointer→time inverse; the span glides rigidly (duration preserved)
+    const dt = t - op.lastT;
+    op.lastT = t;
+    ph.t0 += dt;
+    ph.t1 += dt;
+  }
+  updateGhost();
+}
 function endPointer(e: PointerEvent) {
-  if (!op || e.pointerId !== op.id) return;
+  if (!op || !("id" in op) || e.pointerId !== op.id) return;
   e.stopPropagation();
-  const wasSize = op.kind === "size";
+  const was = op.kind;
+  if (was === "move" && ph) {
+    // settle the moved span onto the snap grid, duration intact
+    const dur = ph.t1 - ph.t0;
+    ph.t0 = snap(ph.t0);
+    ph.t1 = ph.t0 + dur;
+  }
   op = null;
   suppressClickUntil = performance.now() + 400;
-  if (wasSize) openCreateSheet();
+  if (was === "size") openCreateSheet();
   updateGhost();
 }
 canvas.addEventListener("pointerup", endPointer, { capture: true });
 canvas.addEventListener("pointercancel", endPointer, { capture: true });
 
-// placeholder resize handles (both edges, any pointer type — incl. touch)
-for (const h of ghostEl.querySelectorAll<HTMLDivElement>(".handle")) {
+// fragment body = MOVE (grab anywhere on the span, drag in the x-y plane)
+ghostFrags.addEventListener("pointerdown", (e) => {
+  if (!ph) return;
+  const frag = (e.target as HTMLElement).closest(".frag");
+  if (!frag) return;
+  e.stopPropagation();
+  e.preventDefault();
+  try { (frag as HTMLElement).setPointerCapture(e.pointerId); } catch { /* synthetic pointer (e2e) */ }
+  const rect = canvas.getBoundingClientRect();
+  const t = timeAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+  if (t == null) return;
+  op = { kind: "move", id: e.pointerId, lastT: t, level: levelAt(e.clientX - rect.left, e.clientY - rect.top) };
+});
+ghostFrags.addEventListener("pointermove", (e) => {
+  if (!op || op.kind !== "move" || e.pointerId !== op.id) return;
+  const rect = canvas.getBoundingClientRect();
+  const t = timeAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+  if (t != null && Number.isFinite(t)) applyOpTime(t);
+});
+ghostFrags.addEventListener("pointerup", (e) => {
+  if (op?.kind === "move" && e.pointerId === op.id) endPointer(e);
+});
+
+// handles resize their edge — in the x-y plane too
+for (const h of [handleStart, handleEnd]) {
   h.addEventListener("pointerdown", (e) => {
     if (!ph) return;
     e.stopPropagation();
     e.preventDefault();
-    h.setPointerCapture(e.pointerId);
-    const edge = h.dataset.edge as "top" | "bottom";
-    // normalize so t0 = top edge, t1 = bottom edge before grabbing one
+    try { h.setPointerCapture(e.pointerId); } catch { /* synthetic pointer (e2e) */ }
     const b = phBounds()!;
-    ph.t0 = b.a;
+    ph.t0 = b.a; // normalize: t0 = start edge, t1 = end edge
     ph.t1 = b.b;
-    op = { kind: "resize", edge, id: e.pointerId };
+    const rect = canvas.getBoundingClientRect();
+    op = {
+      kind: "resize",
+      edge: h.dataset.edge as "start" | "end",
+      id: e.pointerId,
+      level: levelAt(e.clientX - rect.left, e.clientY - rect.top),
+    };
   });
   h.addEventListener("pointermove", (e) => {
-    if (!op || op.kind !== "resize" || e.pointerId !== op.id || !ph) return;
+    if (!op || op.kind !== "resize" || e.pointerId !== op.id) return;
     const rect = canvas.getBoundingClientRect();
-    const t = timeAtY(e.clientY - rect.top);
-    if (t == null || !Number.isFinite(t)) return;
-    if (op.edge === "top") ph.t0 = snap(t);
-    else ph.t1 = snap(t);
-    updateGhost();
+    const t = timeAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+    if (t != null && Number.isFinite(t)) applyOpTime(t);
   });
   h.addEventListener("pointerup", (e) => {
     if (op?.kind === "resize" && e.pointerId === op.id) op = null;

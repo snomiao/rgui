@@ -93,6 +93,12 @@ export interface LaneOptions {
   keyboard?: boolean;
   /** accel rates (units per first-second of hold); defaults 1600 / 1600 */
   keyboardSpeed?: { scroll?: number; zoom?: number };
+  /**
+   * the zoom-center indicator (dotted cursor line + snapped-anchor ring).
+   * Default true; hosts with their own pointer affordances (e.g. the
+   * calendar's crosshair + cell highlight) turn it off.
+   */
+  zoomIndicator?: boolean;
   onFrame?: (view: LaneView) => void;
 }
 
@@ -247,7 +253,8 @@ export function createLane(
       lodStep: lodStep(view, rule),
     };
     source.draw(ctx, view, env);
-    if (pointerInside && pointerY != null) drawZoomCenter(pointerY);
+    if ((opts.zoomIndicator ?? true) && pointerInside && pointerY != null)
+      drawZoomCenter(pointerY);
 
     updateDebug();
     opts.onFrame?.(view);

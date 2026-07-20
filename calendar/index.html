@@ -114,22 +114,33 @@
         border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
         border-radius: 3px;
       }
-      /* creation placeholder (UI state until saved) */
+      /* creation placeholder (UI state until saved): a wrapped text-selection
+         of row fragments — partial start row, full middle rows, partial end */
       #ghost {
-        position: fixed; z-index: 20; display: none; pointer-events: none;
-        border: 1.5px solid var(--accent); border-radius: 5px;
+        position: fixed; inset: 0; z-index: 20;
+        display: none; pointer-events: none;
+      }
+      #ghost .frag {
+        position: fixed;
+        border: 1.5px solid var(--accent); border-radius: 4px;
         background: color-mix(in srgb, var(--accent) 22%, transparent);
+        pointer-events: auto; cursor: move; touch-action: none;
+        box-sizing: border-box;
+      }
+      #ghost #ghostLabel {
+        position: fixed; z-index: 21; pointer-events: none;
         color: var(--text); font: 600 11px/1.4 ui-monospace, Menlo, monospace;
-        padding: 2px 6px; overflow: visible;
+        background: color-mix(in srgb, var(--bg) 72%, transparent);
+        padding: 1px 6px; border-radius: 4px; white-space: nowrap;
       }
       #ghost .handle {
-        position: absolute; left: 50%; transform: translateX(-50%);
-        width: 26px; height: 14px; border-radius: 7px;
-        background: var(--accent); opacity: 0.9;
-        pointer-events: auto; cursor: ns-resize; touch-action: none;
+        position: fixed; z-index: 22;
+        width: 16px; height: 16px; border-radius: 50%;
+        background: var(--accent); border: 2px solid var(--bg);
+        transform: translate(-50%, -50%);
+        pointer-events: auto; cursor: move; touch-action: none;
+        box-sizing: border-box;
       }
-      #ghost .handle.top { top: -8px; }
-      #ghost .handle.bottom { bottom: -8px; }
       /* search omnibox */
       #qwrap { position: relative; }
       #q {
@@ -279,9 +290,10 @@
     <div id="cellhl"></div>
     <div id="drop">drop .ics to import<br /><span style="font-size:13px; color: var(--text-muted)">events land in their own calendar chip</span></div>
     <div id="ghost">
+      <div id="ghostFrags"></div>
       <span id="ghostLabel"></span>
-      <div class="handle top" data-edge="top"></div>
-      <div class="handle bottom" data-edge="bottom"></div>
+      <div class="handle" id="handleStart" data-edge="start"></div>
+      <div class="handle" id="handleEnd" data-edge="end"></div>
     </div>
     <div id="empty">
       drop an .ics file · paste a calendar URL<br />
