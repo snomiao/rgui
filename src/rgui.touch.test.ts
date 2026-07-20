@@ -181,3 +181,58 @@ describe("two-finger touch navigation", () => {
     viewer.destroy();
   });
 });
+
+describe("touch long-press context menu", () => {
+  const bootWithMenu = () => {
+    const canvas = document.createElement("canvas") as HTMLCanvasElement;
+    const c = canvas as unknown as Record<string, unknown>;
+    c.getContext = () => stubCtx();
+    c.setPointerCapture = () => {};
+    c.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
+    Object.defineProperty(canvas, "clientWidth", { value: 800 });
+    Object.defineProperty(canvas, "clientHeight", { value: 600 });
+    document.body.appendChild(canvas);
+    const calls: Array<{ nodeId: string; ids?: string[] }> = [];
+    const viewer = createRgui(canvas, {
+      graph: {
+        nodes: [
+          { id: "a", title: "A", category: "model", x: 100, y: 0, w: 256, h: 192, inputs: [], outputs: [], fields: [] },
+          { id: "b", title: "B", category: "model", x: 450, y: 0, w: 256, h: 192, inputs: [], outputs: [], fields: [] },
+        ],
+        edges: [],
+      },
+      onNodeContextMenu: (nodeId, _at, ids) => calls.push({ nodeId, ids }),
+    });
+    viewer.setView({ x: 0, y: 0, k: 1 });
+    return { viewer, canvas, calls };
+  };
+
+  test("holding a finger on a node fires the menu with the whole selection", async () => {
+    const { viewer, canvas, calls } = bootWithMenu();
+    viewer.setSelection(["a", "b"]);
+    canvas.dispatchEvent(touch("pointerdown", 1, 150, 50)); // on node a
+    await new Promise((r) => setTimeout(r, 650));
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.nodeId).toBe("a");
+    expect([...calls[0]!.ids!].sort()).toEqual(["a", "b"]);
+    // the press consumed the gesture: releasing must not click/select-reset
+    canvas.dispatchEvent(touch("pointerup", 1, 150, 50));
+    expect([...(viewer.selection ?? [])].sort()).toEqual(["a", "b"]);
+    viewer.destroy();
+  });
+
+  test("lift, movement, or a second finger cancels the long-press", async () => {
+    const { canvas, calls, viewer } = bootWithMenu();
+    // quick tap: released before the delay
+    canvas.dispatchEvent(touch("pointerdown", 1, 150, 50));
+    canvas.dispatchEvent(touch("pointerup", 1, 150, 50));
+    // hold but with a second finger (pinch, not menu)
+    canvas.dispatchEvent(touch("pointerdown", 1, 150, 50));
+    canvas.dispatchEvent(touch("pointerdown", 2, 600, 400));
+    await new Promise((r) => setTimeout(r, 650));
+    expect(calls.length).toBe(0);
+    canvas.dispatchEvent(touch("pointerup", 1, 150, 50));
+    canvas.dispatchEvent(touch("pointerup", 2, 600, 400));
+    viewer.destroy();
+  });
+});

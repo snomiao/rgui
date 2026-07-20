@@ -139,10 +139,14 @@ export interface RguiOptions {
   onSnapConnectChange?: (edges: Edge[]) => void;
   /** plain click on a node (no drag movement) */
   onNodeClick?: (nodeId: string, screen: { x: number; y: number }) => void;
-  /** right-click / context-menu on a node */
+  /** right-click (mouse) or long-press (touch) on a node. When the node is
+   * part of a multi-selection, `nodeIds` carries the WHOLE selection so the
+   * host can show one shared menu for all of it; otherwise it is just the
+   * pressed node. */
   onNodeContextMenu?: (
     nodeId: string,
     screen: { x: number; y: number },
+    nodeIds?: string[],
   ) => void;
   /** selection changed (click select, shift+drag box select, setSelection) */
   onSelectionChange?: (nodeIds: string[]) => void;
@@ -1538,6 +1542,7 @@ export function createRgui(
 
   /** shared touch bookkeeping for pointerup AND pointercancel */
   const releaseTouch = (ev: PointerEvent) => {
+    if (longPress?.pointerId === ev.pointerId) clearLongPress();
     touchPoints.delete(ev.pointerId);
     if (pinch && (ev.pointerId === pinch.a || ev.pointerId === pinch.b)) {
       pinch = null;
@@ -1555,6 +1560,7 @@ export function createRgui(
       touchPoints.set(ev.pointerId, { x: ev.offsetX, y: ev.offsetY });
       holdPointer(ev); // track only — ownership belongs to drag creation
       if (touchPoints.size >= 2) {
+        clearLongPress(); // a second finger is never a long-press
         // promotion: a live marquee is discarded without side effects; other
         // drag types (node/resize/wire) keep running and this finger is inert
         if (drag?.type === "marquee") {
@@ -1670,6 +1676,7 @@ export function createRgui(
       return;
     }
     const [wx, wy] = screenToWorld(view, vx0, vy0);
+    if (ev.pointerType === "touch" && hit.type === "node") armLongPress(ev, hit.node.id);
     if (hit.type === "node" && selection.has(hit.node.id) && selection.size > 1) {
       if (ev.button === 2) {
         drag = {
@@ -2186,6 +2193,51 @@ export function createRgui(
    * dblclick from taps on a touch-action:none canvas) */
   let lastTap: { nodeId: string; at: number; x: number; y: number } | null = null;
 
+  /** the ids a context menu should act on: the whole selection when the
+   * pressed node belongs to a multi-selection, else just that node */
+  const contextIdsOf = (nodeId: string): string[] =>
+    selection.has(nodeId) && selection.size > 1 ? [...selection] : [nodeId];
+
+  // Touch long-press on a node = the context menu (mouse right-click parity).
+  // Armed on a single-finger node press; cancelled by movement past the slop,
+  // a second finger, lift, or pointercancel.
+  const LONG_PRESS_MS = 500;
+  const LONG_PRESS_SLOP = 8;
+  let longPress: { timer: ReturnType<typeof setTimeout>; pointerId: number; nodeId: string; x0: number; y0: number } | null = null;
+  const clearLongPress = () => {
+    if (longPress) clearTimeout(longPress.timer);
+    longPress = null;
+  };
+  const armLongPress = (ev: PointerEvent, nodeId: string) => {
+    if (!options.onNodeContextMenu) return;
+    clearLongPress();
+    const pointerId = ev.pointerId;
+    const x0 = ev.offsetX;
+    const y0 = ev.offsetY;
+    longPress = {
+      pointerId,
+      nodeId,
+      x0,
+      y0,
+      timer: setTimeout(() => {
+        const tp = touchPoints.get(pointerId);
+        const moved = tp ? Math.hypot(tp.x - x0, tp.y - y0) : Infinity;
+        longPress = null;
+        if (moved > LONG_PRESS_SLOP || touchPoints.size !== 1) return;
+        // the press becomes a menu, not a drag or a tap
+        if (drag && dragPointerId === pointerId) {
+          drag = null;
+          dragPointerId = null;
+          invalidate();
+        }
+        lastTap = null; // don't let the release count toward a double-tap
+        const ids = contextIdsOf(nodeId);
+        applySelection(new Set(ids));
+        options.onNodeContextMenu?.(nodeId, { x: tp?.x ?? x0, y: tp?.y ?? y0 }, ids);
+      }, LONG_PRESS_MS),
+    };
+  };
+
   const onDblClick = (ev: MouseEvent) => {
     // double-click selects the whole SNAPPED stack the node belongs to, and
     // maximizes the viewport onto it (double again to restore)
@@ -2208,10 +2260,13 @@ export function createRgui(
     const hit = hitAt(vcx, vcy);
     if (hit?.type === "node" && options.onNodeContextMenu) {
       ev.preventDefault();
-      options.onNodeContextMenu(hit.node.id, {
-        x: ev.offsetX,
-        y: ev.offsetY,
-      });
+      const ids = contextIdsOf(hit.node.id);
+      if (ids.length > 1) applySelection(new Set(ids));
+      options.onNodeContextMenu(
+        hit.node.id,
+        { x: ev.offsetX, y: ev.offsetY },
+        ids,
+      );
       return;
     }
     if (!hit) {
