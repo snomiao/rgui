@@ -139,8 +139,24 @@ function ensureCalendar(id: string, name: string): CalMeta {
 const SPY = 31556952;
 const nowMs = Date.now();
 const DAY_Y = 1 / 365.25;
-const SNAP_MS = 15 * 60_000;
-const snap = (ms: number) => Math.round(ms / SNAP_MS) * SNAP_MS;
+// ── adaptive snap: precision follows the RENDERED grid ────────────────────
+// A fixed 15-min snap under 1-hour columns places edges at positions the
+// view doesn't show (false precision). Instead the snap unit is the finest
+// clock unit whose width is readable (≥14px) inside the current fold cell —
+// hour columns give 15-min snapping, phone daypart columns give hours,
+// month-view day cells give whole days. Want finer? Zoom in.
+const SNAP_LADDER = [
+  5 * 60_000, 15 * 60_000, 30 * 60_000, 3600_000, 3 * 3600_000, 6 * 3600_000,
+  86400_000, 7 * 86400_000,
+];
+let snapMs = 15 * 60_000; // refreshed from the cell under the pointer
+function snapForCell(cell: { t0: number; t1: number; x0: number; x1: number }) {
+  const cellMs = cell.t1 - cell.t0;
+  const pxPerMs = (cell.x1 - cell.x0) / Math.max(1, cellMs);
+  for (const u of SNAP_LADDER) if (u * pxPerMs >= 14) return u;
+  return SNAP_LADDER[SNAP_LADDER.length - 1]!;
+}
+const snap = (ms: number) => Math.round(ms / snapMs) * snapMs;
 const fmtRange = (e: CalEvent) =>
   e.allDay
     ? `${fmtDay.format(e.startMs)} · all day`
@@ -219,7 +235,10 @@ const timeAtY = (sy: number): number | null => {
 };
 const timeAtPoint = (sx: number, sy: number): number | null => {
   const cell = source.gridAt(sx, sy, lane.view);
-  if (cell) return fromShifted(cell.t);
+  if (cell) {
+    snapMs = snapForCell(cell); // snapping tracks what the grid shows here
+    return fromShifted(cell.t);
+  }
   return timeAtY(sy);
 };
 const yAtTime = (ms: number): number => {
@@ -420,7 +439,7 @@ const levelAt = (sx: number, sy: number): string | null =>
 function phBounds(): { a: number; b: number } | null {
   if (!ph) return null;
   const a = Math.min(ph.t0, ph.t1);
-  return { a, b: Math.max(ph.t0, ph.t1, a + SNAP_MS) };
+  return { a, b: Math.max(ph.t0, ph.t1, a + snapMs) };
 }
 function updateGhost() {
   const b = phBounds();
@@ -473,7 +492,8 @@ function dropPlaceholder() {
 
 function beginPlaceholder(t: number, opNext: typeof op, kind: "size" | "tap") {
   const t0 = snap(t);
-  ph = { t0, t1: t0 + (kind === "tap" ? 30 * 60_000 : SNAP_MS) };
+  // tap default: one visible slot-ish (≥30 min) so the span is grabbable
+  ph = { t0, t1: t0 + (kind === "tap" ? Math.max(30 * 60_000, snapMs) : snapMs) };
   op = opNext;
   updateGhost();
   if (kind === "tap") openCreateSheet();
