@@ -1434,7 +1434,94 @@ export function createRgui(
     }
   };
 
+  // ---- touch navigation: two fingers = pan + pinch-zoom --------------------
+  // Pointer Events deliver one stream per finger; d3-zoom's own touch handling
+  // is disabled (see the zoom filter) so this state machine owns every
+  // `pointerType: "touch"` gesture. One finger keeps the exact mouse
+  // semantics (marquee / node drag / wire). A second finger PROMOTES the
+  // gesture to canvas navigation: a live marquee is discarded (safe —
+  // selection only applies on pointerup), while node/resize/wire drags keep
+  // running and ignore the extra finger. Once promoted, the gesture stays
+  // navigation until every finger lifts, so a finger raised mid-pinch can
+  // never resume selecting. (Edge-case matrix: otoji TODO.md, touch section.)
+  const touchPoints = new Map<number, { x: number; y: number }>();
+  let touchNav = false; // latched while a ≥2-finger gesture is in flight
+  let pinch: {
+    a: number;
+    b: number; // the two pointer ids driving the pinch (extras are ignored)
+    dist: number; // finger distance at pinch start (px, offset coords)
+    mid: { x: number; y: number }; // midpoint at pinch start
+    view0: { x: number; y: number; k: number };
+  } | null = null;
+
+  const beginPinch = () => {
+    const ids = [...touchPoints.keys()];
+    const a = ids[0]!;
+    const b = ids[1]!;
+    const pa = touchPoints.get(a)!;
+    const pb = touchPoints.get(b)!;
+    pinch = {
+      a,
+      b,
+      dist: Math.max(12, Math.hypot(pb.x - pa.x, pb.y - pa.y)),
+      mid: { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 },
+      view0: { ...view },
+    };
+  };
+
+  const applyPinch = () => {
+    if (!pinch) return;
+    const pa = touchPoints.get(pinch.a);
+    const pb = touchPoints.get(pinch.b);
+    if (!pa || !pb) return;
+    const dist = Math.max(12, Math.hypot(pb.x - pa.x, pb.y - pa.y));
+    const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
+    const k = Math.min(1e6, Math.max(1e-6, pinch.view0.k * (dist / pinch.dist)));
+    // keep the world point that sat under the start-midpoint pinned under the
+    // CURRENT midpoint — pan and zoom fall out of one transform
+    const wx = (pinch.mid.x - pinch.view0.x) / pinch.view0.k;
+    const wy = (pinch.mid.y - pinch.view0.y) / pinch.view0.k;
+    cancelFly();
+    sel.call(
+      zoomBehavior.transform,
+      zoomIdentity.translate(mid.x - wx * k, mid.y - wy * k).scale(k),
+    );
+  };
+
+  /** shared touch bookkeeping for pointerup AND pointercancel */
+  const releaseTouch = (ev: PointerEvent) => {
+    touchPoints.delete(ev.pointerId);
+    if (pinch && (ev.pointerId === pinch.a || ev.pointerId === pinch.b)) {
+      pinch = null;
+      // three fingers → one lifted: re-pair the remaining two seamlessly
+      if (touchPoints.size >= 2) beginPinch();
+    }
+    if (touchPoints.size === 0) {
+      touchNav = false;
+      pinch = null;
+    }
+  };
+
   const onPointerDown = (ev: PointerEvent) => {
+    if (ev.pointerType === "touch") {
+      touchPoints.set(ev.pointerId, { x: ev.offsetX, y: ev.offsetY });
+      capturePointer(ev);
+      if (touchPoints.size >= 2) {
+        // promotion: a live marquee is discarded without side effects; other
+        // drag types (node/resize/wire) keep running and this finger is inert
+        if (drag?.type === "marquee") {
+          drag = null;
+          invalidate();
+        }
+        if (!drag) {
+          touchNav = true;
+          if (touchPoints.size === 2) beginPinch();
+        }
+        return;
+      }
+      if (touchNav) return; // latched: no gesture may start until all lift
+      // single finger falls through — identical to the mouse path below
+    }
     if (spaceHeld && input === "figma") return; // space+drag = pan (d3 owns it)
     // chrome hit-tests use RAW screen coords; graph logic uses VIEW coords
     const [vx0, vy0] = toView(ev.offsetX, ev.offsetY);
@@ -1616,6 +1703,18 @@ export function createRgui(
   };
 
   const onPointerMove = (ev: PointerEvent) => {
+    if (ev.pointerType === "touch") {
+      const tp = touchPoints.get(ev.pointerId);
+      if (tp) {
+        tp.x = ev.offsetX;
+        tp.y = ev.offsetY;
+      }
+      if (pinch && (ev.pointerId === pinch.a || ev.pointerId === pinch.b)) {
+        applyPinch();
+        return;
+      }
+      if (touchNav) return; // inert extra fingers / latched tail
+    }
     const [vx0, vy0] = toView(ev.offsetX, ev.offsetY);
     pointer = { sx: vx0, sy: vy0 };
     if (!drag) {
@@ -1793,6 +1892,11 @@ export function createRgui(
   let rightDragMoved = false;
 
   const onPointerUp = (ev: PointerEvent) => {
+    if (ev.pointerType === "touch") {
+      const wasNav = touchNav;
+      releaseTouch(ev);
+      if (wasNav) return; // nav fingers never produce clicks or selections
+    }
     if (!drag) return;
     if (drag.type === "resize") {
       if (drag.moved)
@@ -2013,6 +2117,20 @@ export function createRgui(
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
+  // a canceled touch (palm rejection, browser gesture steal) must not leave a
+  // stuck drag or a half-tracked finger behind
+  canvas.addEventListener("pointercancel", (ev: PointerEvent) => {
+    if (ev.pointerType === "touch") {
+      releaseTouch(ev);
+      if (drag) {
+        drag = null;
+        invalidate();
+      }
+    }
+  });
+  // the browser must never pinch-zoom the page or synthesize scrolls from
+  // canvas touches — all touch gestures belong to the state machine above
+  canvas.style.touchAction = "none";
   canvas.addEventListener("contextmenu", onContextMenu);
   canvas.addEventListener("dblclick", onDblClick);
 
@@ -2326,6 +2444,10 @@ export function createRgui(
   const zoomBehavior = zoom<HTMLCanvasElement, unknown>()
     .scaleExtent([1e-6, 1e6])
     .filter((ev: MouseEvent | WheelEvent) => {
+      // touch is owned by the pointer-event state machine (two-finger
+      // pan/pinch above); letting d3's touch handlers run too would
+      // double-apply transforms and fight the marquee
+      if ((ev as Event).type.startsWith("touch")) return false;
       if (ev.type === "wheel")
         // figma: wheel fully custom (see onWheel); classic: d3 zooms
         return input !== "figma";
