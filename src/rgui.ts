@@ -1095,7 +1095,7 @@ export function createRgui(
         wy: number;
         moved: boolean;
       }
-    | { type: "wire"; from: PortHit; toSx: number; toSy: number }
+    | { type: "wire"; from: PortHit; toSx: number; toSy: number; sticky?: boolean }
     | {
         type: "smartLink";
         from: GraphNode;
@@ -1579,6 +1579,24 @@ export function createRgui(
     if (spaceHeld && input === "figma") return; // space+drag = pan (d3 owns it)
     // chrome hit-tests use RAW screen coords; graph logic uses VIEW coords
     const [vx0, vy0] = toView(ev.offsetX, ev.offsetY);
+    // tap-tap connect (touch): an armed wire from a previous port tap is
+    // resolved by this press — a valid port completes the connection, anything
+    // else cancels. Either way the tap is consumed.
+    if (drag?.type === "wire" && drag.sticky) {
+      const armed = drag;
+      drag = null;
+      dragPointerId = null;
+      invalidate();
+      const target = portAt(vx0, vy0);
+      if (target && validConnection(armed.from, target)) {
+        const [from, to] =
+          armed.from.ref.side === "out"
+            ? [armed.from.ref, target.ref]
+            : [target.ref, armed.from.ref];
+        options.onConnect?.(from, to);
+      }
+      return;
+    }
     // seed the pointer here, not only on move: a setGraph (or a shift tap)
     // can land before the gesture's first pointermove, and both re-anchor
     // against `pointer` — reading a stale one teleports the drag
@@ -2043,6 +2061,20 @@ export function createRgui(
     if (drag.type === "wire") {
       const [vux, vuy] = toView(ev.offsetX, ev.offsetY);
       const target = portAt(vux, vuy);
+      // touch: a TAP on the source port (no drag movement) arms tap-tap mode —
+      // the wire stays live and the next tap picks the far port. Fat-finger
+      // drag-to-connect stays available; this is the reliable fallback.
+      if (
+        ev.pointerType === "touch" &&
+        target &&
+        target.ref.node === drag.from.ref.node &&
+        target.ref.port === drag.from.ref.port &&
+        target.ref.side === drag.from.ref.side
+      ) {
+        drag.sticky = true;
+        invalidate();
+        return;
+      }
       if (target && validConnection(drag.from, target)) {
         const [from, to] =
           drag.from.ref.side === "out"
