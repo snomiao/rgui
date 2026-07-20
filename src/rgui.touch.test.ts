@@ -236,3 +236,55 @@ describe("touch long-press context menu", () => {
     viewer.destroy();
   });
 });
+
+describe("tap-tap connect (touch)", () => {
+  const bootPorts = () => {
+    const canvas = document.createElement("canvas") as HTMLCanvasElement;
+    const c = canvas as unknown as Record<string, unknown>;
+    c.getContext = () => stubCtx();
+    c.setPointerCapture = () => {};
+    c.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
+    Object.defineProperty(canvas, "clientWidth", { value: 800 });
+    Object.defineProperty(canvas, "clientHeight", { value: 600 });
+    document.body.appendChild(canvas);
+    const connects: Array<{ from: { node: string; port: string }; to: { node: string; port: string } }> = [];
+    const viewer = createRgui(canvas, {
+      graph: {
+        nodes: [
+          { id: "src", title: "S", category: "model", x: 40, y: 100, w: 200, h: 160, inputs: [], outputs: [{ id: "out", label: "out", kind: "data" }], fields: [] },
+          { id: "dst", title: "D", category: "model", x: 460, y: 100, w: 200, h: 160, inputs: [{ id: "in", label: "in", kind: "data" }], outputs: [], fields: [] },
+        ],
+        edges: [],
+      },
+      onConnect: (from, to) => connects.push({ from, to } as never),
+    });
+    viewer.setView({ x: 0, y: 0, k: 1 });
+    return { viewer, canvas, connects };
+  };
+
+  const tap = (canvas: HTMLCanvasElement, x: number, y: number) => {
+    canvas.dispatchEvent(touch("pointerdown", 1, x, y));
+    canvas.dispatchEvent(touch("pointerup", 1, x, y));
+  };
+
+  test("tap a port, then tap the far port = connected", () => {
+    const { viewer, canvas, connects } = bootPorts();
+    // port layout (computePortLayout): src/out at (240,147), dst/in at (460,147)
+    tap(canvas, 240, 147);
+    tap(canvas, 460, 147);
+    expect(connects.length).toBe(1);
+    expect(connects[0]!.from.node).toBe("src");
+    expect(connects[0]!.to.node).toBe("dst");
+    viewer.destroy();
+  });
+
+  test("tap a port then tap empty canvas = cancelled; a fresh pair still connects", () => {
+    const { viewer, canvas, connects } = bootPorts();
+    tap(canvas, 240, 147);
+    tap(canvas, 380, 500);
+    tap(canvas, 240, 147);
+    tap(canvas, 460, 147);
+    expect(connects.length).toBe(1);
+    viewer.destroy();
+  });
+});
