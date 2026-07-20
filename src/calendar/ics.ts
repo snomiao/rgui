@@ -224,6 +224,15 @@ export function expandRrule(
 
 // ── document parse / serialize ────────────────────────────────────────────
 
+type ProtoEvent = Partial<IcsEvent> & {
+  rrule?: string;
+  durMs?: number;
+  exdates?: Set<number>;
+  /** RECURRENCE-ID: this VEVENT overrides ONE instance of the same-UID series */
+  recurrenceId?: number;
+  cancelled?: boolean;
+};
+
 export function parseIcs(
   text: string,
   opts: { fromMs?: number; toMs?: number } = {},
@@ -232,51 +241,28 @@ export function parseIcs(
   const toMs = opts.toMs ?? Date.now() + 2 * 365 * DAY_MS;
   const lines = unfoldLines(text);
   const cal: IcsCalendar = { events: [] };
-  let ev: Partial<IcsEvent> & { rrule?: string; durMs?: number; exdates?: Set<number> } | null = null;
-  let uidSeq = 0;
+
+  // pass 1 — collect every VEVENT as a proto record
+  const protos: ProtoEvent[] = [];
+  let ev: ProtoEvent | null = null;
   for (const line of lines) {
     const p = parseLine(line);
     if (!p) continue;
     if (p.name === "X-WR-CALNAME") cal.name = unescapeText(p.value).trim();
     else if (p.name === "BEGIN" && p.value.toUpperCase() === "VEVENT") ev = {};
     else if (p.name === "END" && p.value.toUpperCase() === "VEVENT") {
-      if (ev && ev.startMs !== undefined) {
-        const allDay = ev.allDay ?? false;
-        const endMs =
-          ev.endMs ??
-          (ev.durMs != null ? ev.startMs + ev.durMs : ev.startMs + (allDay ? DAY_MS : HOUR_MS));
-        const base: IcsEvent = {
-          uid: ev.uid ?? `ics-${++uidSeq}`,
-          summary: ev.summary ?? "(untitled)",
-          location: ev.location,
-          description: ev.description,
-          startMs: ev.startMs,
-          endMs,
-          allDay,
-        };
-        if (ev.rrule) {
-          const starts = expandRrule(ev.rrule, base.startMs, fromMs, toMs);
-          if (starts === null) {
-            cal.events.push({ ...base, recurring: true });
-          } else {
-            const dur = base.endMs - base.startMs;
-            let i = 0;
-            for (const s of starts) {
-              if (ev.exdates?.has(s)) continue;
-              cal.events.push({ ...base, uid: `${base.uid}#${i++}`, startMs: s, endMs: s + dur });
-            }
-          }
-        } else if (!ev.exdates?.has(base.startMs)) {
-          cal.events.push(base);
-        }
-      }
+      if (ev && ev.startMs !== undefined) protos.push(ev);
       ev = null;
     } else if (ev) {
       if (p.name === "UID") ev.uid = p.value.trim();
       else if (p.name === "SUMMARY") ev.summary = unescapeText(p.value).trim();
       else if (p.name === "LOCATION") ev.location = unescapeText(p.value).trim();
       else if (p.name === "DESCRIPTION") ev.description = unescapeText(p.value).trim();
-      else if (p.name === "DTSTART") {
+      else if (p.name === "STATUS") ev.cancelled = p.value.trim().toUpperCase() === "CANCELLED";
+      else if (p.name === "RECURRENCE-ID") {
+        const d = parseIcsDate(p.value.trim(), p.params);
+        if (d) ev.recurrenceId = d.ms;
+      } else if (p.name === "DTSTART") {
         const d = parseIcsDate(p.value.trim(), p.params);
         if (d) {
           ev.startMs = d.ms;
@@ -295,6 +281,75 @@ export function parseIcs(
         }
       }
     }
+  }
+
+  // pass 2 — emit. Overrides (same UID + RECURRENCE-ID) REPLACE the matching
+  // expanded instance of their series (Google exports every edited instance
+  // of a recurring event this way); STATUS:CANCELLED overrides delete it;
+  // overrides whose master never expanded (outside horizon, unsupported
+  // rule, partial export) emit standalone rather than vanishing.
+  let uidSeq = 0;
+  const finish = (p: ProtoEvent, uid: string): IcsEvent => {
+    const allDay = p.allDay ?? false;
+    const endMs =
+      p.endMs ??
+      (p.durMs != null ? p.startMs! + p.durMs : p.startMs! + (allDay ? DAY_MS : HOUR_MS));
+    return {
+      uid,
+      summary: p.summary ?? "(untitled)",
+      location: p.location,
+      description: p.description,
+      startMs: p.startMs!,
+      endMs,
+      allDay,
+    };
+  };
+  const ovByUid = new Map<string, Map<number, ProtoEvent>>();
+  for (const p of protos) {
+    if (p.recurrenceId === undefined || !p.uid) continue;
+    let m = ovByUid.get(p.uid);
+    if (!m) ovByUid.set(p.uid, (m = new Map()));
+    m.set(p.recurrenceId, p);
+  }
+  const consumed = new Set<ProtoEvent>();
+  for (const p of protos) {
+    if (p.recurrenceId !== undefined) continue; // overrides emit via masters
+    const uid = p.uid ?? `ics-${++uidSeq}`;
+    const overrides = p.uid ? ovByUid.get(p.uid) : undefined;
+    if (p.rrule) {
+      const starts = expandRrule(p.rrule, p.startMs!, fromMs, toMs);
+      if (starts === null) {
+        if (!p.cancelled) cal.events.push({ ...finish(p, uid), recurring: true });
+        continue;
+      }
+      const dur = (p.endMs ?? p.startMs! + (p.durMs ?? (p.allDay ? DAY_MS : HOUR_MS))) - p.startMs!;
+      let i = 0;
+      for (const s of starts) {
+        if (p.exdates?.has(s)) continue;
+        const ov = overrides?.get(s);
+        if (ov) {
+          consumed.add(ov);
+          if (!ov.cancelled) cal.events.push(finish(ov, `${uid}#r${s}`));
+          continue;
+        }
+        cal.events.push({ ...finish(p, `${uid}#${i++}`), startMs: s, endMs: s + dur });
+      }
+      continue;
+    }
+    if (p.cancelled || p.exdates?.has(p.startMs!)) continue;
+    // even a non-recurring master can be overridden (degenerate but legal)
+    const ov = overrides?.get(p.startMs!);
+    if (ov) {
+      consumed.add(ov);
+      if (!ov.cancelled) cal.events.push(finish(ov, `${uid}#r${p.startMs}`));
+      continue;
+    }
+    cal.events.push(finish(p, uid));
+  }
+  for (const p of protos) {
+    if (p.recurrenceId === undefined || consumed.has(p) || p.cancelled) continue;
+    const uid = p.uid ?? `ics-${++uidSeq}`;
+    cal.events.push(finish(p, `${uid}#r${p.recurrenceId}`)); // orphan override
   }
   return cal;
 }

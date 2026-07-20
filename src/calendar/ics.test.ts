@@ -133,6 +133,60 @@ describe("parseIcs / serializeIcs", () => {
     expect(a.startMs).toBe(Date.UTC(2026, 6, 21, 13));
   });
 
+  test("RECURRENCE-ID overrides replace their instance (Google-style)", () => {
+    const text = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:std@x",
+      "DTSTART:20260706T090000Z",
+      "DTEND:20260706T093000Z",
+      "RRULE:FREQ=DAILY;COUNT=4",
+      "SUMMARY:Standup",
+      "END:VEVENT",
+      "BEGIN:VEVENT", // moved + renamed 2nd instance
+      "UID:std@x",
+      "RECURRENCE-ID:20260707T090000Z",
+      "DTSTART:20260707T140000Z",
+      "DTEND:20260707T143000Z",
+      "SUMMARY:Standup (moved)",
+      "END:VEVENT",
+      "BEGIN:VEVENT", // cancelled 3rd instance
+      "UID:std@x",
+      "RECURRENCE-ID:20260708T090000Z",
+      "DTSTART:20260708T090000Z",
+      "STATUS:CANCELLED",
+      "SUMMARY:Standup",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const cal = parseIcs(text, { fromMs: 0, toMs: Date.UTC(2027, 0, 1) });
+    const starts = cal.events.map((e) => new Date(e.startMs).toISOString().slice(0, 13)).sort();
+    // 4 instances − 1 cancelled = 3; the moved one sits at 14:00, no 09:00 dupe
+    expect(cal.events.length).toBe(3);
+    expect(starts).toEqual(["2026-07-06T09", "2026-07-07T14", "2026-07-09T09"]);
+    const moved = cal.events.find((e) => e.summary === "Standup (moved)")!;
+    expect(moved.endMs - moved.startMs).toBe(1800_000);
+    // uid keys stay unique
+    expect(new Set(cal.events.map((e) => e.uid)).size).toBe(3);
+  });
+
+  test("orphan overrides (master missing) emit standalone", () => {
+    const text = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:orphan@x",
+      "RECURRENCE-ID:20260701T100000Z",
+      "DTSTART:20260701T110000Z",
+      "DTEND:20260701T113000Z",
+      "SUMMARY:Rescheduled thing",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const cal = parseIcs(text, { fromMs: 0, toMs: Date.UTC(2027, 0, 1) });
+    expect(cal.events.length).toBe(1);
+    expect(cal.events[0]!.startMs).toBe(Date.UTC(2026, 6, 1, 11));
+  });
+
   test("long summaries fold at 74 chars and unfold back", () => {
     const long = "x".repeat(200);
     const text = serializeIcs([
