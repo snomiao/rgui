@@ -199,6 +199,10 @@ function buildSource(): TimelineSource {
       foldMaxContentRem: Infinity, // full-page grid — no text-column cap
     },
   });
+  // Gantt bars carry density here — heat cells would paint slot columns
+  // over the lanes and muddy the calendar read. Set BEFORE wiring onUpdate:
+  // setHeatCells fires it, and at first boot `lane` doesn't exist yet (TDZ).
+  src.setHeatCells(false);
   src.setOnUpdate(() => lane.invalidate());
   return src;
 }

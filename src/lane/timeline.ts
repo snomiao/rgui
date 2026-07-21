@@ -1461,13 +1461,17 @@ export function createTimelineSource(
       // among months, week lines among days, daypart lines among hours.
       // Identical x in every band (max-slot phases), so identical wall times
       // align down the whole track.
+      // grid hierarchy: the ROW (day) boundary is the semantic unit and must
+      // read strongest; coarser-division verticals are guides; finest slot
+      // verticals are paper texture. Loud uniform verticals made empty
+      // calendar days busier than full ones (taku).
       const divIdx = fv.divisions.indexOf(div);
       const coarser = fv.divisions[divIdx + 1];
       const majorEvery = coarser ? Math.max(1, Math.round(div.slots / coarser.slots)) : div.labelEvery;
       ctx.lineWidth = 1;
       for (let m2 = 1; m2 < div.slots; m2++) {
         const major = m2 % majorEvery === 0;
-        ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.55 : 0.26);
+        ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.28 : 0.1);
         const x = gx(m2 / div.slots);
         ctx.beginPath();
         ctx.moveTo(Math.round(x) + 0.5, HEADER_H);
@@ -1487,7 +1491,8 @@ export function createTimelineSource(
         if (!Number.isFinite(ms)) return null;
         const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
         if (y >= HEADER_H - 2 && y <= H + 2) {
-          const strength = boundaryStrength(ms);
+          // floor: even the plainest row boundary must beat every vertical
+          const strength = Math.max(0.42, boundaryStrength(ms));
           ctx.strokeStyle = withAlpha(theme.textFaint, Math.min(strength, 0.95));
           ctx.lineWidth = strength >= 0.95 ? 2 : strength >= 0.85 ? 1.6 : 1;
           ctx.beginPath();
@@ -1503,6 +1508,12 @@ export function createTimelineSource(
             const y1 = worldToScreenY(view, worldOf(ybpOfTMs(nextMs)));
             const top = Math.min(y, y1);
             const bandPx = Math.abs(y1 - y);
+            // zebra day-banding for heat-off (bar/calendar) datasets: the
+            // alternating wash gives day rhythm without more lines
+            if (!heatEnabled && row % 2 === 0 && bandPx >= 6) {
+              ctx.fillStyle = withAlpha(theme.textFaint, 0.045);
+              ctx.fillRect(x0 + 2, Math.max(top, HEADER_H), w - 6, Math.min(top + bandPx, H) - Math.max(top, HEADER_H));
+            }
             if (bandPx >= 13 && top + 8 >= HEADER_H && top <= H) {
               const label = fv.projector.project(ms)?.rowLabel;
               if (label) {
@@ -1576,6 +1587,116 @@ export function createTimelineSource(
     const cx = x0 + 7;
     const vspan = view.height / view.zoomY; // visible time-span (world years)
     ctx.textBaseline = "middle";
+
+    // ── Gantt lanes: co-scheduled duration events STACK instead of ─────────
+    // overpainting. Per fold row, timed events pack greedily into lanes
+    // (interval coloring); all-day (day-precision) events get a thin strip
+    // at the row TOP — the calendar convention — so a full-day bar never
+    // squashes the timed lanes. Bars replace both the old per-event
+    // duration wash and the start dot; sub-readable rows fall back to dots.
+    const fpCache = new Map<Ev, ReturnType<typeof trackFoldPos>>();
+    const clsCache = new Map<Ev, ReturnType<typeof classifyEv>>();
+    type BarFrag = { e: Ev; p0: number; p1: number; isStart: boolean; allDay: boolean };
+    const rowFrags = new Map<string, { level: string; row: number; frags: BarFrag[] }>();
+    const barInfo = new Map<Ev, { ax: number; ay: number; laneH: number; x1: number }>();
+    {
+      const rem4 = remPx();
+      const cw4 = trackContentW(w, rem4);
+      const cx4 = trackContentX0(x0, rem4);
+      for (const { e, sy } of vis) {
+        if (sy < HEADER_H - 2 || sy > H + 2) continue;
+        if (vspan > influenceOf(e) * influenceDots()) continue;
+        const fp = trackFoldPos(e, view, x0, w);
+        fpCache.set(e, fp);
+        if (!fp) continue;
+        const cls = classifyEv(e, fp.level, fp.slots, fp.bandPx, H);
+        clsCache.set(e, cls);
+        if (cls.lod !== "point" || !e.durMs || e.durMs <= 0) continue;
+        const hc0 = heatCells.get(e.cat);
+        if (
+          heatEnabled && hc0 && hc0.level === fp.level &&
+          (hc0.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX
+        )
+          continue; // dense cell represents it
+        const rowLen = FOLD_PERIOD_MS[fp.level];
+        if (!rowLen) continue;
+        const allDay = e.precision?.kind === "calendar" && e.precision.unit === "day";
+        if (!allDay && (e.durMs / rowLen) * cw4 < 3) continue; // sub-readable → dot
+        const td = tMsOfEv(e);
+        if (td == null) continue;
+        const { r0, r1 } = visibleRowRange(fp.level, view, H, fp.row);
+        const clipA = Math.max(td, foldRowStartMs(fp.level, r0));
+        const clipB = Math.min(td + e.durMs, foldRowStartMs(fp.level, r1 + 1));
+        if (clipB <= clipA) continue;
+        for (const fr of projectWindow(fp.level, clipA, clipB).slice(0, 60)) {
+          const key = `${fp.level}:${fr.rowIndex}`;
+          let g = rowFrags.get(key);
+          if (!g) rowFrags.set(key, (g = { level: fp.level, row: fr.rowIndex, frags: [] }));
+          g.frags.push({
+            e,
+            p0: fr.phase0,
+            p1: fr.phase1,
+            isStart: fr.rowIndex === fp.row && clipA === td,
+            allDay,
+          });
+        }
+      }
+      for (const { level, row, frags } of rowFrags.values()) {
+        const lf = level as Exclude<TimelineFold, "none">;
+        const ms0 = foldRowStartMs(lf, row);
+        const ms1 = foldRowStartMs(lf, row + 1);
+        if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
+        const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
+        const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
+        const rTop = Math.min(ya, yb) + 1;
+        const rBot = Math.max(ya, yb) - 1;
+        if (rBot - rTop < 4) continue;
+        // stable sort keys keep an event's lane consistent across its rows
+        const ad = frags
+          .filter((f) => f.allDay)
+          .sort((a, b) => (tMsOfEv(a.e) ?? 0) - (tMsOfEv(b.e) ?? 0) || a.e.label.localeCompare(b.e.label));
+        const timed = frags
+          .filter((f) => !f.allDay)
+          .sort((a, b) => a.p0 - b.p0 || (tMsOfEv(a.e) ?? 0) - (tMsOfEv(b.e) ?? 0));
+        const assign = (list: BarFrag[]) => {
+          const laneEnd: number[] = [];
+          const lane = new Map<BarFrag, number>();
+          for (const f of list) {
+            let li = laneEnd.findIndex((end) => end <= f.p0 + 1e-6);
+            if (li < 0) {
+              li = laneEnd.length;
+              laneEnd.push(0);
+            }
+            laneEnd[li] = f.p1;
+            lane.set(f, li);
+          }
+          return { lane, n: laneEnd.length };
+        };
+        const A = assign(ad);
+        const T = assign(timed);
+        const adLaneH = A.n ? Math.max(2, Math.min(7, (rBot - rTop) * 0.22 / A.n)) : 0;
+        const stripH = A.n ? adLaneH * A.n + 1 : 0;
+        const bodyTop = rTop + stripH;
+        const laneH = T.n ? Math.max(2, Math.min(20, (rBot - bodyTop) / T.n)) : 0;
+        const drawBar = (f: BarFrag, y: number, hh: number, alpha: number) => {
+          const bx0 = cx4 + f.p0 * cw4;
+          const bw = Math.max(2, (f.p1 - f.p0) * cw4);
+          const by0 = Math.max(y, HEADER_H);
+          const by1 = Math.min(y + hh - 1, H);
+          if (by1 <= by0) return;
+          const c = evColor(f.e);
+          ctx.fillStyle = withAlpha(c, alpha);
+          ctx.fillRect(bx0, by0, bw, by1 - by0);
+          ctx.fillStyle = withAlpha(c, Math.min(1, alpha + 0.3));
+          ctx.fillRect(bx0, by0, 2, by1 - by0); // start-edge accent
+          if (f.isStart || !barInfo.has(f.e))
+            barInfo.set(f.e, { ax: bx0, ay: (by0 + by1) / 2, laneH: hh, x1: bx0 + bw });
+        };
+        for (const f of ad) drawBar(f, rTop + (A.lane.get(f) ?? 0) * adLaneH, adLaneH, 0.45);
+        for (const f of timed) drawBar(f, bodyTop + (T.lane.get(f) ?? 0) * laneH, laneH, 0.62);
+      }
+    }
+
     for (const { e, sy } of vis) {
       if (sy < HEADER_H - 2 || sy > H + 2) continue;
       const infl = influenceOf(e);
@@ -1586,14 +1707,15 @@ export function createTimelineSource(
 
       // per-track fold: a dated event whose cycle band is readable quantizes
       // to the band and takes its phase-x — same helper the hit-test uses
-      const fp = trackFoldPos(e, view, x0, w);
+      // (cached from the bars pre-pass so both passes agree by construction)
+      const fp = fpCache.has(e) ? fpCache.get(e)! : trackFoldPos(e, view, x0, w);
       if (fp) {
         // precision-aware: classification at the EVENT'S OWN fold level —
         // the same level trackFoldPos resolved — so aggregation, glyphs and
         // hit-testing can never disagree (codex review P0). Interval-state
         // events render as row fragments; tint-state events left the glyph
         // layer entirely (presence wash carries them).
-        const cls = classifyEv(e, fp.level, fp.slots, fp.bandPx, H);
+        const cls = clsCache.get(e) ?? classifyEv(e, fp.level, fp.slots, fp.bandPx, H);
         if (cls.lod === "tint") continue;
         if (cls.lod === "interval") {
           const win = cls.win;
@@ -1648,41 +1770,28 @@ export function createTimelineSource(
           glide.delete(e); // no stale glide origin while represented by the cell
           continue;
         }
-        // duration block: the event's REAL extent as wrapped row fragments,
-        // drawn once it spans readable pixels (a 30-min meeting appears as a
-        // block at day zoom, stays a dot at month zoom)
-        if (e.durMs && e.durMs > 0) {
-          const rowLen = FOLD_PERIOD_MS[fp.level];
-          const rem3 = remPx();
-          const cw3 = trackContentW(w, rem3);
-          if (rowLen && (e.durMs / rowLen) * cw3 >= 3) {
-            const cx3 = trackContentX0(x0, rem3);
-            const td = tMsOfEv(e);
-            if (td != null) {
-              const { r0, r1 } = visibleRowRange(fp.level, view, H, fp.row);
-              const clipA = Math.max(td, foldRowStartMs(fp.level, r0));
-              const clipB = Math.min(td + e.durMs, foldRowStartMs(fp.level, r1 + 1));
-              if (clipB > clipA) {
-                ctx.fillStyle = withAlpha(color, 0.24);
-                for (const fr3 of projectWindow(fp.level, clipA, clipB).slice(0, 60)) {
-                  const ms0 = foldRowStartMs(fp.level, fr3.rowIndex);
-                  const ms1 = foldRowStartMs(fp.level, fr3.rowIndex + 1);
-                  if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
-                  const ya3 = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
-                  const yb3 = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
-                  const fy0 = Math.max(Math.min(ya3, yb3) + 1, HEADER_H);
-                  const fy1 = Math.min(Math.max(ya3, yb3) - 1, H);
-                  if (fy1 <= fy0) continue;
-                  ctx.fillRect(
-                    cx3 + fr3.phase0 * cw3,
-                    fy0,
-                    Math.max(2, (fr3.phase1 - fr3.phase0) * cw3),
-                    fy1 - fy0,
-                  );
-                }
-              }
+        // a Gantt bar (drawn in the pre-pass) replaces both the duration
+        // wash and the start dot; its label lives INSIDE the bar
+        const bar = barInfo.get(e);
+        if (bar) {
+          drawnGlyphs.set(e, { x: bar.ax + 2, y: bar.ay, r: Math.max(3, bar.laneH / 2) });
+          if (inScale && bar.laneH >= 10) {
+            const avail = bar.x1 - bar.ax - 8;
+            if (avail >= 24) {
+              ctx.font = "11px ui-monospace, Menlo, monospace";
+              ctx.textAlign = "left";
+              const text = fit(ctx, tr(e.label), avail);
+              foldLabelRects.push({
+                x0: bar.ax + 5,
+                x1: bar.ax + 5 + ctx.measureText(text).width + 4,
+                y: bar.ay,
+                e,
+              });
+              ctx.fillStyle = theme.text;
+              ctx.fillText(text, bar.ax + 5, bar.ay);
             }
           }
+          continue;
         }
         const g = glidePos(e, `fold:${fp.level}`, fp.x, fp.y);
         if (g.moving) anyGliding = true;
