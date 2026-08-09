@@ -8,11 +8,7 @@
  */
 import type { ViewTransform } from "../core/grid.js";
 import { DARK_THEME, type RgTheme } from "../core/theme.js";
-import {
-  subtractIntervals,
-  type Interval,
-  type SideCoverage,
-} from "../core/pack.js";
+import { subtractIntervals, type Interval, type SideCoverage } from "../core/pack.js";
 
 /** active theme for this draw pass (set by the exported draw entry points) */
 let T: RgTheme = DARK_THEME;
@@ -68,10 +64,7 @@ export interface PanelRect {
 }
 
 /** screen rects for all panels (stacked per edge, explicit anchors as-is) */
-export function panelLayout(
-  panels: Panel[],
-  size: { width: number; height: number },
-): PanelRect[] {
+export function panelLayout(panels: Panel[], size: { width: number; height: number }): PanelRect[] {
   const out: PanelRect[] = [];
   const stackY: Record<"left" | "right", number> = {
     left: PANEL.margin,
@@ -80,8 +73,7 @@ export function panelLayout(
   for (const p of panels) {
     const w = p.w ?? PANEL.defaultW;
     const h =
-      PANEL.headerH +
-      (p.collapsed ? 0 : PANEL.pad + p.items.length * PANEL.rowH + PANEL.pad);
+      PANEL.headerH + (p.collapsed ? 0 : PANEL.pad + p.items.length * PANEL.rowH + PANEL.pad);
     let x: number;
     let y: number;
     const anchor = p.anchor ?? "left";
@@ -193,11 +185,7 @@ export function panelSnap(
   return { x: sx, y: sy };
 }
 
-export function drawPanels(
-  ctx: CanvasRenderingContext2D,
-  rects: PanelRect[],
-  theme?: RgTheme,
-) {
+export function drawPanels(ctx: CanvasRenderingContext2D, rects: PanelRect[], theme?: RgTheme) {
   if (theme) T = theme;
   const cov = panelCoverage(rects);
   ctx.save();
@@ -251,10 +239,16 @@ export function drawPanels(
       ctx.moveTo(r.x, s.from);
       ctx.lineTo(r.x, s.to);
     }
-    if (tl) ctx.moveTo(r.x, r.y + tl), ctx.arc(r.x + tl, r.y + tl, tl, Math.PI, 1.5 * Math.PI);
-    if (tr) ctx.moveTo(r.x + r.w - tr, r.y), ctx.arc(r.x + r.w - tr, r.y + tr, tr, 1.5 * Math.PI, 2 * Math.PI);
-    if (br) ctx.moveTo(r.x + r.w, r.y + r.h - br), ctx.arc(r.x + r.w - br, r.y + r.h - br, br, 0, 0.5 * Math.PI);
-    if (bl) ctx.moveTo(r.x + bl, r.y + r.h), ctx.arc(r.x + bl, r.y + r.h - bl, bl, 0.5 * Math.PI, Math.PI);
+    if (tl) (ctx.moveTo(r.x, r.y + tl), ctx.arc(r.x + tl, r.y + tl, tl, Math.PI, 1.5 * Math.PI));
+    if (tr)
+      (ctx.moveTo(r.x + r.w - tr, r.y),
+        ctx.arc(r.x + r.w - tr, r.y + tr, tr, 1.5 * Math.PI, 2 * Math.PI));
+    if (br)
+      (ctx.moveTo(r.x + r.w, r.y + r.h - br),
+        ctx.arc(r.x + r.w - br, r.y + r.h - br, br, 0, 0.5 * Math.PI));
+    if (bl)
+      (ctx.moveTo(r.x + bl, r.y + r.h),
+        ctx.arc(r.x + bl, r.y + r.h - bl, bl, 0.5 * Math.PI, Math.PI));
     ctx.stroke();
 
     // header
@@ -318,11 +312,7 @@ export type PanelHit =
   | { type: "item"; rect: PanelRect; item: PanelItem }
   | { type: "body"; rect: PanelRect };
 
-export function panelHitAt(
-  rects: PanelRect[],
-  sx: number,
-  sy: number,
-): PanelHit | null {
+export function panelHitAt(rects: PanelRect[], sx: number, sy: number): PanelHit | null {
   // last panel drawn is on top
   for (let i = rects.length - 1; i >= 0; i--) {
     const r = rects[i]!;

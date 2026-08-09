@@ -14,10 +14,7 @@ export type SummaryContent =
   | {
       kind: "canvas";
       /** screen-space, clipped; origin at the summary region's top-left */
-      draw: (
-        ctx: CanvasRenderingContext2D,
-        rect: { width: number; height: number },
-      ) => void;
+      draw: (ctx: CanvasRenderingContext2D, rect: { width: number; height: number }) => void;
       /** region height in px (default 36) */
       height?: number;
     };

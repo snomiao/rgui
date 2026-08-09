@@ -14,9 +14,7 @@
       // set the theme BEFORE first paint (no flash): saved choice, else OS
       document.documentElement.dataset.theme =
         localStorage.getItem("rgui-theme") ??
-        (matchMedia("(prefers-color-scheme: light)").matches
-          ? "light"
-          : "dark");
+        (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
     </script>
     <style>
       /* page chrome palette — the canvas side lives in src/core/theme.ts */
@@ -69,13 +67,21 @@
         border: 1px solid var(--border);
         border-radius: 4px;
         color: var(--text);
-        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          11px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         white-space: pre;
         pointer-events: none;
         user-select: none;
       }
-      #debug .dim { color: var(--text-muted); }
-      #debug .hi { color: var(--accent); }
+      #debug .dim {
+        color: var(--text-muted);
+      }
+      #debug .hi {
+        color: var(--accent);
+      }
 
       .demo-nav {
         position: fixed;
@@ -96,11 +102,17 @@
         border-radius: 7px;
         appearance: none;
         background:
-          linear-gradient(45deg, transparent 50%, var(--text-dim) 50%) right 16px center / 5px 5px no-repeat,
-          linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) right 11px center / 5px 5px no-repeat,
+          linear-gradient(45deg, transparent 50%, var(--text-dim) 50%) right 16px center / 5px 5px
+            no-repeat,
+          linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) right 11px center / 5px 5px
+            no-repeat,
           transparent;
         color: var(--text);
-        font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          700 12px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         cursor: pointer;
         outline: none;
       }
@@ -139,13 +151,7 @@
         letter-spacing: -0.04em;
         line-height: 0.9;
         /* the mascot crossover: purple head (TL) flowing to gold tail (BR) */
-        background: linear-gradient(
-          135deg,
-          #9b34bf 0%,
-          #c74be0 32%,
-          #f3820d 68%,
-          #ffd21c 100%
-        );
+        background: linear-gradient(135deg, #9b34bf 0%, #c74be0 32%, #f3820d 68%, #ffd21c 100%);
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
@@ -178,11 +184,24 @@
         animation: crt-flash 2500ms ease-in-out;
       }
       @keyframes crt-flash {
-        0% { opacity: 0; transform: translateY(2px) skewX(4deg); }
-        8% { opacity: 1; transform: translateX(-2px) skewX(-3deg); }
-        14% { transform: translateX(0) skewX(0); }
-        88% { opacity: 1; }
-        100% { opacity: 0; transform: translateY(-2px); }
+        0% {
+          opacity: 0;
+          transform: translateY(2px) skewX(4deg);
+        }
+        8% {
+          opacity: 1;
+          transform: translateX(-2px) skewX(-3deg);
+        }
+        14% {
+          transform: translateX(0) skewX(0);
+        }
+        88% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translateY(-2px);
+        }
       }
       #hero .tagline {
         max-width: 720px;
@@ -192,7 +211,10 @@
         color: var(--text-dim);
         font-weight: 400;
       }
-      #hero .tagline b { color: var(--accent); font-weight: 600; }
+      #hero .tagline b {
+        color: var(--accent);
+        font-weight: 600;
+      }
       #hero .links {
         display: flex;
         gap: 14px;
@@ -214,7 +236,10 @@
         text-decoration: none;
         font-size: 14px;
         font-weight: 600;
-        transition: border-color 120ms, color 120ms, background 120ms;
+        transition:
+          border-color 120ms,
+          color 120ms,
+          background 120ms;
       }
       #hero .links a:hover {
         border-color: var(--accent);
@@ -228,7 +253,9 @@
         letter-spacing: 0.04em;
       }
       @media (prefers-reduced-motion: reduce) {
-        #hero .subtitle .word.flash { animation: none; }
+        #hero .subtitle .word.flash {
+          animation: none;
+        }
       }
 
       /* light/dark toggle — flips page vars AND viewer.setTheme() */
@@ -246,7 +273,10 @@
         font-size: 16px;
         line-height: 1;
         cursor: pointer;
-        transition: border-color 120ms, color 120ms, transform 120ms;
+        transition:
+          border-color 120ms,
+          color 120ms,
+          transform 120ms;
       }
       #theme-toggle:hover {
         border-color: var(--accent);
@@ -264,7 +294,11 @@
         flex-direction: column;
         align-items: flex-end;
         gap: 6px;
-        font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          11px/1.4 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         color: var(--text-dim);
       }
       #radix .row {
@@ -338,8 +372,8 @@
       <h1 class="title">RGUI</h1>
       <div class="subtitle" aria-live="polite"><span class="word" id="hero-word"></span></div>
       <p class="tagline">
-        Zoom is a <b>renormalization-group flow</b>: at every scale, only the
-        relevant couplings survive — and the canvas stays readable.
+        Zoom is a <b>renormalization-group flow</b>: at every scale, only the relevant couplings
+        survive — and the canvas stays readable.
       </p>
       <nav class="links">
         <a href="/lane/">1D lane mode →</a>
@@ -348,7 +382,10 @@
           npm · @snomiao/rgui ↗
         </a>
       </nav>
-      <div class="hint">drag = select · two-finger = pan · pinch = zoom · <b>WASD</b> = pan · <b>R/F</b> = zoom · <b>N/P</b> = focus node · <b>?</b> = shortcuts · drag the cube to rotate — the graph is live</div>
+      <div class="hint">
+        drag = select · two-finger = pan · pinch = zoom · <b>WASD</b> = pan · <b>R/F</b> = zoom ·
+        <b>N/P</b> = focus node · <b>?</b> = shortcuts · drag the cube to rotate — the graph is live
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

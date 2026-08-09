@@ -82,9 +82,7 @@ const CAT_META: CatMeta[] = [
   { cat: "future", label: "Future", color: "#f472b6" },
   { cat: "periodic", label: "Cycles", color: "#7dd3fc" },
 ];
-const CAT_COLOR = Object.fromEntries(
-  CAT_META.map((m) => [m.cat, m.color]),
-) as Record<Cat, string>;
+const CAT_COLOR = Object.fromEntries(CAT_META.map((m) => [m.cat, m.color])) as Record<Cat, string>;
 
 interface Ev {
   y: number; // years before present (negative = future)
@@ -172,7 +170,14 @@ interface Cycle {
 
 // curated milestones across every scale (years before present)
 const EVENTS: Ev[] = [
-  { y: 13.8e9, label: "Big Bang", imp: 1, cat: "cosmic", detail: "space, time & energy begin", span: 21e6 },
+  {
+    y: 13.8e9,
+    label: "Big Bang",
+    imp: 1,
+    cat: "cosmic",
+    detail: "space, time & energy begin",
+    span: 21e6,
+  },
   { y: 13.79e9, label: "First atoms", imp: 0.7, cat: "cosmic", detail: "recombination" },
   { y: 13.6e9, label: "First stars ignite", imp: 0.85, cat: "cosmic" },
   { y: 13.6e9, label: "Milky Way forms", imp: 0.8, cat: "cosmic" },
@@ -184,13 +189,31 @@ const EVENTS: Ev[] = [
   { y: 2.4e9, label: "Great Oxidation Event", imp: 0.8, cat: "bio" },
   { y: 2.1e9, label: "Eukaryotic cells", imp: 0.78, cat: "bio" },
   { y: 0.8e9, label: "Multicellular life", imp: 0.82, cat: "bio" },
-  { y: 541e6, label: "Cambrian explosion", imp: 0.88, cat: "bio", detail: "animal body plans radiate" },
+  {
+    y: 541e6,
+    label: "Cambrian explosion",
+    imp: 0.88,
+    cat: "bio",
+    detail: "animal body plans radiate",
+  },
   { y: 470e6, label: "Plants colonize land", imp: 0.72, cat: "bio" },
   { y: 375e6, label: "Tetrapods walk on land", imp: 0.72, cat: "bio" },
-  { y: 252e6, label: "Permian–Triassic extinction", imp: 0.8, cat: "bio", detail: "the Great Dying" },
+  {
+    y: 252e6,
+    label: "Permian–Triassic extinction",
+    imp: 0.8,
+    cat: "bio",
+    detail: "the Great Dying",
+  },
   { y: 230e6, label: "Dinosaurs appear", imp: 0.85, cat: "bio" },
   { y: 200e6, label: "First mammals", imp: 0.75, cat: "bio" },
-  { y: 66e6, label: "K–Pg extinction", imp: 0.9, cat: "bio", detail: "asteroid ends the dinosaurs" },
+  {
+    y: 66e6,
+    label: "K–Pg extinction",
+    imp: 0.9,
+    cat: "bio",
+    detail: "asteroid ends the dinosaurs",
+  },
   { y: 55e6, label: "First primates", imp: 0.72, cat: "bio" },
   { y: 7e6, label: "Hominins split from apes", imp: 0.78, cat: "human" },
   { y: 2.8e6, label: "Genus Homo", imp: 0.78, cat: "human" },
@@ -212,7 +235,13 @@ const EVENTS: Ev[] = [
   { y: PRESENT_YEAR - 1942, label: "First electronic computer", imp: 0.82, cat: "tech" },
   { y: PRESENT_YEAR - 1947, label: "Transistor", imp: 0.78, cat: "tech" },
   { y: PRESENT_YEAR - 1969, label: "Moon landing · ARPANET", imp: 0.85, cat: "tech" },
-  { y: PRESENT_YEAR - 1991, label: "World Wide Web", imp: 0.85, cat: "tech", detail: "Tim Berners-Lee" },
+  {
+    y: PRESENT_YEAR - 1991,
+    label: "World Wide Web",
+    imp: 0.85,
+    cat: "tech",
+    detail: "Tim Berners-Lee",
+  },
   { y: PRESENT_YEAR - 2007, label: "Smartphone era", imp: 0.72, cat: "tech" },
   { y: PRESENT_YEAR - 2012, label: "Deep-learning boom", imp: 0.74, cat: "tech" },
   { y: PRESENT_YEAR - 2022, label: "LLM assistants", imp: 0.78, cat: "tech" },
@@ -220,7 +249,13 @@ const EVENTS: Ev[] = [
 
 // dated Linux kernel milestones (finest curated scale)
 const LINUX: Ev[] = [
-  { ...dated(1991, 8, 25), label: "Linus announces Linux", imp: 0.68, cat: "repo", detail: '"just a hobby"' },
+  {
+    ...dated(1991, 8, 25),
+    label: "Linus announces Linux",
+    imp: 0.68,
+    cat: "repo",
+    detail: '"just a hobby"',
+  },
   { ...dated(1991, 9, 17), label: "Linux 0.01", imp: 0.6, cat: "repo" },
   { ...dated(1992, 1, 5), label: "Linux 0.12 — GPL", imp: 0.55, cat: "repo" },
   { ...dated(1994, 3, 14), label: "Linux 1.0", imp: 0.62, cat: "repo" },
@@ -239,64 +274,350 @@ const LINUX: Ev[] = [
 // tech & culture across world civilizations (yBP = 2026 − CE year; +BCE)
 const CIV: Ev[] = [
   // Mesopotamia · Egypt · Indus (Bronze-Age cradles)
-  { y: PRESENT_YEAR + 3500, label: "Wheel invented", imp: 0.66, cat: "tech", detail: "Sumer / Mesopotamia", span: 150 },
-  { y: PRESENT_YEAR + 3300, label: "Bronze Age begins", imp: 0.6, cat: "human", detail: "Near East", span: 200 },
-  { y: PRESENT_YEAR + 3200, label: "Hieroglyphs", imp: 0.58, cat: "human", detail: "Ancient Egypt", span: 150 },
-  { y: PRESENT_YEAR + 2600, label: "Indus Valley cities", imp: 0.6, cat: "human", detail: "Harappa", span: 150 },
-  { y: PRESENT_YEAR + 2500, label: "Stonehenge", imp: 0.58, cat: "human", detail: "Neolithic Britain", span: 150 },
-  { y: PRESENT_YEAR + 1754, label: "Code of Hammurabi", imp: 0.62, cat: "human", detail: "Babylon", span: 20 },
-  { y: PRESENT_YEAR + 1600, label: "Babylonian astronomy", imp: 0.58, cat: "tech", detail: "Babylon", span: 100 },
+  {
+    y: PRESENT_YEAR + 3500,
+    label: "Wheel invented",
+    imp: 0.66,
+    cat: "tech",
+    detail: "Sumer / Mesopotamia",
+    span: 150,
+  },
+  {
+    y: PRESENT_YEAR + 3300,
+    label: "Bronze Age begins",
+    imp: 0.6,
+    cat: "human",
+    detail: "Near East",
+    span: 200,
+  },
+  {
+    y: PRESENT_YEAR + 3200,
+    label: "Hieroglyphs",
+    imp: 0.58,
+    cat: "human",
+    detail: "Ancient Egypt",
+    span: 150,
+  },
+  {
+    y: PRESENT_YEAR + 2600,
+    label: "Indus Valley cities",
+    imp: 0.6,
+    cat: "human",
+    detail: "Harappa",
+    span: 150,
+  },
+  {
+    y: PRESENT_YEAR + 2500,
+    label: "Stonehenge",
+    imp: 0.58,
+    cat: "human",
+    detail: "Neolithic Britain",
+    span: 150,
+  },
+  {
+    y: PRESENT_YEAR + 1754,
+    label: "Code of Hammurabi",
+    imp: 0.62,
+    cat: "human",
+    detail: "Babylon",
+    span: 20,
+  },
+  {
+    y: PRESENT_YEAR + 1600,
+    label: "Babylonian astronomy",
+    imp: 0.58,
+    cat: "tech",
+    detail: "Babylon",
+    span: 100,
+  },
   // East Asia · China
-  { y: PRESENT_YEAR + 1200, label: "Chinese script", imp: 0.62, cat: "human", detail: "Shang China (oracle bone)", span: 80 },
-  { y: PRESENT_YEAR + 1200, label: "Olmec civilization", imp: 0.56, cat: "human", detail: "Mesoamerica", span: 100 },
-  { y: PRESENT_YEAR + 220, label: "Great Wall begun", imp: 0.64, cat: "human", detail: "Qin China", span: 30 },
-  { y: PRESENT_YEAR - 105, label: "Paper invented", imp: 0.66, cat: "tech", detail: "Han China (Cai Lun)", span: 15 },
-  { y: PRESENT_YEAR - 132, label: "Seismograph", imp: 0.56, cat: "tech", detail: "Han China (Zhang Heng)", span: 10 },
-  { y: PRESENT_YEAR - 850, label: "Gunpowder", imp: 0.66, cat: "tech", detail: "Tang China", span: 40 },
-  { y: PRESENT_YEAR - 1040, label: "Movable-type printing", imp: 0.66, cat: "tech", detail: "Song China (Bi Sheng)", span: 15 },
-  { y: PRESENT_YEAR - 1088, label: "Magnetic compass", imp: 0.6, cat: "tech", detail: "Song China", span: 20 },
+  {
+    y: PRESENT_YEAR + 1200,
+    label: "Chinese script",
+    imp: 0.62,
+    cat: "human",
+    detail: "Shang China (oracle bone)",
+    span: 80,
+  },
+  {
+    y: PRESENT_YEAR + 1200,
+    label: "Olmec civilization",
+    imp: 0.56,
+    cat: "human",
+    detail: "Mesoamerica",
+    span: 100,
+  },
+  {
+    y: PRESENT_YEAR + 220,
+    label: "Great Wall begun",
+    imp: 0.64,
+    cat: "human",
+    detail: "Qin China",
+    span: 30,
+  },
+  {
+    y: PRESENT_YEAR - 105,
+    label: "Paper invented",
+    imp: 0.66,
+    cat: "tech",
+    detail: "Han China (Cai Lun)",
+    span: 15,
+  },
+  {
+    y: PRESENT_YEAR - 132,
+    label: "Seismograph",
+    imp: 0.56,
+    cat: "tech",
+    detail: "Han China (Zhang Heng)",
+    span: 10,
+  },
+  {
+    y: PRESENT_YEAR - 850,
+    label: "Gunpowder",
+    imp: 0.66,
+    cat: "tech",
+    detail: "Tang China",
+    span: 40,
+  },
+  {
+    y: PRESENT_YEAR - 1040,
+    label: "Movable-type printing",
+    imp: 0.66,
+    cat: "tech",
+    detail: "Song China (Bi Sheng)",
+    span: 15,
+  },
+  {
+    y: PRESENT_YEAR - 1088,
+    label: "Magnetic compass",
+    imp: 0.6,
+    cat: "tech",
+    detail: "Song China",
+    span: 20,
+  },
   // Classical Mediterranean · Persia · India
-  { y: PRESENT_YEAR + 800, label: "Greek alphabet", imp: 0.58, cat: "human", detail: "Archaic Greece", span: 60 },
-  { y: PRESENT_YEAR + 550, label: "Achaemenid Empire", imp: 0.6, cat: "human", detail: "Persia (Cyrus)", span: 30 },
-  { y: PRESENT_YEAR + 300, label: "Euclid's Elements", imp: 0.64, cat: "tech", detail: "Hellenistic Greece", span: 20 },
-  { y: PRESENT_YEAR + 250, label: "Mauryan Empire", imp: 0.56, cat: "human", detail: "India (Ashoka)", span: 30 },
-  { y: PRESENT_YEAR + 250, label: "Archimedes", imp: 0.6, cat: "tech", detail: "Syracuse", span: 20 },
-  { y: PRESENT_YEAR + 312, label: "Roman aqueducts", imp: 0.58, cat: "tech", detail: "Rome", span: 40 },
-  { y: PRESENT_YEAR + 100, label: "Antikythera mechanism", imp: 0.6, cat: "tech", detail: "Greece — analog computer", span: 30 },
+  {
+    y: PRESENT_YEAR + 800,
+    label: "Greek alphabet",
+    imp: 0.58,
+    cat: "human",
+    detail: "Archaic Greece",
+    span: 60,
+  },
+  {
+    y: PRESENT_YEAR + 550,
+    label: "Achaemenid Empire",
+    imp: 0.6,
+    cat: "human",
+    detail: "Persia (Cyrus)",
+    span: 30,
+  },
+  {
+    y: PRESENT_YEAR + 300,
+    label: "Euclid's Elements",
+    imp: 0.64,
+    cat: "tech",
+    detail: "Hellenistic Greece",
+    span: 20,
+  },
+  {
+    y: PRESENT_YEAR + 250,
+    label: "Mauryan Empire",
+    imp: 0.56,
+    cat: "human",
+    detail: "India (Ashoka)",
+    span: 30,
+  },
+  {
+    y: PRESENT_YEAR + 250,
+    label: "Archimedes",
+    imp: 0.6,
+    cat: "tech",
+    detail: "Syracuse",
+    span: 20,
+  },
+  {
+    y: PRESENT_YEAR + 312,
+    label: "Roman aqueducts",
+    imp: 0.58,
+    cat: "tech",
+    detail: "Rome",
+    span: 40,
+  },
+  {
+    y: PRESENT_YEAR + 100,
+    label: "Antikythera mechanism",
+    imp: 0.6,
+    cat: "tech",
+    detail: "Greece — analog computer",
+    span: 30,
+  },
   // Post-classical · Islamic Golden Age · Mesoamerica · Japan · Europe
-  { y: PRESENT_YEAR - 250, label: "Maya Long Count", imp: 0.58, cat: "human", detail: "Maya", span: 60 },
-  { y: PRESENT_YEAR - 628, label: "Concept of zero", imp: 0.68, cat: "tech", detail: "India (Brahmagupta)", span: 30 },
-  { y: PRESENT_YEAR - 800, label: "House of Wisdom", imp: 0.62, cat: "human", detail: "Abbasid Baghdad", span: 30 },
-  { y: PRESENT_YEAR - 820, label: "Algebra", imp: 0.66, cat: "tech", detail: "al-Khwārizmī", span: 20 },
-  { y: PRESENT_YEAR - 1008, label: "The Tale of Genji", imp: 0.6, cat: "human", detail: "Heian Japan — first novel", span: 8 },
-  { y: PRESENT_YEAR - 1021, label: "Book of Optics", imp: 0.6, cat: "tech", detail: "Ibn al-Haytham", span: 15 },
-  { y: PRESENT_YEAR - 1088, label: "First university", imp: 0.58, cat: "human", detail: "Bologna, Europe", span: 5 },
-  { y: PRESENT_YEAR - 1185, label: "Kamakura shogunate", imp: 0.56, cat: "human", detail: "Japan — samurai era", span: 20 },
-  { y: PRESENT_YEAR - 1300, label: "Mechanical clock", imp: 0.6, cat: "tech", detail: "Medieval Europe", span: 30 },
-  { y: PRESENT_YEAR - 1325, label: "Tenochtitlán founded", imp: 0.6, cat: "human", detail: "Aztec", span: 10 },
-  { y: PRESENT_YEAR - 1450, label: "Machu Picchu built", imp: 0.6, cat: "human", detail: "Inca", span: 20 },
-  { y: PRESENT_YEAR - 1670, label: "Ukiyo-e prints", imp: 0.54, cat: "human", detail: "Edo Japan", span: 40 },
-  { y: PRESENT_YEAR - 1868, label: "Meiji Restoration", imp: 0.58, cat: "human", detail: "Japan modernizes", span: 3 },
+  {
+    y: PRESENT_YEAR - 250,
+    label: "Maya Long Count",
+    imp: 0.58,
+    cat: "human",
+    detail: "Maya",
+    span: 60,
+  },
+  {
+    y: PRESENT_YEAR - 628,
+    label: "Concept of zero",
+    imp: 0.68,
+    cat: "tech",
+    detail: "India (Brahmagupta)",
+    span: 30,
+  },
+  {
+    y: PRESENT_YEAR - 800,
+    label: "House of Wisdom",
+    imp: 0.62,
+    cat: "human",
+    detail: "Abbasid Baghdad",
+    span: 30,
+  },
+  {
+    y: PRESENT_YEAR - 820,
+    label: "Algebra",
+    imp: 0.66,
+    cat: "tech",
+    detail: "al-Khwārizmī",
+    span: 20,
+  },
+  {
+    y: PRESENT_YEAR - 1008,
+    label: "The Tale of Genji",
+    imp: 0.6,
+    cat: "human",
+    detail: "Heian Japan — first novel",
+    span: 8,
+  },
+  {
+    y: PRESENT_YEAR - 1021,
+    label: "Book of Optics",
+    imp: 0.6,
+    cat: "tech",
+    detail: "Ibn al-Haytham",
+    span: 15,
+  },
+  {
+    y: PRESENT_YEAR - 1088,
+    label: "First university",
+    imp: 0.58,
+    cat: "human",
+    detail: "Bologna, Europe",
+    span: 5,
+  },
+  {
+    y: PRESENT_YEAR - 1185,
+    label: "Kamakura shogunate",
+    imp: 0.56,
+    cat: "human",
+    detail: "Japan — samurai era",
+    span: 20,
+  },
+  {
+    y: PRESENT_YEAR - 1300,
+    label: "Mechanical clock",
+    imp: 0.6,
+    cat: "tech",
+    detail: "Medieval Europe",
+    span: 30,
+  },
+  {
+    y: PRESENT_YEAR - 1325,
+    label: "Tenochtitlán founded",
+    imp: 0.6,
+    cat: "human",
+    detail: "Aztec",
+    span: 10,
+  },
+  {
+    y: PRESENT_YEAR - 1450,
+    label: "Machu Picchu built",
+    imp: 0.6,
+    cat: "human",
+    detail: "Inca",
+    span: 20,
+  },
+  {
+    y: PRESENT_YEAR - 1670,
+    label: "Ukiyo-e prints",
+    imp: 0.54,
+    cat: "human",
+    detail: "Edo Japan",
+    span: 40,
+  },
+  {
+    y: PRESENT_YEAR - 1868,
+    label: "Meiji Restoration",
+    imp: 0.58,
+    cat: "human",
+    detail: "Japan modernizes",
+    span: 3,
+  },
 ];
 
 // programming languages — first appearance (Software track)
 const LANGS: Ev[] = [
-  { y: PRESENT_YEAR - 1957, label: "Fortran", imp: 0.56, cat: "repo", detail: "first appeared", span: 0.5 },
+  {
+    y: PRESENT_YEAR - 1957,
+    label: "Fortran",
+    imp: 0.56,
+    cat: "repo",
+    detail: "first appeared",
+    span: 0.5,
+  },
   { y: PRESENT_YEAR - 1958, label: "Lisp", imp: 0.55, cat: "repo", detail: "McCarthy", span: 0.5 },
   { y: PRESENT_YEAR - 1959, label: "COBOL", imp: 0.5, cat: "repo", span: 0.5 },
-  { y: PRESENT_YEAR - 1972, label: "C", imp: 0.6, cat: "repo", detail: "Ritchie, Bell Labs", span: 0.5 },
+  {
+    y: PRESENT_YEAR - 1972,
+    label: "C",
+    imp: 0.6,
+    cat: "repo",
+    detail: "Ritchie, Bell Labs",
+    span: 0.5,
+  },
   { y: PRESENT_YEAR - 1983, label: "C++", imp: 0.55, cat: "repo", detail: "Stroustrup", span: 0.5 },
-  { y: PRESENT_YEAR - 1991, label: "Python", imp: 0.58, cat: "repo", detail: "van Rossum", span: 0.5 },
-  { y: PRESENT_YEAR - 1995, label: "Java · JavaScript · Ruby · PHP", imp: 0.58, cat: "repo", detail: "the 1995 wave", span: 0.5 },
+  {
+    y: PRESENT_YEAR - 1991,
+    label: "Python",
+    imp: 0.58,
+    cat: "repo",
+    detail: "van Rossum",
+    span: 0.5,
+  },
+  {
+    y: PRESENT_YEAR - 1995,
+    label: "Java · JavaScript · Ruby · PHP",
+    imp: 0.58,
+    cat: "repo",
+    detail: "the 1995 wave",
+    span: 0.5,
+  },
   { y: PRESENT_YEAR - 2009, label: "Go", imp: 0.52, cat: "repo", detail: "Google", span: 0.5 },
   { y: PRESENT_YEAR - 2010, label: "Rust", imp: 0.54, cat: "repo", detail: "Mozilla", span: 0.5 },
-  { y: PRESENT_YEAR - 2012, label: "TypeScript", imp: 0.54, cat: "repo", detail: "Microsoft", span: 0.5 },
+  {
+    y: PRESENT_YEAR - 2012,
+    label: "TypeScript",
+    imp: 0.54,
+    cat: "repo",
+    detail: "Microsoft",
+    span: 0.5,
+  },
   { y: PRESENT_YEAR - 2014, label: "Swift", imp: 0.5, cat: "repo", detail: "Apple", span: 0.5 },
 ];
 
 // births of historical figures (Humans track)
 const BORN: Ev[] = [
-  { y: PRESENT_YEAR + 563, label: "Buddha born", imp: 0.6, cat: "human", detail: "Siddhārtha Gautama" },
+  {
+    y: PRESENT_YEAR + 563,
+    label: "Buddha born",
+    imp: 0.6,
+    cat: "human",
+    detail: "Siddhārtha Gautama",
+  },
   { y: PRESENT_YEAR + 551, label: "Confucius born", imp: 0.6, cat: "human" },
   { y: PRESENT_YEAR + 470, label: "Socrates born", imp: 0.56, cat: "human" },
   { y: PRESENT_YEAR + 384, label: "Aristotle born", imp: 0.56, cat: "human" },
@@ -304,23 +625,59 @@ const BORN: Ev[] = [
   { y: PRESENT_YEAR + 4, label: "Jesus born", imp: 0.62, cat: "human", detail: "~4 BCE" },
   { y: PRESENT_YEAR - 570, label: "Muhammad born", imp: 0.6, cat: "human" },
   { y: PRESENT_YEAR - 1452, label: "Leonardo da Vinci born", imp: 0.58, cat: "human" },
-  { y: PRESENT_YEAR - 1564, label: "Galileo · Shakespeare born", imp: 0.58, cat: "human", detail: "both 1564" },
+  {
+    y: PRESENT_YEAR - 1564,
+    label: "Galileo · Shakespeare born",
+    imp: 0.58,
+    cat: "human",
+    detail: "both 1564",
+  },
   { y: PRESENT_YEAR - 1643, label: "Isaac Newton born", imp: 0.6, cat: "human" },
   { y: PRESENT_YEAR - 1756, label: "Mozart born", imp: 0.52, cat: "human" },
-  { y: PRESENT_YEAR - 1809, label: "Darwin · Lincoln born", imp: 0.56, cat: "human", detail: "same day, 1809" },
+  {
+    y: PRESENT_YEAR - 1809,
+    label: "Darwin · Lincoln born",
+    imp: 0.56,
+    cat: "human",
+    detail: "same day, 1809",
+  },
   { y: PRESENT_YEAR - 1867, label: "Marie Curie born", imp: 0.56, cat: "human" },
   { y: PRESENT_YEAR - 1879, label: "Einstein born", imp: 0.62, cat: "human", span: 0.5 },
   { y: PRESENT_YEAR - 1912, label: "Alan Turing born", imp: 0.58, cat: "human", span: 0.5 },
   // curated notable births across eras (instant — Wikidata's live "people born
   // in a year range" scan is too slow to fetch; hover-cards pull the details)
-  { y: PRESENT_YEAR + 750, label: "Homer born", imp: 0.5, cat: "human", detail: "epic poet (legendary)" },
+  {
+    y: PRESENT_YEAR + 750,
+    label: "Homer born",
+    imp: 0.5,
+    cat: "human",
+    detail: "epic poet (legendary)",
+  },
   { y: PRESENT_YEAR + 570, label: "Pythagoras born", imp: 0.5, cat: "human" },
-  { y: PRESENT_YEAR + 259, label: "Qin Shi Huang born", imp: 0.52, cat: "human", detail: "first emperor of China" },
-  { y: PRESENT_YEAR + 63, label: "Augustus born", imp: 0.52, cat: "human", detail: "first Roman emperor" },
+  {
+    y: PRESENT_YEAR + 259,
+    label: "Qin Shi Huang born",
+    imp: 0.52,
+    cat: "human",
+    detail: "first emperor of China",
+  },
+  {
+    y: PRESENT_YEAR + 63,
+    label: "Augustus born",
+    imp: 0.52,
+    cat: "human",
+    detail: "first Roman emperor",
+  },
   { y: PRESENT_YEAR - 748, label: "Charlemagne born", imp: 0.52, cat: "human" },
   { y: PRESENT_YEAR - 1162, label: "Genghis Khan born", imp: 0.56, cat: "human" },
   { y: PRESENT_YEAR - 1254, label: "Marco Polo born", imp: 0.5, cat: "human" },
-  { y: PRESENT_YEAR - 1398, label: "Gutenberg born", imp: 0.54, cat: "human", detail: "printing press" },
+  {
+    y: PRESENT_YEAR - 1398,
+    label: "Gutenberg born",
+    imp: 0.54,
+    cat: "human",
+    detail: "printing press",
+  },
   { y: PRESENT_YEAR - 1451, label: "Christopher Columbus born", imp: 0.52, cat: "human" },
   { y: PRESENT_YEAR - 1473, label: "Copernicus born", imp: 0.54, cat: "human" },
   { y: PRESENT_YEAR - 1483, label: "Martin Luther born", imp: 0.52, cat: "human" },
@@ -338,17 +695,60 @@ const BORN: Ev[] = [
 
 // predicted future events (negative years BP = ahead of now)
 const FUTURE: Ev[] = [
-  { y: PRESENT_YEAR - 2038, label: "Year 2038 problem", imp: 0.5, cat: "future", detail: "32-bit Unix time overflows" },
+  {
+    y: PRESENT_YEAR - 2038,
+    label: "Year 2038 problem",
+    imp: 0.5,
+    cat: "future",
+    detail: "32-bit Unix time overflows",
+  },
   { y: PRESENT_YEAR - 2061, label: "Halley's Comet returns", imp: 0.55, cat: "future" },
   { y: -10e3, label: "End of the interglacial", imp: 0.5, cat: "future" },
-  { y: -1e5, label: "Betelgeuse supernova", imp: 0.62, cat: "future", detail: "within ~100 kyr", span: 1e5 },
+  {
+    y: -1e5,
+    label: "Betelgeuse supernova",
+    imp: 0.62,
+    cat: "future",
+    detail: "within ~100 kyr",
+    span: 1e5,
+  },
   { y: -250e6, label: "Pangaea Ultima", imp: 0.66, cat: "future", detail: "next supercontinent" },
-  { y: -600e6, label: "End of complex plants", imp: 0.62, cat: "future", detail: "Sun too bright for C3" },
-  { y: -1.1e9, label: "Oceans evaporate", imp: 0.72, cat: "future", detail: "Earth's surface sterilized" },
-  { y: -4.5e9, label: "Andromeda collision", imp: 0.85, cat: "future", detail: "Milky Way + Andromeda merge" },
-  { y: -5e9, label: "Sun becomes a red giant", imp: 0.9, cat: "future", detail: "engulfs the inner planets" },
+  {
+    y: -600e6,
+    label: "End of complex plants",
+    imp: 0.62,
+    cat: "future",
+    detail: "Sun too bright for C3",
+  },
+  {
+    y: -1.1e9,
+    label: "Oceans evaporate",
+    imp: 0.72,
+    cat: "future",
+    detail: "Earth's surface sterilized",
+  },
+  {
+    y: -4.5e9,
+    label: "Andromeda collision",
+    imp: 0.85,
+    cat: "future",
+    detail: "Milky Way + Andromeda merge",
+  },
+  {
+    y: -5e9,
+    label: "Sun becomes a red giant",
+    imp: 0.9,
+    cat: "future",
+    detail: "engulfs the inner planets",
+  },
   { y: -8e9, label: "Sun → white dwarf", imp: 0.8, cat: "future" },
-  { y: -FUTURE_HORIZON, label: "Star formation fades", imp: 0.7, cat: "future", detail: "the long cosmic evening" },
+  {
+    y: -FUTURE_HORIZON,
+    label: "Star formation fades",
+    imp: 0.7,
+    cat: "future",
+    detail: "the long cosmic evening",
+  },
 ];
 
 const CYCLES: Cycle[] = [
@@ -375,21 +775,82 @@ const ERAS: Era[] = [
   { from: 3.4e6, to: 5300, label: "Stone Age", depth: 2, color: "#6b5a3b" },
   { from: 5300, to: 1550, label: "Antiquity", depth: 2, color: "#8a6a2e" },
   { from: 1550, to: PRESENT_YEAR - 1500, label: "Middle Ages", depth: 2, color: "#6b3b5a" },
-  { from: PRESENT_YEAR - 1500, to: PRESENT_YEAR - 1945, label: "Modern era", depth: 2, color: "#3b5a8a" },
+  {
+    from: PRESENT_YEAR - 1500,
+    to: PRESENT_YEAR - 1945,
+    label: "Modern era",
+    depth: 2,
+    color: "#3b5a8a",
+  },
   { from: PRESENT_YEAR - 1945, to: 0, label: "Information Age", depth: 2, color: "#3b6b8a" },
 ];
 
 // adaptive time-ruler steps (years), coarse → fine
 const STEPS = [
-  5e9, 2e9, 1e9, 5e8, 2e8, 1e8, 5e7, 2e7, 1e7, 5e6, 2e6, 1e6, 5e5, 2e5, 1e5,
-  5e4, 2e4, 1e4, 5e3, 2e3, 1e3, 500, 200, 100, 50, 20, 10, 5, 2, 1, 0.5, 1 / 12,
-  1 / 52, DAY, 6 * HOUR, HOUR, 10 * MIN, MIN, 10 * SEC, SEC,
+  5e9,
+  2e9,
+  1e9,
+  5e8,
+  2e8,
+  1e8,
+  5e7,
+  2e7,
+  1e7,
+  5e6,
+  2e6,
+  1e6,
+  5e5,
+  2e5,
+  1e5,
+  5e4,
+  2e4,
+  1e4,
+  5e3,
+  2e3,
+  1e3,
+  500,
+  200,
+  100,
+  50,
+  20,
+  10,
+  5,
+  2,
+  1,
+  0.5,
+  1 / 12,
+  1 / 52,
+  DAY,
+  6 * HOUR,
+  HOUR,
+  10 * MIN,
+  MIN,
+  10 * SEC,
+  SEC,
 ];
 
 // round-time anchors for the LOG ruler — one clean tick per decade of time
 const NICE_TIMES = [
-  SEC, 10 * SEC, MIN, 10 * MIN, HOUR, 6 * HOUR, DAY, 7 * DAY, 30 * DAY,
-  1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10,
+  SEC,
+  10 * SEC,
+  MIN,
+  10 * MIN,
+  HOUR,
+  6 * HOUR,
+  DAY,
+  7 * DAY,
+  30 * DAY,
+  1,
+  10,
+  100,
+  1e3,
+  1e4,
+  1e5,
+  1e6,
+  1e7,
+  1e8,
+  1e9,
+  1e10,
 ];
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -409,8 +870,7 @@ function fmtLabel(yBP: number, step: number): string {
     return year > 0 ? `${year} CE` : `${1 - year} BCE`;
   }
   const d = new Date((PRESENT_EPOCH - yBP * SPY) * 1000);
-  if (step < HOUR)
-    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  if (step < HOUR) return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   if (step < DAY)
     return `${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -523,17 +983,14 @@ export interface TimelineSource extends LaneSource {
   ): { title: string; detail?: string; cat: string } | null;
 }
 
-export function createTimelineSource(
-  opts: { logAxis?: boolean } = {},
-): TimelineSource {
-  let points: Ev[] = [
-    ...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE,
-  ].sort((a, b) => b.y - a.y);
+export function createTimelineSource(opts: { logAxis?: boolean } = {}): TimelineSource {
+  let points: Ev[] = [...EVENTS, ...LINUX, ...CIV, ...LANGS, ...BORN, ...FUTURE].sort(
+    (a, b) => b.y - a.y,
+  );
   let byCat = new Map<Cat, Ev[]>();
   function reindex() {
     byCat = new Map();
-    for (const e of points)
-      (byCat.get(e.cat) ?? byCat.set(e.cat, []).get(e.cat)!).push(e);
+    for (const e of points) (byCat.get(e.cat) ?? byCat.set(e.cat, []).get(e.cat)!).push(e);
   }
   reindex();
 
@@ -568,8 +1025,7 @@ export function createTimelineSource(
       .catch(() => {})
       .finally(() => inflightKeys.delete(key));
   }
-  const iso = (yBP: number) =>
-    new Date((PRESENT_EPOCH - yBP * SPY) * 1000).toISOString();
+  const iso = (yBP: number) => new Date((PRESENT_EPOCH - yBP * SPY) * 1000).toISOString();
   const winYBP = (view: LaneView) => ({
     top: yBPof(screenToWorldY(view, -20)), // older edge
     bot: yBPof(screenToWorldY(view, view.height + 20)), // younger/future edge
@@ -631,7 +1087,12 @@ export function createTimelineSource(
   const ceWindow = (view: LaneView) => {
     const { top, bot } = winYBP(view);
     const b = Math.max(0, bot);
-    return { top, b, y1: Math.max(1, Math.round(PRESENT_YEAR - top)), y2: Math.round(PRESENT_YEAR - b) + 1 };
+    return {
+      top,
+      b,
+      y1: Math.max(1, Math.round(PRESENT_YEAR - top)),
+      y2: Math.round(PRESENT_YEAR - b) + 1,
+    };
   };
   // real dated historical events from Wikidata — broadened beyond battles/wars
   // to treaties, revolutions & massacres. Narrow windows keep SPARQL fast (the
@@ -674,14 +1135,10 @@ export function createTimelineSource(
   let logAxis = opts.logAxis ?? true; // runtime-toggleable
   const LIN = SEC; // symlog linear threshold: 1 second
   const worldOf = (yBP: number) =>
-    logAxis
-      ? -Math.sign(yBP) * Math.log10(1 + Math.abs(yBP) / LIN)
-      : -yBP;
+    logAxis ? -Math.sign(yBP) * Math.log10(1 + Math.abs(yBP) / LIN) : -yBP;
   const yBPof = (worldY: number) => {
     const s = -worldY;
-    return logAxis
-      ? Math.sign(s) * (Math.pow(10, Math.abs(s)) - 1) * LIN
-      : s;
+    return logAxis ? Math.sign(s) * (Math.pow(10, Math.abs(s)) - 1) * LIN : s;
   };
   // influence LOD threshold, in current world units (years or log-decades)
   const influenceOf = (e: Ev) =>
@@ -775,8 +1232,7 @@ export function createTimelineSource(
     drawNow(ctx, view, theme, tracks.length ? tracks[0]!.x0 : TRACK_X0, W);
 
     for (const t of tracks) {
-      if (t.meta.cat === "periodic")
-        drawPeriodic(ctx, view, theme, t.x0, t.w, H, topW, botW);
+      if (t.meta.cat === "periodic") drawPeriodic(ctx, view, theme, t.x0, t.w, H, topW, botW);
       else {
         drawTrackFoldBands(ctx, view, theme, t.x0, t.w, H, t.meta.cat);
         drawTrackEvents(ctx, view, theme, t.x0, t.w, H, topW, botW, t.meta.cat);
@@ -865,12 +1321,7 @@ export function createTimelineSource(
     }
   }
 
-  function drawEras(
-    ctx: CanvasRenderingContext2D,
-    view: LaneView,
-    theme: RgTheme,
-    H: number,
-  ) {
+  function drawEras(ctx: CanvasRenderingContext2D, view: LaneView, theme: RgTheme, H: number) {
     for (const era of ERAS) {
       const yTop = worldToScreenY(view, worldOf(era.from));
       const yBot = worldToScreenY(view, worldOf(era.to));
@@ -1069,7 +1520,9 @@ export function createTimelineSource(
       // align down the whole track.
       const divIdx = fv.divisions.indexOf(div);
       const coarser = fv.divisions[divIdx + 1];
-      const majorEvery = coarser ? Math.max(1, Math.round(div.slots / coarser.slots)) : div.labelEvery;
+      const majorEvery = coarser
+        ? Math.max(1, Math.round(div.slots / coarser.slots))
+        : div.labelEvery;
       ctx.lineWidth = 1;
       for (let m2 = 1; m2 < div.slots; m2++) {
         const major = m2 % majorEvery === 0;
@@ -1220,7 +1673,12 @@ export function createTimelineSource(
               const fy0 = Math.max(Math.min(ya, yb) + 1, HEADER_H);
               const fy1 = Math.min(Math.max(ya, yb) - 1, H);
               if (fy1 <= fy0) continue;
-              ctx.fillRect(cx0 + fr.phase0 * contentW2, fy0, Math.max(2, (fr.phase1 - fr.phase0) * contentW2), fy1 - fy0);
+              ctx.fillRect(
+                cx0 + fr.phase0 * contentW2,
+                fy0,
+                Math.max(2, (fr.phase1 - fr.phase0) * contentW2),
+                fy1 - fy0,
+              );
             }
             // nominal tick + label at the representative instant, for provenance
             ctx.beginPath();
@@ -1246,7 +1704,12 @@ export function createTimelineSource(
         // dense cells are represented by their heat shade + count label —
         // individual dots would just overplot (hover still resolves them)
         const hc = heatCells.get(e.cat);
-        if (heatEnabled && hc && hc.level === fp.level && (hc.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX) {
+        if (
+          heatEnabled &&
+          hc &&
+          hc.level === fp.level &&
+          (hc.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX
+        ) {
           glide.delete(e); // no stale glide origin while represented by the cell
           continue;
         }
@@ -1279,8 +1742,7 @@ export function createTimelineSource(
         continue;
       }
 
-      const labeled =
-        inScale && !placed.some((p) => Math.abs(p - sy) < LABEL_GAP);
+      const labeled = inScale && !placed.some((p) => Math.abs(p - sy) < LABEL_GAP);
       if (!labeled) {
         // presence hint: a small dim dot so hidden events aren't invisible
         const g = glidePos(e, "rail", cx, sy);
@@ -1360,8 +1822,7 @@ export function createTimelineSource(
     // a cycle is "active" when its period is locally resolvable on screen
     const localPx = (c: Cycle) =>
       Math.abs(
-        worldToScreenY(view, worldOf(midYBP)) -
-          worldToScreenY(view, worldOf(midYBP + c.period)),
+        worldToScreenY(view, worldOf(midYBP)) - worldToScreenY(view, worldOf(midYBP + c.period)),
       );
     const active = CYCLES.filter((c) => {
       const px = localPx(c);
@@ -1453,10 +1914,7 @@ export function createTimelineSource(
     dist: string,
     count: number,
   ) {
-    const text =
-      `${chevron} ` +
-      (label ? `${label} · ${dist} · ` : "") +
-      `+${count}`;
+    const text = `${chevron} ` + (label ? `${label} · ${dist} · ` : "") + `+${count}`;
     ctx.font = "11px ui-monospace, Menlo, monospace";
     const tw = ctx.measureText(text).width;
     const pad = 8;
@@ -1484,8 +1942,7 @@ export function createTimelineSource(
    * a month/day the data doesn't have (bare-year events like "Transistor
    * (1947)" stay on the continuous axis / future approx gutter).
    */
-  const tMsOfEv = (e: Ev): number | null =>
-    e.cat === "periodic" ? null : evTimestampMs(e);
+  const tMsOfEv = (e: Ev): number | null => (e.cat === "periodic" ? null : evTimestampMs(e));
   const tMsOfYbp = (yBP: number) => (PRESENT_EPOCH - yBP * SPY) * 1000;
   const ybpOfTMs = (tMs: number) => (PRESENT_EPOCH - tMs / 1000) / SPY;
   /** folded row range: the fold rows covered by foldable events (+ now).
@@ -1507,7 +1964,20 @@ export function createTimelineSource(
     // the now-marker row and "today" orientation must always be in extent
     return { min: Math.min(min, nowRow), max: Math.max(max, nowRow) };
   };
-  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const WDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const DAYPARTS = ["Night", "Morning", "Afternoon", "Evening"];
   const p2 = (n: number) => String(n).padStart(2, "0");
@@ -1525,7 +1995,7 @@ export function createTimelineSource(
   }
   const FOLD_VIEWS: Record<
     Exclude<TimelineFold, "none">,
-    { projector: (typeof foldYearProjector); divisions: FoldDivision[] }
+    { projector: typeof foldYearProjector; divisions: FoldDivision[] }
   > = {
     year: {
       projector: foldYearProjector,
@@ -1597,7 +2067,11 @@ export function createTimelineSource(
   };
 
   /** finest division whose columns stay ≥1rem within the content measure */
-  const chooseDivision = (fv: (typeof FOLD_VIEWS)[Exclude<TimelineFold, "none">], contentW: number, rem: number): FoldDivision | null => {
+  const chooseDivision = (
+    fv: (typeof FOLD_VIEWS)[Exclude<TimelineFold, "none">],
+    contentW: number,
+    rem: number,
+  ): FoldDivision | null => {
     for (const d of fv.divisions) if (contentW / d.slots >= rem) return d;
     return null;
   };
@@ -1621,7 +2095,10 @@ export function createTimelineSource(
     const rowTop = worldToScreenY(view, p.rowIndex - 0.5);
     if (rowH < 14) return { x, y: rowTop + rowH / 2, p, laneH: 0 };
     const cats = CAT_META.filter((m) => m.cat !== "periodic" && enabled.has(m.cat));
-    const lane = Math.max(0, cats.findIndex((m) => m.cat === e.cat));
+    const lane = Math.max(
+      0,
+      cats.findIndex((m) => m.cat === e.cat),
+    );
     const laneH = (rowH - 4) / Math.max(1, cats.length);
     return { x, y: rowTop + 2 + lane * laneH + laneH / 2, p, laneH };
   };
@@ -1682,7 +2159,13 @@ export function createTimelineSource(
   // classification uses NOMINAL periods, not exact projected pixels — a
   // documented v1 approximation of the projected-pixel classifier (calendar
   // rows vary, symlog is nonlinear); the hysteresis band absorbs the error.
-  const classifyEv = (e: Ev, level: Exclude<TimelineFold, "none">, slots: number, bandPx: number, H: number): { lod: EvLod; win: readonly [number, number] | null } => {
+  const classifyEv = (
+    e: Ev,
+    level: Exclude<TimelineFold, "none">,
+    slots: number,
+    bandPx: number,
+    H: number,
+  ): { lod: EvLod; win: readonly [number, number] | null } => {
     const win = e.precision?.kind === "calendar" ? precisionWindow(e) : null;
     if (!win) return { lod: "point", win: null }; // no window → today's behavior
     const windowRows = (win[1] - win[0]) / FOLD_PERIOD_MS[level]!;
@@ -1707,7 +2190,12 @@ export function createTimelineSource(
   };
   /** visible fold-row range from PROJECTED screen endpoints — symlog rows
    *  vary in height, so center ± H/centerBand under-covers (codex review) */
-  const visibleRowRange = (level: Exclude<TimelineFold, "none">, view: LaneView, H: number, fallbackRow: number): { r0: number; r1: number } => {
+  const visibleRowRange = (
+    level: Exclude<TimelineFold, "none">,
+    view: LaneView,
+    H: number,
+    fallbackRow: number,
+  ): { r0: number; r1: number } => {
     const proj = FOLD_VIEWS[level].projector;
     const rowAt = (sy: number): number | null => {
       const t = tMsOfYbp(yBPof(screenToWorldY(view, sy)));
@@ -1723,7 +2211,10 @@ export function createTimelineSource(
 
   /** per-frame cell counts per track (cat → rowIndex*64+slot → n), shared by
    *  the grid pass (fills + labels) and the event pass (dot suppression) */
-  const heatCells = new Map<Cat, { level: string; cells: Map<string, number>; presence: Map<string, number> }>();
+  const heatCells = new Map<
+    Cat,
+    { level: string; cells: Map<string, number>; presence: Map<string, number> }
+  >();
   const HEAT_DOT_MAX = 3; // cells with more events than this drop their dots
 
   /** pseudo-x-axis specs queued by folding tracks for the sticky header */
@@ -1737,7 +2228,8 @@ export function createTimelineSource(
   // the viewport is doing.
   const FOLD_ANIM_MS = 280;
   let foldAnim: { from: Map<Ev, { x: number; y: number }>; t0: number } | null = null;
-  const easeOutBack = (t: number) => 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+  const easeOutBack = (t: number) =>
+    1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
   /** screen position of an event under the CURRENT mode (fold or continuous) */
   const glyphScreenPos = (e: Ev, view: LaneView): { x: number; y: number } | null => {
     if (fold !== "none") {
@@ -1772,8 +2264,16 @@ export function createTimelineSource(
    *  glides from its last drawn position to the new one — taku's transition
    *  animation, applied per element instead of per mode switch */
   const GLIDE_MS = 280;
-  const glide = new Map<Ev, { x: number; y: number; key: string; from?: { x: number; y: number; t0: number } }>();
-  const glidePos = (e: Ev, key: string, tx: number, ty: number): { x: number; y: number; moving: boolean } => {
+  const glide = new Map<
+    Ev,
+    { x: number; y: number; key: string; from?: { x: number; y: number; t0: number } }
+  >();
+  const glidePos = (
+    e: Ev,
+    key: string,
+    tx: number,
+    ty: number,
+  ): { x: number; y: number; moving: boolean } => {
     if (!glideEnabled) return { x: tx, y: ty, moving: false };
     const prev = glide.get(e);
     let from = prev?.from;
@@ -1801,7 +2301,16 @@ export function createTimelineSource(
     typeof document !== "undefined"
       ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
       : 16;
-  const LADDER_FINE_FIRST = ["hour", "day", "week", "month", "year", "decade", "century", "millennium"] as const;
+  const LADDER_FINE_FIRST = [
+    "hour",
+    "day",
+    "week",
+    "month",
+    "year",
+    "decade",
+    "century",
+    "millennium",
+  ] as const;
   /** slim y-axis gutter inside a folding track: row labels live here,
    *  uncovered by phase-0 events */
   const Y_GUTTER_REM = 2.6;
@@ -1955,7 +2464,8 @@ export function createTimelineSource(
         continue;
       }
       const r = Math.min(3.2, Math.max(1.5, g.laneH * 0.3));
-      ctx.fillStyle = foldAnim && !foldAnim.from.has(e) ? withAlpha(color, Math.min(1, animK)) : color;
+      ctx.fillStyle =
+        foldAnim && !foldAnim.from.has(e) ? withAlpha(color, Math.min(1, animK)) : color;
       ctx.beginPath();
       ctx.arc(gx, gy, r, 0, Math.PI * 2);
       ctx.fill();
@@ -2058,7 +2568,10 @@ export function createTimelineSource(
       // a visible label is a hover target for its event (either mode)
       for (const l of foldLabelRects) {
         if (sx >= l.x0 && sx <= l.x1 && Math.abs(sy - l.y) <= 7) {
-          const title = l.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+          const title = l.e.label
+            .replace(/\s+born$/, "")
+            .replace(/\s*·.*$/, "")
+            .trim();
           return { title, detail: l.e.detail, cat: l.e.cat };
         }
       }
@@ -2076,7 +2589,10 @@ export function createTimelineSource(
           }
         }
         if (!best) return null;
-        const title = best.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+        const title = best.label
+          .replace(/\s+born$/, "")
+          .replace(/\s*·.*$/, "")
+          .trim();
         return { title, detail: best.detail, cat: best.cat };
       }
       // the event in the hovered track nearest the cursor — folded events sit
@@ -2092,7 +2608,8 @@ export function createTimelineSource(
         // tint-state events have NO visible glyph — giving the invisible
         // nominal point hover semantics would fake precision (cell-level
         // candidate listing is the deferred v1 follow-up)
-        if (fp && classifyEv(e, fp.level, fp.slots, fp.bandPx, view.height).lod === "tint") continue;
+        if (fp && classifyEv(e, fp.level, fp.slots, fp.bandPx, view.height).lod === "tint")
+          continue;
         const dy = fp
           ? Math.hypot(fp.x - sx, fp.y - sy)
           : Math.abs(worldToScreenY(view, worldOf(e.y)) - sy);
@@ -2102,7 +2619,10 @@ export function createTimelineSource(
         }
       }
       if (!best) return null;
-      const title = best.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+      const title = best.label
+        .replace(/\s+born$/, "")
+        .replace(/\s*·.*$/, "")
+        .trim();
       return { title, detail: best.detail, cat: best.cat };
     },
     find(query, limit = 7) {
@@ -2115,8 +2635,7 @@ export function createTimelineSource(
         const inLabel = label.includes(q);
         if (!inLabel && !e.detail?.toLowerCase().includes(q)) continue;
         // rank: label-start > label-contains > detail; then importance
-        const rank =
-          (label.startsWith(q) ? 2 : inLabel ? 1 : 0) + e.imp;
+        const rank = (label.startsWith(q) ? 2 : inLabel ? 1 : 0) + e.imp;
         hits.push({ e, rank });
       }
       hits.sort((a, b) => b.rank - a.rank);
@@ -2129,15 +2648,17 @@ export function createTimelineSource(
             const t = tMsOfEv(e);
             const p = t == null ? null : foldView().projector.project(t);
             if (!p) return [];
-            return [{
-              label: e.label,
-              detail: e.detail,
-              cat: e.cat,
-              color: CAT_COLOR[e.cat],
-              center: p.rowIndex,
-              scale: 1.6,
-              phase: p.phase0,
-            }];
+            return [
+              {
+                label: e.label,
+                detail: e.detail,
+                cat: e.cat,
+                color: CAT_COLOR[e.cat],
+                center: p.rowIndex,
+                scale: 1.6,
+                phase: p.phase0,
+              },
+            ];
           })
           .slice(0, limit);
       }
@@ -2226,8 +2747,7 @@ export function createTimelineSource(
       }
       return out;
     },
-    draw: (ctx, view, env) =>
-      fold === "none" ? draw(ctx, view, env) : drawFolded(ctx, view, env),
+    draw: (ctx, view, env) => (fold === "none" ? draw(ctx, view, env) : drawFolded(ctx, view, env)),
     getFold: () => fold,
     setFold(f, opts) {
       if (f === fold) return;

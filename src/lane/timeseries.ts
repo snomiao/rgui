@@ -111,11 +111,7 @@ export function createSeriesSource(
     ctx.textBaseline = "middle";
     ctx.font = "10px ui-monospace, Menlo, monospace";
     const stepSec = step / rate;
-    for (
-      let g = Math.floor(topW / step) * step;
-      g <= botW + step;
-      g += step
-    ) {
+    for (let g = Math.floor(topW / step) * step; g <= botW + step; g += step) {
       const gy = worldToScreenY(view, g);
       ctx.strokeStyle = withAlpha(theme.textFaint, 0.16);
       ctx.beginPath();

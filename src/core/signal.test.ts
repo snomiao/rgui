@@ -37,13 +37,7 @@ const node = (id: string, inputs: Port[], outputs: Port[]): GraphNode => ({
   outputs,
   fields: [],
 });
-const wire = (
-  fn: string,
-  fp: string,
-  tn: string,
-  tp: string,
-  weight?: number,
-): Edge => ({
+const wire = (fn: string, fp: string, tn: string, tp: string, weight?: number): Edge => ({
   from: { node: fn, port: fp },
   to: { node: tn, port: tp },
   weight,
@@ -192,7 +186,10 @@ describe("splitAtoms — whole atoms, count conserved", () => {
     for (let n = 1; n <= 6; n++)
       for (let k = 0; k <= 20; k++) {
         const atoms = Array.from({ length: k }, (_, i) => i);
-        const parts = splitAtoms(atoms, Array.from({ length: n }, (_, i) => i + 1));
+        const parts = splitAtoms(
+          atoms,
+          Array.from({ length: n }, (_, i) => i + 1),
+        );
         expect(parts.flat()).toEqual(atoms);
       }
   });
@@ -233,10 +230,7 @@ describe("forkValue — the three fan-out modes", () => {
     // one downstream. Both the translator and the subtitle sink need all of it.
     const s = resolveSignal(port("t", "t", SIGNALS.transcript));
     expect(s.measure).toBe("extensive");
-    expect(forkValue("こんにちは、世界", s, 2)).toEqual([
-      "こんにちは、世界",
-      "こんにちは、世界",
-    ]);
+    expect(forkValue("こんにちは、世界", s, 2)).toEqual(["こんにちは、世界", "こんにちは、世界"]);
   });
 
   test("split of a continuous budget conserves the total", () => {
@@ -532,12 +526,16 @@ describe("capability vs policy — who owns what", () => {
     for (const o of ["copy", "clone", "share", "move"] as const)
       expect(typeof isFanoutLegal(o, "broadcast")).toBe("boolean");
     expect(isDuplicable("share")).toBe(false); // ⇒ host: cannot cross a device
-    expect(isDuplicable("clone")).toBe(true);  // ⇒ host: can, at a cost
+    expect(isDuplicable("clone")).toBe(true); // ⇒ host: can, at a cost
   });
 
   test("forkValue refuses to broadcast a move — it would double-spend it", () => {
     const spec = resolveSignal({
-      id: "c", label: "coins", kind: "ctl", ownership: "move", fanout: "broadcast",
+      id: "c",
+      label: "coins",
+      kind: "ctl",
+      ownership: "move",
+      fanout: "broadcast",
     });
     expect(() => forkValue(100, spec, 2)).toThrow(TypeError);
   });
@@ -553,7 +551,7 @@ describe("capability vs policy — who owns what", () => {
       edges: [wire("mic", "audio", "a", "i"), wire("mic", "audio", "b", "i")],
     };
     expect(groupFanout(g, "mic", "audio")).toBe("broadcast"); // the port's default
-    g.fanout = { "mic.audio": "route" };                      // the group's decision
+    g.fanout = { "mic.audio": "route" }; // the group's decision
     expect(groupFanout(g, "mic", "audio")).toBe("route");
   });
 
@@ -641,7 +639,11 @@ describe("signalConnectionGuard — where single-to-single actually bites", () =
   test("a second edge off a broadcasting move port is refused", () => {
     const g: Graph = {
       nodes: [
-        node("src", [], [{ id: "o", label: "coins", kind: "ctl", ownership: "move", fanout: "broadcast" }]),
+        node(
+          "src",
+          [],
+          [{ id: "o", label: "coins", kind: "ctl", ownership: "move", fanout: "broadcast" }],
+        ),
         node("a", [{ id: "i", label: "i", kind: "ctl" }], []),
         node("b", [{ id: "i", label: "i", kind: "ctl" }], []),
       ],
@@ -735,7 +737,13 @@ describe("the `share` rung — a handle is aliasable but not duplicable", () => 
   });
 
   test("forkValue refuses to broadcast a move but happily aliases a share", () => {
-    const mv = resolveSignal({ id: "m", label: "m", kind: "ctl", ownership: "move", fanout: "broadcast" });
+    const mv = resolveSignal({
+      id: "m",
+      label: "m",
+      kind: "ctl",
+      ownership: "move",
+      fanout: "broadcast",
+    });
     const sh = resolveSignal(port("s", "s", SIGNALS.handle));
     expect(() => forkValue({}, mv, 2)).toThrow(TypeError);
     expect(() => forkValue({}, sh, 2)).not.toThrow();

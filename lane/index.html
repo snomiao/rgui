@@ -92,11 +92,17 @@
         border-radius: 7px;
         appearance: none;
         background:
-          linear-gradient(45deg, transparent 50%, var(--text-dim) 50%) right 16px center / 5px 5px no-repeat,
-          linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) right 11px center / 5px 5px no-repeat,
+          linear-gradient(45deg, transparent 50%, var(--text-dim) 50%) right 16px center / 5px 5px
+            no-repeat,
+          linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) right 11px center / 5px 5px
+            no-repeat,
           transparent;
         color: var(--text);
-        font: 700 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          700 12px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         cursor: pointer;
         outline: none;
       }
@@ -109,10 +115,16 @@
         border: 0;
         background: transparent;
         color: var(--text-dim);
-        font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          600 12px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         padding: 8px 13px;
         cursor: pointer;
-        transition: color 120ms, background 120ms;
+        transition:
+          color 120ms,
+          background 120ms;
       }
       .seg button + button {
         border-left: 1px solid var(--border);
@@ -124,8 +136,14 @@
         padding: 0 13px;
         color: var(--text-dim);
         text-decoration: none;
-        font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-        transition: color 120ms, background 120ms;
+        font:
+          600 12px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        transition:
+          color 120ms,
+          background 120ms;
       }
       .seg a + a {
         border-left: 1px solid var(--border);
@@ -172,7 +190,10 @@
         line-height: 1;
         cursor: pointer;
         text-decoration: none;
-        transition: border-color 120ms, color 120ms, transform 120ms;
+        transition:
+          border-color 120ms,
+          color 120ms,
+          transform 120ms;
       }
       .icon-btn:hover {
         border-color: var(--accent);
@@ -196,7 +217,11 @@
         border-radius: 7px;
         background: var(--panel);
         color: var(--text);
-        font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          500 12px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         outline: none;
       }
       #repo:focus {
@@ -206,7 +231,11 @@
         color: var(--text-faint);
       }
       #repostat {
-        font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          500 11px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         color: var(--text-muted);
         pointer-events: none;
       }
@@ -218,7 +247,11 @@
         border-radius: 7px;
         background: var(--panel);
         color: var(--text);
-        font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          500 12px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         outline: none;
       }
       #search:focus {
@@ -252,7 +285,11 @@
         padding: 7px 10px;
         cursor: pointer;
         border-bottom: 1px solid var(--border);
-        font: 500 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          500 12px/1.3 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         color: var(--text);
       }
       #suggest .hit:last-child {
@@ -292,10 +329,17 @@
         border-radius: 20px;
         background: var(--panel);
         color: var(--text-muted);
-        font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          600 11px/1 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         cursor: pointer;
         user-select: none;
-        transition: color 120ms, border-color 120ms, opacity 120ms;
+        transition:
+          color 120ms,
+          border-color 120ms,
+          opacity 120ms;
       }
       #filters .chip .swatch {
         width: 8px;
@@ -328,7 +372,11 @@
         border: 1px solid var(--border);
         border-radius: 4px;
         color: var(--text);
-        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          11px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         white-space: pre;
       }
       #net:empty {
@@ -388,7 +436,10 @@
       }
       #card .src {
         margin-top: 7px;
-        font: 600 10px/1 ui-monospace, Menlo, monospace;
+        font:
+          600 10px/1 ui-monospace,
+          Menlo,
+          monospace;
         color: var(--accent);
         letter-spacing: 0.03em;
       }
@@ -400,7 +451,11 @@
         max-width: 46ch;
         text-align: right;
         color: var(--text-faint);
-        font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        font:
+          11px/1.6 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
         pointer-events: none;
         user-select: none;
       }
@@ -427,22 +482,124 @@
         <button data-src="time" aria-pressed="false">🌌 Deep time</button>
         <button data-src="series" aria-pressed="false">📈 Signal</button>
       </div>
-      <div id="searchwrap" style="display: none; position: relative;">
-        <input id="search" type="search" placeholder="Search events…" autocomplete="off" spellcheck="false" />
+      <div id="searchwrap" style="display: none; position: relative">
+        <input
+          id="search"
+          type="search"
+          placeholder="Search events…"
+          autocomplete="off"
+          spellcheck="false"
+        />
         <div id="suggest"></div>
       </div>
-      <input id="repo" type="text" placeholder="owner/repo or GitHub URL" autocomplete="off" spellcheck="false" value="torvalds/linux" style="display: none;" />
+      <input
+        id="repo"
+        type="text"
+        placeholder="owner/repo or GitHub URL"
+        autocomplete="off"
+        spellcheck="false"
+        value="torvalds/linux"
+        style="display: none"
+      />
       <span id="repostat"></span>
-      <button class="icon-btn" id="axis" title="Toggle log / linear time axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log axis</button>
-      <button class="icon-btn" id="fold" title="Fold time into calendar-year rows (Jan–Dec across, one row per year)" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">fold: off</button>
-      <button class="icon-btn" id="prefs" title="Preferences" style="width: auto; border-radius: 7px; padding: 0 10px; font: 600 12px/1 ui-monospace, Menlo, monospace;">⚙</button>
-      <div id="prefsPanel" style="display: none; position: absolute; top: 44px; right: 12px; z-index: 40; background: rgba(24,24,28,0.96); border: 1px solid rgba(148,163,184,0.35); border-radius: 9px; padding: 10px 14px; font: 12px/1.9 ui-monospace, Menlo, monospace; color: #cbd5e0; min-width: 240px;">
-        <div style="font-weight: 700; margin-bottom: 4px;">Preferences</div>
-        <label style="display: block; cursor: pointer;"><input type="checkbox" id="prefAutoZoomOut" /> auto zoom-out on empty scroll</label>
-        <label style="display: block; cursor: pointer;"><input type="checkbox" id="prefGlide" checked /> fold transition animation</label>
-        <label style="display: block; cursor: pointer;"><input type="checkbox" id="prefHeat" checked /> density heat cells</label>
+      <button
+        class="icon-btn"
+        id="axis"
+        title="Toggle log / linear time axis"
+        style="
+          display: none;
+          width: auto;
+          border-radius: 7px;
+          padding: 0 12px;
+          font:
+            600 12px/1 ui-monospace,
+            Menlo,
+            monospace;
+        "
+      >
+        log axis
+      </button>
+      <button
+        class="icon-btn"
+        id="fold"
+        title="Fold time into calendar-year rows (Jan–Dec across, one row per year)"
+        style="
+          display: none;
+          width: auto;
+          border-radius: 7px;
+          padding: 0 12px;
+          font:
+            600 12px/1 ui-monospace,
+            Menlo,
+            monospace;
+        "
+      >
+        fold: off
+      </button>
+      <button
+        class="icon-btn"
+        id="prefs"
+        title="Preferences"
+        style="
+          width: auto;
+          border-radius: 7px;
+          padding: 0 10px;
+          font:
+            600 12px/1 ui-monospace,
+            Menlo,
+            monospace;
+        "
+      >
+        ⚙
+      </button>
+      <div
+        id="prefsPanel"
+        style="
+          display: none;
+          position: absolute;
+          top: 44px;
+          right: 12px;
+          z-index: 40;
+          background: rgba(24, 24, 28, 0.96);
+          border: 1px solid rgba(148, 163, 184, 0.35);
+          border-radius: 9px;
+          padding: 10px 14px;
+          font:
+            12px/1.9 ui-monospace,
+            Menlo,
+            monospace;
+          color: #cbd5e0;
+          min-width: 240px;
+        "
+      >
+        <div style="font-weight: 700; margin-bottom: 4px">Preferences</div>
+        <label style="display: block; cursor: pointer"
+          ><input type="checkbox" id="prefAutoZoomOut" /> auto zoom-out on empty scroll</label
+        >
+        <label style="display: block; cursor: pointer"
+          ><input type="checkbox" id="prefGlide" checked /> fold transition animation</label
+        >
+        <label style="display: block; cursor: pointer"
+          ><input type="checkbox" id="prefHeat" checked /> density heat cells</label
+        >
       </div>
-      <button class="icon-btn" id="logscale" title="Toggle symlog value axis" style="display: none; width: auto; border-radius: 7px; padding: 0 12px; font: 600 12px/1 ui-monospace, Menlo, monospace;">log</button>
+      <button
+        class="icon-btn"
+        id="logscale"
+        title="Toggle symlog value axis"
+        style="
+          display: none;
+          width: auto;
+          border-radius: 7px;
+          padding: 0 12px;
+          font:
+            600 12px/1 ui-monospace,
+            Menlo,
+            monospace;
+        "
+      >
+        log
+      </button>
       <div class="grow"></div>
       <a id="wordmark" href="/">RGUI<span> · lane</span></a>
       <a class="icon-btn" id="home" href="/" title="2D graph mode">⊞</a>
@@ -458,7 +615,8 @@
     <a id="card" target="_blank" rel="noopener"></a>
 
     <div id="hint">
-      <b>scroll</b> = move · <b>⌘/ctrl-scroll</b> or <b>pinch</b> = zoom (faster the harder you flick) · <b>R/F</b> or <b>D/A</b> = zoom · <b>W/S</b> = scroll · <b>dbl-click</b> = focus<br />
+      <b>scroll</b> = move · <b>⌘/ctrl-scroll</b> or <b>pinch</b> = zoom (faster the harder you
+      flick) · <b>R/F</b> or <b>D/A</b> = zoom · <b>W/S</b> = scroll · <b>dbl-click</b> = focus<br />
       zoom grows height &amp; detail — width never changes
     </div>
 

@@ -30,7 +30,8 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const field = (x: number, y: number, z: number) =>
   clamp01(0.5 - KXY * (x * HEAD[0] + y * HEAD[1] + z * HEAD[2]));
 const hash3 = (ix: number, iy: number, iz: number) => {
-  let h = Math.imul(ix | 0, 374761393) ^ Math.imul(iy | 0, 668265263) ^ Math.imul(iz | 0, 2246822519);
+  let h =
+    Math.imul(ix | 0, 374761393) ^ Math.imul(iy | 0, 668265263) ^ Math.imul(iz | 0, 2246822519);
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
@@ -100,22 +101,30 @@ function draw(tMs: number) {
   // gizmo contract: when the viewer has a 3-D orientation, the cube SHOWS
   // it (drag the cube → the canvas and the cube rotate together); otherwise
   // it keeps its ambient slow spin
-  const r3 = (window as unknown as {
-    viewer?: { rotation3?: { yaw: number; pitch: number; roll: number } };
-  }).viewer?.rotation3;
+  const r3 = (
+    window as unknown as {
+      viewer?: { rotation3?: { yaw: number; pitch: number; roll: number } };
+    }
+  ).viewer?.rotation3;
   const oriented = !!r3 && !!(r3.yaw || r3.pitch || r3.roll);
   const ay = oriented ? 0.7 + r3.yaw : reduced ? 0.7 : tMs * 0.00035; // spin
   const ax = oriented ? 0.42 + r3.pitch : 0.42; // tilt
-  const cy = Math.cos(ay), sy = Math.sin(ay), cx = Math.cos(ax), sx = Math.sin(ax);
+  const cy = Math.cos(ay),
+    sy = Math.sin(ay),
+    cx = Math.cos(ax),
+    sx = Math.sin(ax);
   const R = 58; // cube radius in px
-  const cell = 1 / N, s = cell * 0.97;
+  const cell = 1 / N,
+    s = cell * 0.97;
 
   type Face = { z: number; pts: [number, number][]; fill: string };
   const faces: Face[] = [];
   const proj = (x: number, y: number, z: number): [number, number, number] => {
     // rotate Y then X, orthographic
-    const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
-    const y2 = y * cx - z1 * sx, z2 = y * sx + z1 * cx;
+    const x1 = x * cy + z * sy,
+      z1 = -x * sy + z * cy;
+    const y2 = y * cx - z1 * sx,
+      z2 = y * sx + z1 * cx;
     return [CSS / 2 + x1 * 2 * R, CSS / 2 + y2 * 2 * R, z2];
   };
   const shade = ([r, g, b]: readonly [number, number, number], m: number) =>
@@ -124,7 +133,9 @@ function draw(tMs: number) {
   for (let k = 0; k < N; k++)
     for (let j = 0; j < N; j++)
       for (let i = 0; i < N; i++) {
-        const bx = (i + 0.5) * cell - 0.5, by = (j + 0.5) * cell - 0.5, bz = (k + 0.5) * cell - 0.5;
+        const bx = (i + 0.5) * cell - 0.5,
+          by = (j + 0.5) * cell - 0.5,
+          bz = (k + 0.5) * cell - 0.5;
         const rgb = RGB[blockColor(i, j, k, N)] ?? RGB[0]!;
         const h = s / 2;
         // 8 corners
@@ -133,12 +144,12 @@ function draw(tMs: number) {
           c.push(proj(bx + (d & 1 ? h : -h), by + (d & 2 ? h : -h), bz + (d & 4 ? h : -h)));
         // quads: [corner ids], shading, outward axis for backface test via winding
         const quads: [number[], number][] = [
-          [[2, 3, 7, 6], 1.0],   // top (y+ is down on screen; this is y+... shading below)
-          [[0, 1, 5, 4], 0.55],  // bottom
-          [[1, 3, 7, 5], 0.8],   // x+
-          [[0, 2, 6, 4], 0.7],   // x-
-          [[4, 5, 7, 6], 0.9],   // z+
-          [[0, 1, 3, 2], 0.65],  // z-
+          [[2, 3, 7, 6], 1.0], // top (y+ is down on screen; this is y+... shading below)
+          [[0, 1, 5, 4], 0.55], // bottom
+          [[1, 3, 7, 5], 0.8], // x+
+          [[0, 2, 6, 4], 0.7], // x-
+          [[4, 5, 7, 6], 0.9], // z+
+          [[0, 1, 3, 2], 0.65], // z-
         ];
         for (const [ids, m] of quads) {
           const p = ids.map((d) => c[d]!);

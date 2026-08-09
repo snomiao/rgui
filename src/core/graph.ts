@@ -397,10 +397,7 @@ export function annotationNode(opts: {
  * live on DIFFERENT layers — a wide-flat node is coarse in x, fine in y —
  * and position snapping follows each axis's own layer.
  */
-export function nodeScale(
-  n: GraphNode,
-  radix = 8,
-): { x: number; y: number } {
+export function nodeScale(n: GraphNode, radix = 8): { x: number; y: number } {
   return {
     x: sizeLayerStep(n.w, radix),
     y: sizeLayerStep(nodeHeight(n), radix),
@@ -446,9 +443,7 @@ export function containmentOf(nodes: GraphNode[]): {
   inside: (a: string, b: string) => boolean;
   related: (a: string, b: string) => boolean;
 } {
-  const parent = new Map<string, string | undefined>(
-    nodes.map((n) => [n.id, n.parent]),
-  );
+  const parent = new Map<string, string | undefined>(nodes.map((n) => [n.id, n.parent]));
   const inside = (a: string, b: string): boolean => {
     for (let c = parent.get(a); c; c = parent.get(c)) if (c === b) return true;
     return false;
@@ -457,9 +452,7 @@ export function containmentOf(nodes: GraphNode[]): {
 }
 
 /** world-space rect of the reserved live-body region (null if none) */
-export function bodyRect(
-  n: GraphNode,
-): { x: number; y: number; w: number; h: number } | null {
+export function bodyRect(n: GraphNode): { x: number; y: number; w: number; h: number } | null {
   if (!n.bodyRows) return null;
   const { headerH, rowH, pad } = nodeMetrics(n);
   const top = n.y + headerH + pad + nodeRows(n) * rowH;
@@ -500,18 +493,11 @@ export function outSide(n: GraphNode): Side {
 }
 
 export function oppositeSide(s: Side): Side {
-  return s === "left"
-    ? "right"
-    : s === "right"
-      ? "left"
-      : s === "top"
-        ? "bottom"
-        : "top";
+  return s === "left" ? "right" : s === "right" ? "left" : s === "top" ? "bottom" : "top";
 }
 
 /** true when `s` runs along the x axis, i.e. it is the top or bottom edge */
-export const isHorizontalSide = (s: Side): boolean =>
-  s === "top" || s === "bottom";
+export const isHorizontalSide = (s: Side): boolean => s === "top" || s === "bottom";
 
 /** world y of a node's i-th port/field row center */
 export function nodeRowY(n: GraphNode, i: number): number {
@@ -528,27 +514,16 @@ export function nodeRowY(n: GraphNode, i: number): number {
  * coordinate, which is what makes snap-connect land on whole ports instead of
  * guessing.
  */
-export function sidePortPos(
-  n: GraphNode,
-  side: Side,
-  i: number,
-): [number, number] {
+export function sidePortPos(n: GraphNode, side: Side, i: number): [number, number] {
   if (isHorizontalSide(side)) {
     const { s, pad } = nodeMetrics(n);
-    return [
-      n.x + pad + (i + 0.5) * NODE_COL_W * s,
-      side === "top" ? n.y : n.y + nodeHeight(n),
-    ];
+    return [n.x + pad + (i + 0.5) * NODE_COL_W * s, side === "top" ? n.y : n.y + nodeHeight(n)];
   }
   return [side === "left" ? n.x : n.x + n.w, nodeRowY(n, i)];
 }
 
 /** world position of the i-th port on the node's declared in/out edge */
-export function portPos(
-  n: GraphNode,
-  dir: "in" | "out",
-  i: number,
-): [number, number] {
+export function portPos(n: GraphNode, dir: "in" | "out", i: number): [number, number] {
   return sidePortPos(n, dir === "in" ? inSide(n) : outSide(n), i);
 }
 
@@ -785,13 +760,7 @@ export function signalGraph(ox = 0, oy = 0): Graph {
     sink("sig-w2", "Worker 2", 512, 1184, { id: "job", label: "job", ...SIGNALS.work }),
   ];
 
-  const wire = (
-    fn: string,
-    fp: string,
-    tn: string,
-    tp: string,
-    weight?: number,
-  ): Edge => ({
+  const wire = (fn: string, fp: string, tn: string, tp: string, weight?: number): Edge => ({
     from: { node: fn, port: fp },
     to: { node: tn, port: tp },
     weight,
@@ -838,10 +807,7 @@ export function orgChartGraph(): Graph {
     w: 256,
     h: 128,
     // everyone reports to someone except the top of the tree
-    inputs:
-      lead && parent === "company"
-        ? []
-        : [{ id: "lead", label: "lead", kind: "report" }],
+    inputs: lead && parent === "company" ? [] : [{ id: "lead", label: "lead", kind: "report" }],
     outputs: lead ? [{ id: "reports", label: "reports", kind: "report" }] : [],
     fields: [
       ["role", role],

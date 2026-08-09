@@ -32,9 +32,7 @@ export function layoutGraph(
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
   // edges among layouted nodes only
-  const edges = graph.edges.filter(
-    (e) => ids.has(e.from.node) && ids.has(e.to.node),
-  );
+  const edges = graph.edges.filter((e) => ids.has(e.from.node) && ids.has(e.to.node));
 
   // --- layering: longest path from sources -------------------------------
   const layerOf = new Map<string, number>();
@@ -49,10 +47,7 @@ export function layoutGraph(
     const id = queue.shift()!;
     for (const e of edges) {
       if (e.from.node !== id) continue;
-      const l = Math.max(
-        layerOf.get(e.to.node) ?? 0,
-        (layerOf.get(id) ?? 0) + 1,
-      );
+      const l = Math.max(layerOf.get(e.to.node) ?? 0, (layerOf.get(id) ?? 0) + 1);
       layerOf.set(e.to.node, l);
       const d = (deg.get(e.to.node) ?? 1) - 1;
       deg.set(e.to.node, d);
@@ -62,14 +57,13 @@ export function layoutGraph(
   for (const n of nodes) if (!layerOf.has(n.id)) layerOf.set(n.id, 0);
 
   // --- group into layers ---------------------------------------------------
-  const layerCount = Math.max(...[...layerOf.values()], 0) + 1;
+  const layerCount = Math.max(...layerOf.values(), 0) + 1;
   const layers: GraphNode[][] = Array.from({ length: layerCount }, () => []);
   for (const n of nodes) layers[layerOf.get(n.id)!]!.push(n);
 
   // --- barycenter ordering (few sweeps) ------------------------------------
   const orderIndex = new Map<string, number>();
-  const reindex = (layer: GraphNode[]) =>
-    layer.forEach((n, i) => orderIndex.set(n.id, i));
+  const reindex = (layer: GraphNode[]) => layer.forEach((n, i) => orderIndex.set(n.id, i));
   layers.forEach(reindex);
   for (let sweep = 0; sweep < 4; sweep++) {
     const forward = sweep % 2 === 0;
@@ -82,9 +76,7 @@ export function layoutGraph(
       const bary = new Map<string, number>();
       for (const n of layer) {
         const neigh = edges
-          .filter((e) =>
-            forward ? e.to.node === n.id : e.from.node === n.id,
-          )
+          .filter((e) => (forward ? e.to.node === n.id : e.from.node === n.id))
           .map((e) => orderIndex.get(forward ? e.from.node : e.to.node) ?? 0);
         bary.set(
           n.id,
@@ -106,8 +98,7 @@ export function layoutGraph(
     const width = Math.max(...layer.map((n) => n.w), 0);
     // center each layer column vertically around the origin row
     const totalH =
-      layer.reduce((s, n) => s + nodeHeight(n), 0) +
-      gapY * Math.max(0, layer.length - 1);
+      layer.reduce((s, n) => s + nodeHeight(n), 0) + gapY * Math.max(0, layer.length - 1);
     let y = origin.y - totalH / 2;
     for (const n of layer) {
       out.set(n.id, { x: snap(x, step), y: snap(y, step) });
@@ -122,7 +113,6 @@ export function layoutGraph(
 function boundsOrigin(nodes: GraphNode[]): { x: number; y: number } {
   if (!nodes.length) return { x: 0, y: 0 };
   const x = Math.min(...nodes.map((n) => n.x));
-  const cy =
-    nodes.reduce((s, n) => s + n.y + nodeHeight(n) / 2, 0) / nodes.length;
+  const cy = nodes.reduce((s, n) => s + n.y + nodeHeight(n) / 2, 0) / nodes.length;
   return { x, y: cy };
 }

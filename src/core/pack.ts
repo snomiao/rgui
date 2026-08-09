@@ -53,8 +53,7 @@ const rectOf = (n: GraphNode): Rect => ({
  * itself away from where it already is, or clamping its size against a rect
  * it exactly occupies.
  */
-const isSelf = (o: GraphNode, node: GraphNode) =>
-  o === node || o.id === node.id;
+const isSelf = (o: GraphNode, node: GraphNode) => o === node || o.id === node.id;
 
 /**
  * Resolve overlaps for a node being dragged to (x, y): push it out along the
@@ -134,22 +133,14 @@ export function clampSize(
     if (isSelf(o, node)) continue;
     const r = rectOf(o);
     // width cap: neighbor to the right overlapping our current y-span
-    if (
-      r.x >= node.x + EPS &&
-      r.y < node.y + hCur - EPS &&
-      r.y + r.h > node.y + EPS
-    )
+    if (r.x >= node.x + EPS && r.y < node.y + hCur - EPS && r.y + r.h > node.y + EPS)
       w = Math.min(w, r.x - node.x);
   }
   for (const o of others) {
     if (isSelf(o, node)) continue;
     const r = rectOf(o);
     // height cap: neighbor below overlapping our NEW x-span
-    if (
-      r.y >= node.y + EPS &&
-      r.x < node.x + w - EPS &&
-      r.x + r.w > node.x + EPS
-    )
+    if (r.y >= node.y + EPS && r.x < node.x + w - EPS && r.x + r.w > node.x + EPS)
       h = Math.min(h, r.y - node.y);
   }
   return { w, h };
@@ -188,14 +179,12 @@ export function flushSegments(nodes: GraphNode[]): FlushSegment[] {
         if (Math.abs(l.x + l.w - r.x) < EPS) {
           const from = Math.max(l.y, r.y);
           const to = Math.min(l.y + l.h, r.y + r.h);
-          if (to - from > EPS)
-            out.push({ a, b, axis: "v", at: r.x, from, to });
+          if (to - from > EPS) out.push({ a, b, axis: "v", at: r.x, from, to });
         }
         if (Math.abs(l.y + l.h - r.y) < EPS) {
           const from = Math.max(l.x, r.x);
           const to = Math.min(l.x + l.w, r.x + r.w);
-          if (to - from > EPS)
-            out.push({ a, b, axis: "h", at: r.y, from, to });
+          if (to - from > EPS) out.push({ a, b, axis: "h", at: r.y, from, to });
         }
       }
     }
@@ -206,8 +195,7 @@ export function flushSegments(nodes: GraphNode[]): FlushSegment[] {
 /** Set of "idA|idB" (sorted) pairs in flush contact — their wires dissolve. */
 export function flushPairKeys(segments: FlushSegment[]): Set<string> {
   const s = new Set<string>();
-  for (const seg of segments)
-    s.add([seg.a.id, seg.b.id].sort().join("|"));
+  for (const seg of segments) s.add([seg.a.id, seg.b.id].sort().join("|"));
   return s;
 }
 
@@ -221,10 +209,7 @@ export interface Interval {
 export type SideCoverage = Record<Side, Interval[]>;
 
 /** subtract covered intervals from a span, returning the uncovered pieces */
-export function subtractIntervals(
-  span: Interval,
-  covered: Interval[],
-): Interval[] {
+export function subtractIntervals(span: Interval, covered: Interval[]): Interval[] {
   let pieces: Interval[] = [span];
   for (const c of covered) {
     const next: Interval[] = [];
@@ -242,9 +227,7 @@ export function subtractIntervals(
 }
 
 /** per-node covered intervals on each side, from flush segments */
-export function sideCoverage(
-  segments: FlushSegment[],
-): Map<string, SideCoverage> {
+export function sideCoverage(segments: FlushSegment[]): Map<string, SideCoverage> {
   const map = new Map<string, SideCoverage>();
   const get = (id: string): SideCoverage => {
     let c = map.get(id);
@@ -268,10 +251,7 @@ export function sideCoverage(
 }
 
 /** union-find flush components: nodeId -> component root id */
-export function flushComponents(
-  nodes: GraphNode[],
-  segments: FlushSegment[],
-): Map<string, string> {
+export function flushComponents(nodes: GraphNode[], segments: FlushSegment[]): Map<string, string> {
   const parent = new Map<string, string>();
   const find = (id: string): string => {
     const p = parent.get(id) ?? id;
@@ -330,9 +310,7 @@ export function computePortLayout(
           .filter((o): o is GraphNode => !!o);
         // a wire dissolves only when its two nodes TOUCH (direct flush
         // contact) — being in the same stack without touching still draws
-        const external = others.filter(
-          (o) => !touching.has([n.id, o.id].sort().join("|")),
-        );
+        const external = others.filter((o) => !touching.has([n.id, o.id].sort().join("|")));
         const hidden = wires.length > 0 && external.length === 0;
 
         // edge choice: start at the node's flow side, then follow where the
@@ -342,12 +320,10 @@ export function computePortLayout(
         if (external.length) {
           if (isHorizontalSide(edge)) {
             const mean =
-              external.reduce((s, o) => s + o.y + nodeHeight(o) / 2, 0) /
-              external.length;
+              external.reduce((s, o) => s + o.y + nodeHeight(o) / 2, 0) / external.length;
             edge = mean >= n.y + nodeHeight(n) / 2 ? "bottom" : "top";
           } else {
-            const mean =
-              external.reduce((s, o) => s + o.x + o.w / 2, 0) / external.length;
+            const mean = external.reduce((s, o) => s + o.x + o.w / 2, 0) / external.length;
             edge = mean >= n.x + n.w / 2 ? "right" : "left";
           }
         }
@@ -408,21 +384,16 @@ export interface SnapConnectOptions {
  * Ports match nearest-first, one wire per port on each side, and an input
  * already fed by an authored edge is left alone.
  */
-export function snapConnections(
-  nodes: GraphNode[],
-  opts: SnapConnectOptions = {},
-): Edge[] {
+export function snapConnections(nodes: GraphNode[], opts: SnapConnectOptions = {}): Edge[] {
   const gate = opts.gate ?? sameKind;
   const takenIn = new Set<string>();
   const takenOut = new Set<string>();
-  for (const e of opts.existing ?? [])
-    if (!e.temp) takenIn.add(`${e.to.node}/${e.to.port}`);
+  for (const e of opts.existing ?? []) if (!e.temp) takenIn.add(`${e.to.node}/${e.to.port}`);
 
   const out: Edge[] = [];
   for (const seg of flushSegments(nodes)) {
     // ports pitch by rows down a vertical seam, by columns across a horizontal one
-    const tol =
-      opts.tolerance ?? (seg.axis === "v" ? NODE_ROW_H : NODE_COL_W) / 2;
+    const tol = opts.tolerance ?? (seg.axis === "v" ? NODE_ROW_H : NODE_COL_W) / 2;
     // the seam runs along one axis; each node meets it with one of its sides
     const sideFacing = (n: GraphNode): Side =>
       seg.axis === "v"
@@ -455,12 +426,7 @@ export function snapConnections(
           if (ia < seg.from - EPS || ia > seg.to + EPS) continue;
           const d = Math.abs(oa - ia);
           if (d > tol) continue;
-          if (
-            !gate(
-              { node: src, port: src.outputs[oi]! },
-              { node: dst, port: dst.inputs[ii]! },
-            )
-          )
+          if (!gate({ node: src, port: src.outputs[oi]! }, { node: dst, port: dst.inputs[ii]! }))
             continue;
           cands.push({ oi, ii, d });
         }

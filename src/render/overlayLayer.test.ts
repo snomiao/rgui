@@ -76,55 +76,30 @@ describe("overlay options survive a graph re-map", () => {
     expect(wrapOf(el).style.transform).toBe("translate(10px, 20px)");
 
     // the regression: mount captured the old options and never refreshed them
-    mgr.sync(
-      remap({ el, anchor: "below", offset: { x: 3, y: 4 } }),
-      null,
-      VIEW,
-      DEFAULT_RULE,
-    );
+    mgr.sync(remap({ el, anchor: "below", offset: { x: 3, y: 4 } }), null, VIEW, DEFAULT_RULE);
     // anchor "below" → node bottom-left (10, 20+160) plus the offset
     expect(wrapOf(el).style.transform).toBe("translate(13px, 184px)");
   });
 
   test("clip:'node' styles are cleared when a later object drops the clip", () => {
     const mgr = createOverlayManager(canvas);
-    mgr.sync(
-      remap({ el, anchor: "over", clip: "node" }),
-      null,
-      VIEW,
-      DEFAULT_RULE,
-    );
+    mgr.sync(remap({ el, anchor: "over", clip: "node" }), null, VIEW, DEFAULT_RULE);
     expect(wrapOf(el).style.width).toBe("200px");
     expect(wrapOf(el).style.pointerEvents).toBe("auto");
 
-    mgr.sync(
-      remap({ el, anchor: "over", clip: "viewport" }),
-      null,
-      VIEW,
-      DEFAULT_RULE,
-    );
+    mgr.sync(remap({ el, anchor: "over", clip: "viewport" }), null, VIEW, DEFAULT_RULE);
     expect(wrapOf(el).style.width).toBe("");
     expect(wrapOf(el).style.pointerEvents).toBe("none");
   });
 
   test("flipping `interactive` on a rebuilt overlay re-wires pointer events", () => {
     const mgr = createOverlayManager(canvas);
-    mgr.sync(
-      remap({ el, anchor: "over", interactive: false }),
-      null,
-      VIEW,
-      DEFAULT_RULE,
-    );
+    mgr.sync(remap({ el, anchor: "over", interactive: false }), null, VIEW, DEFAULT_RULE);
     expect(el.style.pointerEvents).toBe("none");
 
     const btn = document.createElement("button");
     el.appendChild(btn);
-    mgr.sync(
-      remap({ el, anchor: "over", interactive: true }),
-      null,
-      VIEW,
-      DEFAULT_RULE,
-    );
+    mgr.sync(remap({ el, anchor: "over", interactive: true }), null, VIEW, DEFAULT_RULE);
     // background stays click-through; the control itself becomes hittable
     expect(el.style.pointerEvents).toBe("none");
     expect(btn.style.pointerEvents).toBe("auto");
@@ -133,18 +108,8 @@ describe("overlay options survive a graph re-map", () => {
   test("unmount calls the LATEST destroy, not the one captured at mount", () => {
     const mgr = createOverlayManager(canvas);
     const calls: string[] = [];
-    mgr.sync(
-      remap({ el, destroy: () => calls.push("stale") }),
-      null,
-      VIEW,
-      DEFAULT_RULE,
-    );
-    mgr.sync(
-      remap({ el, destroy: () => calls.push("fresh") }),
-      null,
-      VIEW,
-      DEFAULT_RULE,
-    );
+    mgr.sync(remap({ el, destroy: () => calls.push("stale") }), null, VIEW, DEFAULT_RULE);
+    mgr.sync(remap({ el, destroy: () => calls.push("fresh") }), null, VIEW, DEFAULT_RULE);
 
     mgr.sync({ nodes: [], edges: [] }, null, VIEW, DEFAULT_RULE); // node removed
     expect(calls).toEqual(["fresh"]);
@@ -172,9 +137,7 @@ describe("clip:'node' background presses forward to the canvas", () => {
   });
 
   const press = (target: HTMLElement, type = "pointerdown") =>
-    target.dispatchEvent(
-      new MouseEvent(type, { bubbles: true, cancelable: true }),
-    );
+    target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
 
   test("a press on the wrap itself re-dispatches to the canvas", () => {
     const mgr = createOverlayManager(canvas);

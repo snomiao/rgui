@@ -71,11 +71,7 @@ export function finerStep(step: number, radix = DEFAULT_RULE.radix): number {
  * 1..radix grids. This is a node's intrinsic scale — its position snaps to
  * this layer's lattice (or the viewing grid, whichever is coarser).
  */
-export function sizeLayerStep(
-  size: number,
-  radix = DEFAULT_RULE.radix,
-  baseStep = 1,
-): number {
+export function sizeLayerStep(size: number, radix = DEFAULT_RULE.radix, baseStep = 1): number {
   if (size <= 0) return baseStep;
   let step = baseStep;
   while (step * radix < size) step *= radix;
@@ -145,12 +141,9 @@ export function sizeStepsFor(
   const shortStep = sizeLayerStep(Math.min(w, h), radix, baseStep);
   const longStep = Math.max(
     shortStep,
-    sizeLayerStep(Math.max(w, h), radix, baseStep) /
-      radix ** sizeLawDepth(law),
+    sizeLayerStep(Math.max(w, h), radix, baseStep) / radix ** sizeLawDepth(law),
   );
-  return w <= h
-    ? { w: shortStep, h: longStep }
-    : { w: longStep, h: shortStep };
+  return w <= h ? { w: shortStep, h: longStep } : { w: longStep, h: shortStep };
 }
 
 /**
@@ -176,8 +169,7 @@ export function snapNodeSize(
   baseStep = 1,
 ): { w: number; h: number } {
   const step = sizeStepsFor(w, h, radix, law, baseStep);
-  const cells = (v: number, s: number) =>
-    Math.max(1, Math.ceil(v / s - 1e-9)) * s;
+  const cells = (v: number, s: number) => Math.max(1, Math.ceil(v / s - 1e-9)) * s;
   return { w: cells(w, step.w), h: cells(h, step.h) };
 }
 

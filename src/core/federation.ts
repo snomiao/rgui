@@ -199,11 +199,11 @@ export function clampFederatedGraph(
       },
       size: {
         w: clampNumber(raw.size?.w, o.minSize, o.maxSize, DEFAULT_NODE_W),
-        h: raw.size?.h == null ? undefined : clampNumber(raw.size.h, o.minSize, o.maxSize, DEFAULT_NODE_H),
-        scale:
-          raw.size?.scale == null
+        h:
+          raw.size?.h == null
             ? undefined
-            : clampNumber(raw.size.scale, 0.25, 8, 1),
+            : clampNumber(raw.size.h, o.minSize, o.maxSize, DEFAULT_NODE_H),
+        scale: raw.size?.scale == null ? undefined : clampNumber(raw.size.scale, 0.25, 8, 1),
       },
       inputs: clampPorts(raw.inputs, o.maxTextLength),
       outputs: clampPorts(raw.outputs, o.maxTextLength),
@@ -213,8 +213,7 @@ export function clampFederatedGraph(
   }
 
   const finalNodeIds = new Set(nodes.map((n) => n.id));
-  for (const n of nodes)
-    if (n.parent && !finalNodeIds.has(n.parent)) n.parent = undefined;
+  for (const n of nodes) if (n.parent && !finalNodeIds.has(n.parent)) n.parent = undefined;
 
   const edges = env.graph.edges
     .slice(0, o.maxEdges)
@@ -244,7 +243,10 @@ export function clampFederatedGraph(
       origin: clampText(env.producer.origin, o.maxTextLength) || "unknown",
       label: env.producer.label ? clampText(env.producer.label, o.maxTextLength) : undefined,
     },
-    revision: typeof env.revision === "number" ? env.revision : clampText(String(env.revision), o.maxTextLength),
+    revision:
+      typeof env.revision === "number"
+        ? env.revision
+        : clampText(String(env.revision), o.maxTextLength),
     ts: Number.isFinite(env.ts) ? env.ts : Date.now(),
     graph: { nodes, edges },
   };
@@ -301,7 +303,9 @@ export function federatedGraphToRgui(
       pinned: true,
       remote: true,
       bg: n.private ? "#3a3036" : undefined,
-      draw: preview ? terminalPreviewDraw({ ...preview, title: preview.title ?? n.title }) : undefined,
+      draw: preview
+        ? terminalPreviewDraw({ ...preview, title: preview.title ?? n.title })
+        : undefined,
     });
   }
 
@@ -318,13 +322,43 @@ export function federatedGraphToRgui(
 export function federatedDemoChain(now = Date.now()): FederatedGraphEnvelope {
   const ids = FEDERATED_DEMO_CHAIN_IDS;
 
-  const textIn: FederatedPort = { id: "text-in", label: "text", kind: "text", signal: { measure: "extensive", ownership: "copy", fanout: "broadcast", merge: "concat" } };
-  const textOut: FederatedPort = { id: "text-out", label: "text", kind: "text", signal: { measure: "extensive", ownership: "copy", fanout: "broadcast", merge: "concat" } };
+  const textIn: FederatedPort = {
+    id: "text-in",
+    label: "text",
+    kind: "text",
+    signal: { measure: "extensive", ownership: "copy", fanout: "broadcast", merge: "concat" },
+  };
+  const textOut: FederatedPort = {
+    id: "text-out",
+    label: "text",
+    kind: "text",
+    signal: { measure: "extensive", ownership: "copy", fanout: "broadcast", merge: "concat" },
+  };
 
   const nodes: FederatedNode[] = [
-    demoNode(ids.plain, "otoji", "plaintext-node", "Plaintext", -640, 0, [], [textOut], "otoji:browser"),
+    demoNode(
+      ids.plain,
+      "otoji",
+      "plaintext-node",
+      "Plaintext",
+      -640,
+      0,
+      [],
+      [textOut],
+      "otoji:browser",
+    ),
     {
-      ...demoNode(ids.codex, "agent-yes", "codex-agent", "Codex Agent", -320, 0, [textIn], [textOut], "agent-yes:codex"),
+      ...demoNode(
+        ids.codex,
+        "agent-yes",
+        "codex-agent",
+        "Codex Agent",
+        -320,
+        0,
+        [textIn],
+        [textOut],
+        "agent-yes:codex",
+      ),
       renderHints: {
         preview: {
           kind: "terminal",
@@ -341,10 +375,62 @@ export function federatedDemoChain(now = Date.now()): FederatedGraphEnvelope {
         } satisfies TerminalPreview,
       },
     },
-    demoNode(ids.diff, "rgui", "text-diff-node", "Text Diff", 0, 0, [textIn], [textOut], "rgui:demo"),
-    demoNode(ids.filter, "rgui", "filter-node", "Filter: added text", 320, 0, [textIn], [textOut], "rgui:demo"),
-    demoNode(ids.translate, "otoji", "browser-translator-api", "Browser Translator en to ja", 640, 0, [textIn], [textOut], "otoji:browser"),
-    demoNode(ids.tts, "otoji", "in-browser-tts-node", "In-browser TTS", 960, 0, [textIn], [{ id: "audio-out", label: "audio", kind: "audio", signal: { measure: "extensive", ownership: "clone", fanout: "broadcast", merge: "concat" } }], "otoji:browser"),
+    demoNode(
+      ids.diff,
+      "rgui",
+      "text-diff-node",
+      "Text Diff",
+      0,
+      0,
+      [textIn],
+      [textOut],
+      "rgui:demo",
+    ),
+    demoNode(
+      ids.filter,
+      "rgui",
+      "filter-node",
+      "Filter: added text",
+      320,
+      0,
+      [textIn],
+      [textOut],
+      "rgui:demo",
+    ),
+    demoNode(
+      ids.translate,
+      "otoji",
+      "browser-translator-api",
+      "Browser Translator en to ja",
+      640,
+      0,
+      [textIn],
+      [textOut],
+      "otoji:browser",
+    ),
+    demoNode(
+      ids.tts,
+      "otoji",
+      "in-browser-tts-node",
+      "In-browser TTS",
+      960,
+      0,
+      [textIn],
+      [
+        {
+          id: "audio-out",
+          label: "audio",
+          kind: "audio",
+          signal: {
+            measure: "extensive",
+            ownership: "clone",
+            fanout: "broadcast",
+            merge: "concat",
+          },
+        },
+      ],
+      "otoji:browser",
+    ),
   ];
 
   return {
@@ -364,7 +450,14 @@ export function federatedDemoChain(now = Date.now()): FederatedGraphEnvelope {
       ],
     },
     capabilities: {
-      nodeTypes: ["plaintext-node", "codex-agent", "text-diff-node", "filter-node", "browser-translator-api", "in-browser-tts-node"],
+      nodeTypes: [
+        "plaintext-node",
+        "codex-agent",
+        "text-diff-node",
+        "filter-node",
+        "browser-translator-api",
+        "in-browser-tts-node",
+      ],
       portTypes: ["text", "audio"],
       previewKinds: ["text", "terminal", "speech"],
     },
@@ -439,12 +532,15 @@ function federatedNodeFields(n: FederatedNode): [string, string][] {
 }
 
 function clampPorts(ports: FederatedPort[] | undefined, maxText: number): FederatedPort[] {
-  return (ports ?? []).slice(0, 64).map((p) => ({
-    ...p,
-    id: clampText(p.id, maxText),
-    label: p.label ? clampText(p.label, maxText) : undefined,
-    kind: clampText(p.kind, maxText) as SignalKind,
-  })).filter((p) => p.id && p.kind);
+  return (ports ?? [])
+    .slice(0, 64)
+    .map((p) => ({
+      ...p,
+      id: clampText(p.id, maxText),
+      label: p.label ? clampText(p.label, maxText) : undefined,
+      kind: clampText(p.kind, maxText) as SignalKind,
+    }))
+    .filter((p) => p.id && p.kind);
 }
 
 function clampPublicRecord(

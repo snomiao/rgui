@@ -56,10 +56,7 @@ const mkGraph = (): Graph => ({
 
 /** happy-dom's MouseEvent does not derive offsetX, so build the event by hand */
 const ptr = (type: string, ox: number, oy: number) => {
-  const e = new Event(type, { bubbles: true }) as unknown as Record<
-    string,
-    unknown
-  >;
+  const e = new Event(type, { bubbles: true }) as unknown as Record<string, unknown>;
   e.offsetX = ox;
   e.offsetY = oy;
   e.button = 0;

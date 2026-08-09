@@ -1,18 +1,10 @@
 {
   "compilerOptions": {
-    "lib": [
-      "ESNext",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
-    "types": [
-      "vite/client",
-      "bun",
-      "@webgpu/types"
-    ],
+    "types": ["vite/client", "bun", "@webgpu/types"],
     "moduleResolution": "bundler",
     "verbatimModuleSyntax": true,
     "noEmit": true,
@@ -22,7 +14,5 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true
   },
-  "include": [
-    "src"
-  ]
+  "include": ["src"]
 }

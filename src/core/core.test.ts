@@ -32,44 +32,15 @@ import {
   type GraphNode,
 } from "./graph";
 import { kindColor, categoryColor, KIND_COLOR } from "../render/graphLayer";
-import {
-  panelCoverage,
-  panelSnap,
-  PANEL,
-  type Panel,
-  type PanelRect,
-} from "../render/panelLayer";
+import { panelCoverage, panelSnap, PANEL, type Panel, type PanelRect } from "../render/panelLayer";
 import { buildRenderGraph, pseudoRect } from "./lod";
-import {
-  clampSize,
-  flushSegments,
-  resolveOverlap,
-  snapConnections,
-} from "./pack";
+import { clampSize, flushSegments, resolveOverlap, snapConnections } from "./pack";
 import { layoutGraph } from "./layout";
-import {
-  gripBase,
-  gripRescale,
-  gripResize,
-  MAX_SCALE,
-  MIN_SCALE,
-} from "./grip";
+import { gripBase, gripRescale, gripResize, MAX_SCALE, MIN_SCALE } from "./grip";
 import { DEFAULT_RULE } from "./rule";
-import {
-  aggregate,
-  fieldSummarize,
-  ordered,
-  quantile,
-  topK,
-} from "./aggregate";
+import { aggregate, fieldSummarize, ordered, quantile, topK } from "./aggregate";
 
-const mkNode = (
-  id: string,
-  x: number,
-  y: number,
-  w = 200,
-  fields = 2,
-): GraphNode => ({
+const mkNode = (id: string, x: number, y: number, w = 200, fields = 2): GraphNode => ({
   id,
   title: id,
   category: "source",
@@ -499,11 +470,15 @@ describe("cascading RG", () => {
     const c = mkNode("c", 40, 200, 200, 6); // tall (readable), between them
     // force a+b into one cluster via connection at close gap: instead place
     // them near each other vertically around c so the enclosure covers c
-    a.y = 100; b.y = 420; // gap 252wu*0.7=176px > budgets... use flush chain:
+    a.y = 100;
+    b.y = 420; // gap 252wu*0.7=176px > budgets... use flush chain:
     // simplest: snap a and b to c? Instead: make a and b flush-stacked pair
     // whose enclosure box (min size at k) overlaps c.
-    b.x = 0; b.y = 100 + nodeHeight(a); // flush under a
-    c.x = 40; c.y = 120; c.w = 200; // sits on top of the pair's enclosure
+    b.x = 0;
+    b.y = 100 + nodeHeight(a); // flush under a
+    c.x = 40;
+    c.y = 120;
+    c.w = 200; // sits on top of the pair's enclosure
     const g = { nodes: [a, b, c], edges: [] };
     const rg = buildRenderGraph(g, 0.7);
     // c must be absorbed: no expanded nodes left, one block with all three
@@ -570,12 +545,18 @@ describe("data merge rules", () => {
   test("node-declared fieldRules win over host map and fallback", () => {
     const a = {
       ...mkNode("a", 0, 0),
-      fields: [["score", "0.5"], ["vad", "off"]] as [string, string][],
+      fields: [
+        ["score", "0.5"],
+        ["vad", "off"],
+      ] as [string, string][],
       fieldRules: { score: "max" as const, vad: "any" as const },
     };
     const b = {
       ...mkNode("b", 0, 0),
-      fields: [["score", "0.8"], ["vad", "on"]] as [string, string][],
+      fields: [
+        ["score", "0.8"],
+        ["vad", "on"],
+      ] as [string, string][],
     };
     // no host config at all — the node's own rules apply
     const out = fieldSummarize()([a, b], {
@@ -585,22 +566,37 @@ describe("data merge rules", () => {
     });
     expect(out).toEqual({
       kind: "kv",
-      rows: [["score", "0.8"], ["vad", "on"]],
+      rows: [
+        ["score", "0.8"],
+        ["vad", "on"],
+      ],
     });
   });
 
   test("fieldSummarize merges member fields into kv rows", () => {
     const a = {
       ...mkNode("a", 0, 0),
-      fields: [["lang", "ja"], ["score", "0.5"]] as [string, string][],
+      fields: [
+        ["lang", "ja"],
+        ["score", "0.5"],
+      ] as [string, string][],
     };
     const b = {
       ...mkNode("b", 0, 0),
-      fields: [["lang", "ja"], ["score", "0.8"]] as [string, string][],
+      fields: [
+        ["lang", "ja"],
+        ["score", "0.8"],
+      ] as [string, string][],
     };
     const f = fieldSummarize({ score: "max" });
     const out = f([a, b], { collapsed: true, level: "pseudo", screen: { w: 200, h: 100 } });
-    expect(out).toEqual({ kind: "kv", rows: [["lang", "ja ×2"], ["score", "0.8"]] });
+    expect(out).toEqual({
+      kind: "kv",
+      rows: [
+        ["lang", "ja ×2"],
+        ["score", "0.8"],
+      ],
+    });
   });
 });
 
@@ -609,18 +605,14 @@ describe("merge combinators extend the simple rules", () => {
     const worst = ordered(["ok", "warn", "error"]);
     expect(aggregate(["ok", "error", "warn"], worst)).toBe("error");
     const latest = ordered((v) => Date.parse(v), "max");
-    expect(
-      aggregate(["2026-01-01", "2026-07-08", "2025-12-31"], latest),
-    ).toBe("2026-07-08");
+    expect(aggregate(["2026-01-01", "2026-07-08", "2025-12-31"], latest)).toBe("2026-07-08");
   });
   test("median: plain rule, robust middle", () => {
     expect(aggregate(["1", "9", "5"], "median")).toBe("5");
     expect(aggregate(["1", "9"], "median")).toBe("5");
   });
   test("quantile: advanced combinator for the rare p95 case", () => {
-    expect(
-      parseFloat(aggregate(["1", "2", "3", "4", "100"], quantile(0.95))),
-    ).toBeCloseTo(80.8, 6);
+    expect(parseFloat(aggregate(["1", "2", "3", "4", "100"], quantile(0.95)))).toBeCloseTo(80.8, 6);
     expect(aggregate(["1", "9", "5"], quantile(0.5))).toBe("5");
   });
   test("topK: histogram generalizes mode", () => {
@@ -633,20 +625,14 @@ describe("merge combinators extend the simple rules", () => {
 describe("rg rule", () => {
   test("defaults are sane", () => {
     expect(DEFAULT_RULE.radix).toBe(8);
-    expect(DEFAULT_RULE.clusterGapConnectedPx).toBeGreaterThan(
-      DEFAULT_RULE.clusterGapPx,
-    );
+    expect(DEFAULT_RULE.clusterGapConnectedPx).toBeGreaterThan(DEFAULT_RULE.clusterGapPx);
   });
 });
 
 describe("containment", () => {
   test("childrenOf / descendantsOf / containmentOf walk the hierarchy", () => {
     const g = orgChartGraph();
-    expect(childrenOf(g, "team-eng").map((n) => n.id)).toEqual([
-      "lead-eng",
-      "eng-a",
-      "eng-b",
-    ]);
+    expect(childrenOf(g, "team-eng").map((n) => n.id)).toEqual(["lead-eng", "eng-a", "eng-b"]);
     // descendants of the company include people two levels down
     const all = descendantsOf(g, "company").map((n) => n.id);
     expect(all).toContain("team-eng");
@@ -744,15 +730,12 @@ describe("containment", () => {
       { ...mkNode("b", 2136, 600, 128, 1), parent: "c2" },
     ];
     const rg = buildRenderGraph({ nodes, edges: [] }, 0.5);
-    for (const p of rg.pseudo)
-      expect(p.members.map((m) => m.id).sort()).not.toEqual(["a", "b"]);
+    for (const p of rg.pseudo) expect(p.members.map((m) => m.id).sort()).not.toEqual(["a", "b"]);
     // control: strip the containment and the same geometry merges
     const flat = nodes.map((n) => ({ ...n, parent: undefined }));
     const free = buildRenderGraph({ nodes: flat, edges: [] }, 0.5);
     expect(
-      free.pseudo.some((p) =>
-        ["a", "b"].every((id) => p.members.some((m) => m.id === id)),
-      ),
+      free.pseudo.some((p) => ["a", "b"].every((id) => p.members.some((m) => m.id === id))),
     ).toBe(true);
   });
 });
@@ -903,10 +886,7 @@ describe("corner-grip gestures (resize ⇄ rescale)", () => {
     n.h = s.h;
     n.scale = s.scale;
   };
-  const corner = (n: GraphNode): [number, number] => [
-    n.x + n.w,
-    n.y + nodeHeight(n),
-  ];
+  const corner = (n: GraphNode): [number, number] => [n.x + n.w, n.y + nodeHeight(n)];
 
   test("resize reflows: footprint grows, content scale untouched", () => {
     const n = node();
@@ -1005,12 +985,8 @@ describe("size law: which layer do the two axes agree on?", () => {
       [3, 40],
       [200, 200],
     ] as const) {
-      expect(snapNodeSize(w, h, 8, "per-axis")).toEqual(
-        snapNodeSize(w, h, 8, "finest-axis"),
-      );
-      expect(snapNodeSize(w, h, 8, "sibling")).toEqual(
-        snapNodeSize(w, h, 8, "per-axis"),
-      );
+      expect(snapNodeSize(w, h, 8, "per-axis")).toEqual(snapNodeSize(w, h, 8, "finest-axis"));
+      expect(snapNodeSize(w, h, 8, "sibling")).toEqual(snapNodeSize(w, h, 8, "per-axis"));
     }
   });
 

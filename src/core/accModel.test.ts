@@ -2,11 +2,7 @@ import { expect, test } from "bun:test";
 import { AccModel2D } from "./accModel.js";
 
 /** Drive a model holding one direction for `holdMs` at `fps`, return travel. */
-function travel(
-  fps: number,
-  holdMs: number,
-  press: (m: AccModel2D, t: number) => void,
-): number {
+function travel(fps: number, holdMs: number, press: (m: AccModel2D, t: number) => void): number {
   const m = new AccModel2D(1600);
   const step = 1000 / fps;
   let t = 0;

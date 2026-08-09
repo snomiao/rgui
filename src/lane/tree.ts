@@ -166,8 +166,7 @@ function fit(ctx: CanvasRenderingContext2D, text: string, maxW: number): string 
   return lo === 0 ? "" : text.slice(0, lo) + "…";
 }
 
-const indentX = (depth: number) =>
-  PAD_X + Math.min(depth, MAX_INDENT_DEPTH) * INDENT;
+const indentX = (depth: number) => PAD_X + Math.min(depth, MAX_INDENT_DEPTH) * INDENT;
 
 /** tree source with an optional lazy content loader (host wires setOnUpdate) */
 export interface TreeSource extends LaneSource {
@@ -175,25 +174,118 @@ export interface TreeSource extends LaneSource {
 }
 
 const TEXT_EXT = new Set([
-  "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "json5", "md", "markdown",
-  "txt", "rst", "adoc", "tex", "css", "scss", "less", "styl", "html", "htm",
-  "xml", "svg", "vue", "svelte", "astro", "yml", "yaml", "toml", "ini", "cfg",
-  "conf", "properties", "env", "c", "h", "cc", "cpp", "hpp", "cxx", "hxx", "m",
-  "mm", "cs", "go", "rs", "java", "kt", "kts", "scala", "clj", "py", "pyi",
-  "rb", "php", "lua", "sh", "bash", "zsh", "fish", "ps1", "bat", "sql", "r",
-  "pl", "pm", "swift", "dart", "ex", "exs", "erl", "hs", "ml", "fs", "vim",
-  "asm", "s", "S", "dts", "dtsi", "cmake", "mk", "in", "ac", "am", "gradle",
-  "proto", "graphql", "gql", "diff", "patch", "csv", "tsv", "log", "gitignore",
-  "gitattributes", "editorconfig", "lock", "makefile", "dockerfile", "readme",
-  "license", "authors", "changelog", "todo", "kbuild", "kconfig", "defconfig",
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "json",
+  "json5",
+  "md",
+  "markdown",
+  "txt",
+  "rst",
+  "adoc",
+  "tex",
+  "css",
+  "scss",
+  "less",
+  "styl",
+  "html",
+  "htm",
+  "xml",
+  "svg",
+  "vue",
+  "svelte",
+  "astro",
+  "yml",
+  "yaml",
+  "toml",
+  "ini",
+  "cfg",
+  "conf",
+  "properties",
+  "env",
+  "c",
+  "h",
+  "cc",
+  "cpp",
+  "hpp",
+  "cxx",
+  "hxx",
+  "m",
+  "mm",
+  "cs",
+  "go",
+  "rs",
+  "java",
+  "kt",
+  "kts",
+  "scala",
+  "clj",
+  "py",
+  "pyi",
+  "rb",
+  "php",
+  "lua",
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "ps1",
+  "bat",
+  "sql",
+  "r",
+  "pl",
+  "pm",
+  "swift",
+  "dart",
+  "ex",
+  "exs",
+  "erl",
+  "hs",
+  "ml",
+  "fs",
+  "vim",
+  "asm",
+  "s",
+  "S",
+  "dts",
+  "dtsi",
+  "cmake",
+  "mk",
+  "in",
+  "ac",
+  "am",
+  "gradle",
+  "proto",
+  "graphql",
+  "gql",
+  "diff",
+  "patch",
+  "csv",
+  "tsv",
+  "log",
+  "gitignore",
+  "gitattributes",
+  "editorconfig",
+  "lock",
+  "makefile",
+  "dockerfile",
+  "readme",
+  "license",
+  "authors",
+  "changelog",
+  "todo",
+  "kbuild",
+  "kconfig",
+  "defconfig",
 ]);
 const isText = (t: TNode) =>
   t.ext === "" || TEXT_EXT.has(t.ext) || TEXT_EXT.has(t.name.toLowerCase());
 
-export function createTreeSource(
-  root: FileNode,
-  opts: TreeOptions = {},
-): TreeSource {
+export function createTreeSource(root: FileNode, opts: TreeOptions = {}): TreeSource {
   const tree = build(root, 0);
   const fetchContent = opts.fetchContent;
   let onUpdate: () => void = opts.onUpdate ?? (() => {});
@@ -413,9 +505,7 @@ export function createTreeSource(
         const indent = line.length - trimmed.length;
         const charW = Math.max(1, lineH * 0.55);
         const isComment = /^(\/\/|#|\*|<!--)/.test(trimmed);
-        ctx.fillStyle = isComment
-          ? withAlpha(theme.textFaint, 0.5)
-          : withAlpha(color, 0.45);
+        ctx.fillStyle = isComment ? withAlpha(theme.textFaint, 0.5) : withAlpha(color, 0.45);
         ctx.fillRect(
           tx + indent * charW,
           ly + lineH * 0.2,
@@ -542,11 +632,7 @@ export function createTreeSource(
     ctx.font = "10px ui-monospace, Menlo, monospace";
     ctx.textAlign = "left";
     ctx.fillStyle = theme.textMuted;
-    ctx.fillText(
-      `⋯ ${count} more · ${fmtCount(files)} · ${fmtBytes(size)}`,
-      x + 6,
-      mid,
-    );
+    ctx.fillText(`⋯ ${count} more · ${fmtCount(files)} · ${fmtBytes(size)}`, x + 6, mid);
     ctx.textAlign = "left";
   }
 

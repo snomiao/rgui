@@ -39,7 +39,11 @@ const LINE_FG = "#8b949e";
 /** Build a `GraphNode.draw` hook for one terminal preview. */
 export function terminalPreviewDraw(
   preview: TerminalPreview,
-): (ctx: CanvasRenderingContext2D, rect: { width: number; height: number }, view?: { k: number }) => void {
+): (
+  ctx: CanvasRenderingContext2D,
+  rect: { width: number; height: number },
+  view?: { k: number },
+) => void {
   return (ctx, rect, view) => {
     const w = rect.width;
     const h = rect.height;

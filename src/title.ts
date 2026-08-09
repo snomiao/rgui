@@ -27,11 +27,17 @@ function hash2(ix: number, iy: number): number {
 }
 /** tileable value noise: lattice wraps mod (P,Q) so whole-period scrolls loop */
 function vnoiseT(x: number, y: number, P: number, Q: number): number {
-  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
-  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const ix = Math.floor(x),
+    iy = Math.floor(y),
+    fx = x - ix,
+    fy = y - iy;
+  const u = fx * fx * (3 - 2 * fx),
+    v = fy * fy * (3 - 2 * fy);
   const m = (a: number, p: number) => ((a % p) + p) % p;
-  const a = hash2(m(ix, P), m(iy, Q)), b = hash2(m(ix + 1, P), m(iy, Q));
-  const c = hash2(m(ix, P), m(iy + 1, Q)), d = hash2(m(ix + 1, P), m(iy + 1, Q));
+  const a = hash2(m(ix, P), m(iy, Q)),
+    b = hash2(m(ix + 1, P), m(iy, Q));
+  const c = hash2(m(ix, P), m(iy + 1, Q)),
+    d = hash2(m(ix + 1, P), m(iy + 1, Q));
   return a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v;
 }
 const rampIdx = (t: number, thr: number) => {
@@ -42,9 +48,11 @@ const rampIdx = (t: number, thr: number) => {
 
 const WORD = "RGUI";
 const CELL = 4; // dither cell size in CSS px
-const P = 8, Q = 8; // noise tile periods
+const P = 8,
+  Q = 8; // noise tile periods
 const LOOP_MS = 4800; // pattern scroll period (whole-period → seamless)
-const BLINK_EVERY = 6200, BLINK_MS = 200;
+const BLINK_EVERY = 6200,
+  BLINK_MS = 200;
 const CYCLE_MS = 30_000; // one closed lap of the pool — exactly home every cycle
 const PERSP = 620; // perspective strength: scale = PERSP/(PERSP - z)
 
@@ -61,8 +69,7 @@ if (title) {
   if (!behind) {
     behind = document.createElement("div");
     behind.id = "title-behind";
-    behind.style.cssText =
-      "position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;";
+    behind.style.cssText = "position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;";
     document.body.appendChild(behind);
   }
   behind.appendChild(cv);
@@ -74,7 +81,11 @@ if (title) {
     title.style.textShadow = "none"; // else the static DOM text casts a ghost
 
     // generous overflow room: the fish needs water around the h1 box
-    let w = 0, h = 0, dpr = 1, padX = 0, padY = 0;
+    let w = 0,
+      h = 0,
+      dpr = 1,
+      padX = 0,
+      padY = 0;
     const resize = () => {
       dpr = devicePixelRatio || 1;
       w = title.clientWidth;
@@ -116,9 +127,7 @@ if (title) {
       sprites = [...WORD].map((ch) => {
         const m = meas.measureText(ch);
         const cw = Math.ceil(m.width) + 8;
-        const chh = Math.ceil(
-          m.actualBoundingBoxAscent + m.actualBoundingBoxDescent,
-        ) + 8;
+        const chh = Math.ceil(m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) + 8;
         const sprite = document.createElement("canvas");
         sprite.width = cw * dpr;
         sprite.height = chh * dpr;
@@ -127,9 +136,7 @@ if (title) {
         const cctx = cells.getContext("2d")!;
         return { ch, cw, chh, sprite, sctx, cells, cctx };
       });
-      spacings = sprites.map((s, i) =>
-        i === 0 ? 0 : (sprites[i - 1]!.cw + s.cw) / 2 - 6,
-      );
+      spacings = sprites.map((s, i) => (i === 0 ? 0 : (sprites[i - 1]!.cw + s.cw) / 2 - 6));
       return font;
     };
     let font = buildSprites();
@@ -143,10 +150,10 @@ if (title) {
     // θ starts at π/2 so t=0 is the front-pass reading pose.
     const swimPos = (tSwim: number): [number, number, number] => {
       const th =
-        Math.PI / 2 +
-        (((tSwim % CYCLE_MS) + CYCLE_MS) % CYCLE_MS) * ((Math.PI * 2) / CYCLE_MS);
+        Math.PI / 2 + (((tSwim % CYCLE_MS) + CYCLE_MS) % CYCLE_MS) * ((Math.PI * 2) / CYCLE_MS);
       const XA = Math.min(Math.max((w - 320) / 2, 140), 520);
-      const YA = Math.min(48, padY * 0.3), ZA = 110; // shallow bob: stay in the viewport
+      const YA = Math.min(48, padY * 0.3),
+        ZA = 110; // shallow bob: stay in the viewport
       return [
         XA * (Math.cos(th) + 0.1 * Math.sin(2 * th + 1.3)),
         YA * Math.sin(2 * th + 0.6),
@@ -159,8 +166,7 @@ if (title) {
     let bias = 0;
     let kLast: number | null = null;
     const zoomBias = () => {
-      const k = (window as unknown as { viewer?: { view?: { k: number } } })
-        .viewer?.view?.k;
+      const k = (window as unknown as { viewer?: { view?: { k: number } } }).viewer?.view?.k;
       if (typeof k !== "number") return 0;
       if (kLast === null) kLast = k;
       const dk = Math.log2(k / kLast);
@@ -174,11 +180,12 @@ if (title) {
     // blink (with dev hook)
     let nextBlink = performance.now() + 3000;
     let holdLidUntil = 0;
-    (window as unknown as { __rguiBlink?: (holdMs?: number) => void }).__rguiBlink =
-      (holdMs = 0) => {
-        nextBlink = performance.now();
-        holdLidUntil = performance.now() + holdMs;
-      };
+    (window as unknown as { __rguiBlink?: (holdMs?: number) => void }).__rguiBlink = (
+      holdMs = 0,
+    ) => {
+      nextBlink = performance.now();
+      holdLidUntil = performance.now() + holdMs;
+    };
 
     /** paint one char sprite: glyph mask filled with its body segment of the pattern */
     const paintSprite = (s: Sprite, i: number, u: number, b: number, lid: number) => {
@@ -189,8 +196,7 @@ if (title) {
         cells.width = w2;
         cells.height = h2;
       }
-      if (!s.img || s.img.width !== w2 || s.img.height !== h2)
-        s.img = cctx.createImageData(w2, h2);
+      if (!s.img || s.img.width !== w2 || s.img.height !== h2) s.img = cctx.createImageData(w2, h2);
       const img = s.img;
       const d = img.data;
       for (let cy = 0; cy < h2; cy++)
@@ -200,16 +206,14 @@ if (title) {
           const raw = (i + local) / WORD.length;
           const t = 0.12 + clamp01((raw - 0.5) * 1.7 + 0.5) * 0.88 + b;
           // world-ish cell coords so the current flows continuously across chars
-          const thr = vnoiseT(
-            (cx + i * w2) * 0.5 - P * u,
-            cy * 0.5 - Q * u,
-            P,
-            Q,
-          );
+          const thr = vnoiseT((cx + i * w2) * 0.5 - P * u, cy * 0.5 - Q * u, P, Q);
           const idx = rampIdx(t, clamp01(thr * 1.3 - 0.15));
           const c = RGB[idx] ?? RGB[0]!;
           const o = (cy * w2 + cx) * 4;
-          d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+          d[o] = c[0];
+          d[o + 1] = c[1];
+          d[o + 2] = c[2];
+          d[o + 3] = 255;
         }
       cctx.putImageData(img, 0, 0);
 
@@ -222,7 +226,8 @@ if (title) {
       sctx.fillStyle = "#fff";
       const m = sctx.measureText(s.ch);
       const yMid =
-        chh / 2 + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2 -
+        chh / 2 +
+        (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2 -
         (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) / 2 +
         (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) / 2;
       sctx.fillText(s.ch, cw / 2, yMid);
@@ -264,14 +269,14 @@ if (title) {
       const b = reduced ? 0 : zoomBias();
 
       // --- advance the swim along the circuit ---
-      if (hist.length === 0)
-        for (let j = 1; j <= 900; j++) hist.push(swimPos(tSwim - j * 16));
+      if (hist.length === 0) for (let j = 1; j <= 900; j++) hist.push(swimPos(tSwim - j * 16));
       hist.unshift(swimPos(tSwim));
       if (hist.length > 900) hist.length = 900;
 
       // --- thread chars along the path by arc length ---
       const pos: [number, number, number][] = [];
-      let hi = 0, acc = 0;
+      let hi = 0,
+        acc = 0;
       let prev = hist[0]!;
       for (let i = 0; i < sprites.length; i++) {
         const target = spacings.slice(0, i + 1).reduce((a, c) => a + c, 0);
@@ -297,10 +302,9 @@ if (title) {
 
       // --- paint sprites, then composite far → near ---
       sprites.forEach((s, i) => paintSprite(s, i, u, b, lid));
-      const order = sprites
-        .map((_, i) => i)
-        .sort((a, bb) => pos[a]![2] - pos[bb]![2]); // ascending z: far first
-      const CW = w + 2 * padX, CH = h + 2 * padY;
+      const order = sprites.map((_, i) => i).sort((a, bb) => pos[a]![2] - pos[bb]![2]); // ascending z: far first
+      const CW = w + 2 * padX,
+        CH = h + 2 * padY;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, CW, CH);
       ctx.imageSmoothingEnabled = true;
@@ -315,13 +319,7 @@ if (title) {
         const sx = CW / 2 + p[0] * f;
         const sy = CH / 2 + p[1] * f;
         const s = sprites[i]!;
-        ctx.drawImage(
-          s.sprite,
-          sx - (s.cw * f) / 2,
-          sy - (s.chh * f) / 2,
-          s.cw * f,
-          s.chh * f,
-        );
+        ctx.drawImage(s.sprite, sx - (s.cw * f) / 2, sy - (s.chh * f) / 2, s.cw * f, s.chh * f);
       }
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;

@@ -59,9 +59,7 @@ function attach() {
   };
   cv.addEventListener("pointerup", end);
   cv.addEventListener("pointercancel", end);
-  cv.addEventListener("dblclick", () =>
-    viewer.setRotation3({ yaw: 0, pitch: 0, roll: 0 }),
-  );
+  cv.addEventListener("dblclick", () => viewer.setRotation3({ yaw: 0, pitch: 0, roll: 0 }));
 }
 
 attach();

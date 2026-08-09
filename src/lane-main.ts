@@ -24,9 +24,7 @@ function renderNet() {
     netEl.textContent = "";
     return;
   }
-  const via = [...net.hosts.entries()]
-    .map(([h, c]) => `${SHORT[h] ?? h} ${c}`)
-    .join(" · ");
+  const via = [...net.hosts.entries()].map(([h, c]) => `${SHORT[h] ?? h} ${c}`).join(" · ");
   netEl.innerHTML =
     `<span class="dim">net</span> ${net.inflight} live · ${net.total} req` +
     (net.err ? ` · <span class="hi">${net.err} err</span>` : "") +
@@ -36,7 +34,7 @@ const _fetch = window.fetch.bind(window);
 const trackedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
   let host = "?";
   try {
-    const u = typeof input === "string" ? input : (input as Request).url ?? String(input);
+    const u = typeof input === "string" ? input : ((input as Request).url ?? String(input));
     host = new URL(u, location.href).host;
   } catch {
     /* ignore */
@@ -82,22 +80,63 @@ function genTree(seed: number): FileNode {
   const rnd = mulberry32(seed);
   const pick = <T>(a: T[]): T => a[(rnd() * a.length) | 0]!;
   const words = [
-    "core", "utils", "render", "model", "view", "graph", "layout", "index",
-    "parser", "cache", "worker", "client", "server", "store", "hooks", "theme",
-    "codec", "buffer", "stream", "vector", "matrix", "shader", "atlas", "query",
+    "core",
+    "utils",
+    "render",
+    "model",
+    "view",
+    "graph",
+    "layout",
+    "index",
+    "parser",
+    "cache",
+    "worker",
+    "client",
+    "server",
+    "store",
+    "hooks",
+    "theme",
+    "codec",
+    "buffer",
+    "stream",
+    "vector",
+    "matrix",
+    "shader",
+    "atlas",
+    "query",
   ];
   const codeExt = ["ts", "tsx", "js", "json"];
   const docExt = ["md", "txt"];
   const assetExt = ["png", "svg", "gif", "css"];
   const BINARY = new Set(["png", "svg", "gif", "jpg"]);
-  const kb = (min: number, max: number) =>
-    Math.round((min + rnd() * (max - min)) * 1024);
+  const kb = (min: number, max: number) => Math.round((min + rnd() * (max - min)) * 1024);
 
   // plausible, deterministic source text so zooming into a file reveals code
   const ids = [
-    "value", "result", "node", "item", "index", "data", "ctx", "view", "state",
-    "total", "count", "buffer", "offset", "width", "height", "color", "input",
-    "output", "cursor", "layout", "bounds", "weight", "depth", "sample",
+    "value",
+    "result",
+    "node",
+    "item",
+    "index",
+    "data",
+    "ctx",
+    "view",
+    "state",
+    "total",
+    "count",
+    "buffer",
+    "offset",
+    "width",
+    "height",
+    "color",
+    "input",
+    "output",
+    "cursor",
+    "layout",
+    "bounds",
+    "weight",
+    "depth",
+    "sample",
   ];
   const types = ["number", "string", "Node", "View", "Rect", "boolean", "T"];
   function genCode(name: string, n: number): string {
@@ -141,21 +180,14 @@ function genTree(seed: number): FileNode {
     return node;
   };
 
-  const dir = (
-    name: string,
-    depth: number,
-    maxDepth: number,
-    fan: number,
-  ): FileNode => {
+  const dir = (name: string, depth: number, maxDepth: number, fan: number): FileNode => {
     const children: FileNode[] = [];
     const nFiles = 1 + ((rnd() * fan) | 0);
     for (let i = 0; i < nFiles; i++) children.push(file(pick(words), codeExt));
     if (depth < maxDepth) {
       const nDirs = (rnd() * Math.max(1, fan - depth)) | 0;
       for (let i = 0; i < nDirs; i++) {
-        children.push(
-          dir(pick(words), depth + 1, maxDepth, Math.max(2, fan - 1)),
-        );
+        children.push(dir(pick(words), depth + 1, maxDepth, Math.max(2, fan - 1)));
       }
     }
     return { name, children };
@@ -164,9 +196,26 @@ function genTree(seed: number): FileNode {
   // a believable monorepo: a big node_modules + a real-looking source tree
   const pkgs: FileNode[] = [];
   const pkgNames = [
-    "react", "react-dom", "vite", "d3-zoom", "d3-selection", "typescript",
-    "esbuild", "rollup", "lodash", "zod", "chalk", "commander", "picocolors",
-    "semver", "glob", "yargs", "date-fns", "nanoid", "ws", "undici",
+    "react",
+    "react-dom",
+    "vite",
+    "d3-zoom",
+    "d3-selection",
+    "typescript",
+    "esbuild",
+    "rollup",
+    "lodash",
+    "zod",
+    "chalk",
+    "commander",
+    "picocolors",
+    "semver",
+    "glob",
+    "yargs",
+    "date-fns",
+    "nanoid",
+    "ws",
+    "undici",
   ];
   for (const p of pkgNames) {
     const files: FileNode[] = [
@@ -323,12 +372,18 @@ type LanePrefs = { autoZoomOut: boolean; glide: boolean; heat: boolean };
 const prefs: LanePrefs = { autoZoomOut: false, glide: true, heat: true };
 try {
   Object.assign(prefs, JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}"));
-} catch { /* corrupted prefs → defaults */ }
+} catch {
+  /* corrupted prefs → defaults */
+}
 function applyPrefs() {
   lane.setAutoZoomOut(prefs.autoZoomOut);
   timeSource.setGlide(prefs.glide);
   timeSource.setHeatCells(prefs.heat);
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* private mode */ }
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    /* private mode */
+  }
 }
 const prefsBtn = document.querySelector<HTMLButtonElement>("#prefs");
 const prefsPanel = document.querySelector<HTMLDivElement>("#prefsPanel");
@@ -398,9 +453,13 @@ let foldMode: "auto" | "none" = "auto";
 // zoom anchor fixed — the fold reads as the same zoom continuing, not a jump
 let lastPointer: { y: number; at: number } | null = null;
 for (const type of ["pointermove", "wheel"] as const) {
-  canvas.addEventListener(type, (e) => {
-    lastPointer = { y: (e as PointerEvent | WheelEvent).offsetY, at: performance.now() };
-  }, { passive: true });
+  canvas.addEventListener(
+    type,
+    (e) => {
+      lastPointer = { y: (e as PointerEvent | WheelEvent).offsetY, at: performance.now() };
+    },
+    { passive: true },
+  );
 }
 const HYST = 0.85; // keep the current level until its rows drop below HYST·1rem
 const MIN_ROWS = 1.2; // below this a fold isn't folding anything — go continuous
@@ -434,7 +493,14 @@ const foldLog: unknown[] = [];
 (window as unknown as { __foldLog: unknown[] }).__foldLog = foldLog;
 function applyFold(next: TimelineFold, spanMs: number) {
   const v = lane.view;
-  foldLog.push({ t: Math.round(performance.now()), from: timeSource.getFold(), next, spanMs: Math.round(spanMs), zoomY: +v.zoomY.toFixed(2), scrollY: +v.scrollY.toFixed(3) });
+  foldLog.push({
+    t: Math.round(performance.now()),
+    from: timeSource.getFold(),
+    next,
+    spanMs: Math.round(spanMs),
+    zoomY: +v.zoomY.toFixed(2),
+    scrollY: +v.scrollY.toFixed(3),
+  });
   if (foldLog.length > 40) foldLog.shift();
   // anchor: the cursor's screen-y when fresh (mid-gesture), else the center
   const anchorY =
@@ -497,9 +563,7 @@ let hits: Hit[] = [];
 let activeIdx = -1;
 
 const esc = (s: string) =>
-  s.replace(/[&<>"]/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!,
-  );
+  s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 function renderSuggest() {
   suggestEl.innerHTML = hits
     .map(
@@ -618,8 +682,8 @@ async function loadRepo(owner: string, repo: string) {
   const my = ++repoToken;
   repoStat.textContent = "loading…";
   try {
-    const info = await fetch(`https://api.github.com/repos/${owner}/${repo}`).then(
-      (r) => (r.ok ? r.json() : null),
+    const info = await fetch(`https://api.github.com/repos/${owner}/${repo}`).then((r) =>
+      r.ok ? r.json() : null,
     );
     const branch = info?.default_branch ?? "HEAD";
     const tree = await fetch(
@@ -633,9 +697,7 @@ async function loadRepo(owner: string, repo: string) {
     const root = buildFileTree(`${owner}/${repo}`, tree.tree as GhEntry[]);
     const src = createTreeSource(root, {
       fetchContent: (path) =>
-        fetch(
-          `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`,
-        )
+        fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${encodeURI(path)}`)
           .then((r) => (r.ok ? r.text() : null))
           .catch(() => null),
     });
@@ -717,8 +779,7 @@ async function showCard(title: string, x: number, y: number) {
     return;
   }
   cardEl.href =
-    s.content_urls?.desktop?.page ??
-    `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`;
+    s.content_urls?.desktop?.page ?? `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`;
   const img = s.thumbnail?.source ? `<img src="${esc(s.thumbnail.source)}" alt="">` : "";
   cardEl.innerHTML =
     `${img}<div class="body"><p class="t">${esc(s.title ?? title)}</p>` +
@@ -768,8 +829,7 @@ cardEl.addEventListener("pointerleave", () => {
 // ── theme toggle (mirrors index.html) ─────────────────────────────────────
 const themeToggle = document.querySelector<HTMLButtonElement>("#theme-toggle");
 themeToggle?.addEventListener("click", () => {
-  const next =
-    document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   document.documentElement.dataset.theme = next;
   localStorage.setItem("rgui-theme", next);
   lane.setTheme(next);

@@ -3,14 +3,14 @@
 <img src="assets/rgui-icon-64-wander.gif" width="64" height="64" align="right" alt="rgui mascot — a wandering Royal Gramma as a 4-color dithered field">
 
 **rgui** = the **R**enormalization **G**roup **U**ser **I**nterface — that is the name's
-original purpose. (That the same letters also read as *readable grid* and *Royal Gramma*,
+original purpose. (That the same letters also read as _readable grid_ and _Royal Gramma_,
 our mascot, is a happy accident we keep for fun.)
 
 In physics, the renormalization group describes how a system looks at different scales:
-zoom out, and microscopic detail is *coarse-grained* away — only the couplings that matter
+zoom out, and microscopic detail is _coarse-grained_ away — only the couplings that matter
 at that scale survive. rgui applies exactly this to user interfaces. **Zoom is an RG flow**:
 every element snaps to a screen-adaptive grid and stays legible at any zoom level, and whatever
-cannot be drawn readably is not dropped but *replaced by a readable abstraction* via
+cannot be drawn readably is not dropped but _replaced by a readable abstraction_ via
 semantic-zoom level-of-detail (LOD). Ships a Canvas 2D renderer today, with a WebGPU renderer
 behind the same interface next. The only runtime dependencies are `d3-zoom` and `d3-selection`.
 
@@ -24,9 +24,9 @@ the **readable grid**. The principle reduces to two rules.
 1. **Every element snaps to a screen-adaptive, radix-layered grid.** Grid scales are powers
    of a configurable radix (default 8): one higher-order cell spans radix sub-steps per axis.
    The major spacing is continuously re-chosen so it always keeps a readable pixel width, and
-   **sizes obey the node-size law**: a node spans an integer 1..radix grids at *some* layer —
-   needing more promotes it to the next layer, snapped up (9 grids at layer *s* → 2 grids at
-   layer *s+1*). Positions snap to the finer of the visible grid and the node's own layer.
+   **sizes obey the node-size law**: a node spans an integer 1..radix grids at _some_ layer —
+   needing more promotes it to the next layer, snapped up (9 grids at layer _s_ → 2 grids at
+   layer _s+1_). Positions snap to the finer of the visible grid and the node's own layer.
 2. **The view is readable at every zoom — because zoom is a renormalization-group flow.**
    The moment an element can no longer be drawn readably at the current scale, it does not
    vanish; it is replaced by a readable abstraction. This is semantic-zoom LOD: just before
@@ -76,7 +76,10 @@ const graph: Graph = {
       id: "src",
       title: "Camera",
       category: "source",
-      x: -256, y: -64, w: 256, h: 128, // on the radix-8 lattice (64 wu at k=1)
+      x: -256,
+      y: -64,
+      w: 256,
+      h: 128, // on the radix-8 lattice (64 wu at k=1)
       inputs: [],
       outputs: [{ id: "image", label: "image", kind: "image" }],
       fields: [["device", "Default camera"]],
@@ -86,21 +89,22 @@ const graph: Graph = {
       id: "sink",
       title: "Vision model",
       category: "model",
-      x: 64, y: -64, w: 256, h: 128,
+      x: 64,
+      y: -64,
+      w: 256,
+      h: 128,
       inputs: [{ id: "image", label: "image", kind: "image" }],
       outputs: [{ id: "labels", label: "labels", kind: "text" }],
       fields: [["model", "YOLOS-tiny"]],
     },
   ],
-  edges: [
-    { from: { node: "src", port: "image" }, to: { node: "sink", port: "image" } },
-  ],
+  edges: [{ from: { node: "src", port: "image" }, to: { node: "sink", port: "image" } }],
 };
 
 // Mount a readable-grid viewer on the canvas.
 const viewer = rgui(canvas, {
-  graph,                        // or demoGraph() for a ready-made pipeline
-  rule: { collapsePx: 48 },     // tune the readability thresholds (see below)
+  graph, // or demoGraph() for a ready-made pipeline
+  rule: { collapsePx: 48 }, // tune the readability thresholds (see below)
 });
 
 // Pan/zoom (d3-zoom), grid-snapped node dragging, and semantic-zoom LOD
@@ -120,13 +124,13 @@ Enabled by default (`keyboard: false` to opt out). The pan/zoom feel is the
 nudges, a hold ramps up — ported from its Rust source of truth (`core/accModel.ts`).
 Keys act only while the pointer is over the canvas, and never while typing in a field.
 
-| Keys | Action |
-| --- | --- |
-| `W` `A` `S` `D` | Pan (hold to accelerate) |
-| `R` / `F` | Zoom in / out (about viewport center) |
+| Keys                          | Action                                                   |
+| ----------------------------- | -------------------------------------------------------- |
+| `W` `A` `S` `D`               | Pan (hold to accelerate)                                 |
+| `R` / `F`                     | Zoom in / out (about viewport center)                    |
 | `N` / `P` — or `Tab` / `⇧Tab` | Focus next / previous node (selects + pans it to center) |
-| `Space` + drag | Pan |
-| `?` | Toggle the shortcuts panel |
+| `Space` + drag                | Pan                                                      |
+| `?`                           | Toggle the shortcuts panel                               |
 
 Tune the acceleration with `keyboardSpeed: { pan?, zoom? }` (units per first-second of
 hold; defaults 1600 / 1600, matching CapsLockX).
@@ -137,21 +141,21 @@ Every readability decision in rgui is concentrated in a single `RgRule` object. 
 numbers per use case (dense DAW-style patching, sparse mind maps, dashboards, …). Pass a
 partial object as `options.rule`; unspecified fields fall back to the defaults.
 
-| Property | Default | Meaning |
-| --- | --- | --- |
-| `minGridPx` | `48` | Minimum on-screen spacing of major grid points (px). The basis of the readable grid. |
-| `radix` | `8` | Grid layers are radixⁿ; one higher-order cell spans radix sub-steps per axis. 4/5/8/10/16… |
-| `collapsePx` | `56` | A node collapses into a pseudo-node when its screen height falls below this (px). |
-| `collapseSnappedPx` | `84` | Members of a flush-snapped stack collapse earlier (snap beats location) — and the whole stack RGs together. |
-| `fieldMinPx` | `9` | Hide a node's field text when the row height falls below this (px). |
-| `portLabelMinPx` | `6` | Hide port labels when the row height falls below this (px). |
-| `clusterGapPx` | `24` | Screen-space gap budget for position-based cluster merging (px). |
-| `clusterGapConnectedPx` | `40` | Connected nodes merge across a larger gap (px). |
-| `pseudo` | `{ w: 200, headerH: 26, rowH: 18, pad: 8 }` | Pseudo-node screen dimensions in px (constant size on screen). |
-| `declutterMarginPx` | `10` | Minimum gap kept between pseudo-nodes after decluttering (px). |
-| `alignSnapPx` | `40` | Snap-align magnet: flush-snapping nodes align at the readable start point (tops / reading edge). |
-| `direction` | `"ltr"` | Reading direction — decides the vertical-snap alignment edge. |
-| `portShape` | `"chevron"` | Ports read the data flow (inputs point in, outputs out); `"dot"` restores circles. |
+| Property                | Default                                     | Meaning                                                                                                     |
+| ----------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `minGridPx`             | `48`                                        | Minimum on-screen spacing of major grid points (px). The basis of the readable grid.                        |
+| `radix`                 | `8`                                         | Grid layers are radixⁿ; one higher-order cell spans radix sub-steps per axis. 4/5/8/10/16…                  |
+| `collapsePx`            | `56`                                        | A node collapses into a pseudo-node when its screen height falls below this (px).                           |
+| `collapseSnappedPx`     | `84`                                        | Members of a flush-snapped stack collapse earlier (snap beats location) — and the whole stack RGs together. |
+| `fieldMinPx`            | `9`                                         | Hide a node's field text when the row height falls below this (px).                                         |
+| `portLabelMinPx`        | `6`                                         | Hide port labels when the row height falls below this (px).                                                 |
+| `clusterGapPx`          | `24`                                        | Screen-space gap budget for position-based cluster merging (px).                                            |
+| `clusterGapConnectedPx` | `40`                                        | Connected nodes merge across a larger gap (px).                                                             |
+| `pseudo`                | `{ w: 200, headerH: 26, rowH: 18, pad: 8 }` | Pseudo-node screen dimensions in px (constant size on screen).                                              |
+| `declutterMarginPx`     | `10`                                        | Minimum gap kept between pseudo-nodes after decluttering (px).                                              |
+| `alignSnapPx`           | `40`                                        | Snap-align magnet: flush-snapping nodes align at the readable start point (tops / reading edge).            |
+| `direction`             | `"ltr"`                                     | Reading direction — decides the vertical-snap alignment edge.                                               |
+| `portShape`             | `"chevron"`                                 | Ports read the data flow (inputs point in, outputs out); `"dot"` restores circles.                          |
 
 `DEFAULT_RULE` and `resolveRule(partial)` are exported so you can inspect the defaults or
 resolve partial rules independently.
@@ -170,7 +174,7 @@ Everything above zoom is governed by a small set of composable laws:
   the edge its inputs sit on and the edge its outputs sit on. Push two nodes flush so that an
   output edge faces a compatible input edge — matching `SignalKind`, port rows aligned within
   half a pitch — and a wire appears, marked `temp: true`. Drag them apart and it is gone: no
-  state is kept, the wires are a pure function of geometry (`snapConnections()`), so *cutting*
+  state is kept, the wires are a pure function of geometry (`snapConnections()`), so _cutting_
   a connection costs one drag rather than a click on a 2-px curve. Direction always comes from
   the ports, never from the geometry: an `rtl` pipeline snapped left-to-right still flows
   right-to-left. Authored edges win — a temp wire never steals an input the host already fed.
@@ -191,7 +195,7 @@ Everything above zoom is governed by a small set of composable laws:
   INSIDE another (a structural relation like an edge, never a style tag). The container
   renders as an open frame around its children — the sanctioned exception to one-cell-one-
   thing: a child occupies its container's cell at a finer grid layer. Emergent merging works
-  only *within* a scope (a team's members merge into the team, never into the neighboring
+  only _within_ a scope (a team's members merge into the team, never into the neighboring
   team), and once every child falls below readability the container **absorbs** them into
   one block named by the container. Levels absorb one at a time — teams collapse into team
   blocks long before the company collapses into one company block — so an org chart's
@@ -206,12 +210,12 @@ Everything above zoom is governed by a small set of composable laws:
   zooming out and back restores the exact original multi-selection; modifying selection at
   a higher level acts on the whole block. Double-click selects a snapped stack.
 - **3-D billboard position space** — `viewer.setRotation3({yaw, pitch, roll})` rotates node
-  *positions* in 3-D (plus `GraphNode.z` depth) while every node renders as an upright 2-D
+  _positions_ in 3-D (plus `GraphNode.z` depth) while every node renders as an upright 2-D
   card; the view stays strictly 2-D and all the laws above keep holding. The background
   field arrows lean with the rotation (180° shows the field pointing away: gold crosses).
-- **A wire says what it carries** — a port declares whether its signal *adds*
-  (`measure`), whether it may be *duplicated or aliased* (`ownership`), and what a
-  fan-out *does* with it (`fanout`). rgui refuses `sum` on a state and `broadcast` on a
+- **A wire says what it carries** — a port declares whether its signal _adds_
+  (`measure`), whether it may be _duplicated or aliased_ (`ownership`), and what a
+  fan-out _does_ with it (`fanout`). rgui refuses `sum` on a state and `broadcast` on a
   singly-owned resource, and draws the three fan-outs as three different wires — full,
   thinned-and-badged `1/n`, dotted. See [docs/signal.md](docs/signal.md) and `signalGraph()`.
 
@@ -219,15 +223,15 @@ Everything above zoom is governed by a small set of composable laws:
 
 Three questions, three owners:
 
-| question | field | owned by |
-|---|---|---|
-| is `+` meaningful across parallel sources? | `measure: "extensive" \| "intensive"` | the port |
+| question                                    | field                                               | owned by               |
+| ------------------------------------------- | --------------------------------------------------- | ---------------------- |
+| is `+` meaningful across parallel sources?  | `measure: "extensive" \| "intensive"`               | the port               |
 | **may** this value be duplicated / aliased? | `ownership: "copy" \| "clone" \| "share" \| "move"` | the **producing port** |
-| is it duplicated **here**, or divided? | `fanout: "broadcast" \| "split" \| "route"` | the **fan-out group** |
-| what **share** does this wire take? | `Edge.weight` | the **edge** |
+| is it duplicated **here**, or divided?      | `fanout: "broadcast" \| "split" \| "route"`         | the **fan-out group**  |
+| what **share** does this wire take?         | `Edge.weight`                                       | the **edge**           |
 
-`ownership` is Rust's four: a coordinate is free to `copy`, a 4K frame `clone`s *at a
-cost*, a `MediaStream` can be `share`d (two nodes borrow the same one, nothing is
+`ownership` is Rust's four: a coordinate is free to `copy`, a 4K frame `clone`s _at a
+cost_, a `MediaStream` can be `share`d (two nodes borrow the same one, nothing is
 duplicated), and a token budget or a lease is a `move` — single owner. The one rule:
 **a `move` value may never `broadcast`.** Broadcasting a shared handle is a borrow,
 not a copy, so it stays legal; splitting a copyable value is load balancing, not a
@@ -237,12 +241,12 @@ Every verdict is **placement-independent** — rgui never needs to know which ma
 node lands on. `isDuplicable()` is the predicate a host composes with its own
 placement to decide what can cross a device boundary.
 
-|  | `copy` / `clone` / `share` | `move` |
-|---|---|---|
-| **extensive** (`sum`/`concat` legal) | STT transcript segments, audio chunks, shard counters | token budget, money, work items |
-| **intensive** (`sum` forbidden) | coordinates, image frames, vision labels, a MediaStream | an exclusive lease, a GPU slot |
+|                                      | `copy` / `clone` / `share`                              | `move`                          |
+| ------------------------------------ | ------------------------------------------------------- | ------------------------------- |
+| **extensive** (`sum`/`concat` legal) | STT transcript segments, audio chunks, shard counters   | token budget, money, work items |
+| **intensive** (`sum` forbidden)      | coordinates, image frames, vision labels, a MediaStream | an exclusive lease, a GPU slot  |
 
-The tempting model is one axis — *change vs state* — but a cumulative counter is
+The tempting model is one axis — _change vs state_ — but a cumulative counter is
 additive across shards yet must be **copied** on fan-out, and a coin transfer is
 additive yet must **never** be copied. Additivity and conservation are orthogonal
 (physics agrees: entropy is extensive and not conserved). So `sum` is refused exactly
@@ -251,7 +255,7 @@ centroid is an affine combination.
 
 `signalConnectionGuard()` plugs into `isValidConnection` and refuses the second wire
 off a broadcasting `move` port — and nothing else. Strictness lands where duplication
-is *unsafe*, not merely *expensive*.
+is _unsafe_, not merely _expensive_.
 
 Full rationale, the `SIGNALS` presets, the diagnostics, and the mapping onto
 [sflow](https://github.com/snomiao/sflow)'s `tees` / `distributeBys` / `merges` /
@@ -323,7 +327,7 @@ available from the `@snomiao/rgui/src` subpath.
 
 <img src="assets/rgui-icon-128.png" width="128" height="128" align="right" alt="rgui icon — Royal Gramma crossover field, one eye at the head">
 
-The face of the project is the Royal Gramma (*Gramma loreto*), a small Caribbean reef fish whose
+The face of the project is the Royal Gramma (_Gramma loreto_), a small Caribbean reef fish whose
 body shifts from violet to gold across a single seamless crossover — and whose initials happen to
 spell **R**oyal **G**ramma = **RG**, the same letters as the renormalization group (a pun, not the
 name's origin — see the top of this README). Look closely at a real one and the transition zone is

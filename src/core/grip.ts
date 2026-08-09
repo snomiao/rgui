@@ -14,13 +14,7 @@
  * left the node, and a rebase is a no-op until the cursor actually moves.
  */
 import { sizeStepFor, snapNodeSize, type SizeLaw } from "./grid.js";
-import {
-  contentScale,
-  nodeHeight,
-  nodeMinHeight,
-  nodeMinWidth,
-  type GraphNode,
-} from "./graph.js";
+import { contentScale, nodeHeight, nodeMinHeight, nodeMinWidth, type GraphNode } from "./graph.js";
 import { clampSize } from "./pack.js";
 import { DEFAULT_RULE } from "./rule.js";
 
@@ -37,8 +31,7 @@ export interface GripBase {
 
 export type GripSize = GripBase;
 
-const clamp = (v: number, lo: number, hi: number) =>
-  Math.min(hi, Math.max(lo, v));
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** the node's geometry right now — the base a rebase would capture */
 export function gripBase(n: GraphNode): GripBase {

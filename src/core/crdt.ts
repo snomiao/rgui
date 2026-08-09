@@ -110,7 +110,8 @@ function assertValue(key: string, value: unknown, joins: Record<string, JoinRule
 function assertJsonSafe(key: string, value: unknown): void {
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error(`GraphCrdt: field "${key}" holds a non-finite number`);
+    if (!Number.isFinite(value))
+      throw new Error(`GraphCrdt: field "${key}" holds a non-finite number`);
     return;
   }
   if (Array.isArray(value)) {
@@ -226,12 +227,19 @@ export function crdtRemoveEdge(state: GraphCrdtState, from: CrdtEdgeEnd, to: Crd
  * Join-typed keys are validated at write time; a mismatched runtime type here
  * means a corrupt/hand-crafted imported state, and falling back to LWW would
  * break merge associativity (grouping-dependent winners) — so throw instead. */
-function mergeRegister(key: string, a: CrdtRegister, b: CrdtRegister, joins: Record<string, JoinRule>): CrdtRegister {
+function mergeRegister(
+  key: string,
+  a: CrdtRegister,
+  b: CrdtRegister,
+  joins: Record<string, JoinRule>,
+): CrdtRegister {
   const rule = joins[key];
   if (rule) {
     const joined = joinValues(rule, a.value, b.value);
     if (joined === undefined)
-      throw new Error(`GraphCrdt: field "${key}" (join ${rule}) holds a mistyped value — corrupt state`);
+      throw new Error(
+        `GraphCrdt: field "${key}" (join ${rule}) holds a mistyped value — corrupt state`,
+      );
     // keep the greater dot so causality keeps advancing under the join
     return { value: joined, dot: lwwWins(a.dot, b.dot) ? a.dot : b.dot };
   }
@@ -344,9 +352,13 @@ function fieldValues(el: CrdtElement): Record<string, CrdtValue> {
 function parseEdgeId(id: string): [CrdtEdgeEnd, CrdtEdgeEnd] | null {
   try {
     const arr: unknown = JSON.parse(id);
-    if (!Array.isArray(arr) || arr.length !== 4 || arr.some((s) => typeof s !== "string")) return null;
+    if (!Array.isArray(arr) || arr.length !== 4 || arr.some((s) => typeof s !== "string"))
+      return null;
     const [fn, fp, tn, tp] = arr as string[];
-    return [{ node: fn!, port: fp! }, { node: tn!, port: tp! }];
+    return [
+      { node: fn!, port: fp! },
+      { node: tn!, port: tp! },
+    ];
   } catch {
     return null;
   }

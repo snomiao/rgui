@@ -40,11 +40,7 @@ export {
   type RgThemeInput,
 } from "./core/theme.js";
 export { layoutGraph, type LayoutOptions } from "./core/layout.js";
-export type {
-  SummarizeFn,
-  SummaryContent,
-  SummaryInfo,
-} from "./core/summary.js";
+export type { SummarizeFn, SummaryContent, SummaryInfo } from "./core/summary.js";
 export {
   aggregate,
   fieldSummarize,
@@ -234,10 +230,7 @@ export {
   categoryColor,
   type OffscreenIndicator,
 } from "./render/graphLayer.js";
-export {
-  createWebGPUGridRenderer,
-  type WebGPUGridRenderer,
-} from "./render/webgpu.js";
+export { createWebGPUGridRenderer, type WebGPUGridRenderer } from "./render/webgpu.js";
 export {
   createOverlayManager,
   type NodeHtmlOverlay,

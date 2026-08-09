@@ -9,12 +9,7 @@
  */
 import { AccModel2D } from "../core/accModel.js";
 import { DEFAULT_RULE, resolveRule, type RgRule } from "../core/rule.js";
-import {
-  resolveTheme,
-  withAlpha,
-  type RgTheme,
-  type RgThemeInput,
-} from "../core/theme.js";
+import { resolveTheme, withAlpha, type RgTheme, type RgThemeInput } from "../core/theme.js";
 import {
   clampScroll,
   lodStep,
@@ -114,10 +109,7 @@ export interface Lane {
   destroy(): void;
 }
 
-export function createLane(
-  canvas: HTMLCanvasElement,
-  opts: LaneOptions,
-): Lane {
+export function createLane(canvas: HTMLCanvasElement, opts: LaneOptions): Lane {
   const maybeCtx = canvas.getContext("2d");
   if (!maybeCtx) throw new Error("2d context unavailable");
   const ctx = maybeCtx; // capture the narrowed non-null type into the closures
@@ -176,12 +168,7 @@ export function createLane(
     if (!autoZoomOut) return;
     const emp = source.emptiness?.(view) ?? 0;
     if (emp <= 0.02) return;
-    zoomAt(
-      view,
-      Math.exp(-EMPTY_K * Math.abs(dScreenPx) * emp),
-      view.height / 2,
-      zoomLimits(),
-    );
+    zoomAt(view, Math.exp(-EMPTY_K * Math.abs(dScreenPx) * emp), view.height / 2, zoomLimits());
   }
 
   // Double-click focus: smoothly bring a point to the viewport centre and zoom
@@ -189,7 +176,11 @@ export function createLane(
   // focused world point drives scrollY each frame so it lands dead-centre.
   const FOCUS_MS = 380;
   let focusAnim: {
-    c0: number; c1: number; z0: number; z1: number; t0: number;
+    c0: number;
+    c1: number;
+    z0: number;
+    z1: number;
+    t0: number;
   } | null = null;
   let focusRaf = 0;
   function focusTo(center: number, zoom: number) {

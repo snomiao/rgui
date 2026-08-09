@@ -30,18 +30,11 @@ const sign = (x: number): number => (x > 0 ? 1 : x < 0 ? -1 : 0);
 function ma(dt: number): number {
   const s = sign(dt);
   const a = Math.abs(dt);
-  return (
-    (s * (Math.exp(a) - 1 + 3 + 4 * a + 9 * a * a + 16 * a * a * a)) / K_RAW
-  );
+  return (s * (Math.exp(a) - 1 + 3 + 4 * a + 9 * a * a + 16 * a * a * a)) / K_RAW;
 }
 
 /** Velocity damping applied when input is absent or opposes the motion. */
-function damping(
-  v: number,
-  accel: number,
-  dt: number,
-  maxSpeed: number,
-): number {
+function damping(v: number, accel: number, dt: number, maxSpeed: number): number {
   if (Number.isFinite(maxSpeed)) {
     v = Math.max(-maxSpeed, Math.min(maxSpeed, v));
   }

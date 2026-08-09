@@ -5,11 +5,7 @@
  */
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type D3ZoomEvent } from "d3-zoom";
-import {
-  createCanvas2DRenderer,
-  createGridDotsLayer,
-  type DrawLayer,
-} from "./render/canvas2d.js";
+import { createCanvas2DRenderer, createGridDotsLayer, type DrawLayer } from "./render/canvas2d.js";
 import {
   drawGraph,
   drawOffscreenIndicators,
@@ -29,21 +25,9 @@ import {
   type PanelItem,
   type PanelRect,
 } from "./render/panelLayer.js";
-import {
-  createOverlayManager,
-  type NodeHtmlOverlay,
-} from "./render/overlayLayer.js";
-import {
-  createWebGPUGridRenderer,
-  type WebGPUGridRenderer,
-} from "./render/webgpu.js";
-import {
-  gripBase,
-  gripRescale,
-  gripResize,
-  MAX_SCALE,
-  MIN_SCALE,
-} from "./core/grip.js";
+import { createOverlayManager, type NodeHtmlOverlay } from "./render/overlayLayer.js";
+import { createWebGPUGridRenderer, type WebGPUGridRenderer } from "./render/webgpu.js";
+import { gripBase, gripRescale, gripResize, MAX_SCALE, MIN_SCALE } from "./core/grip.js";
 import {
   containmentOf,
   contentScale,
@@ -72,12 +56,7 @@ import {
 } from "./core/pack.js";
 import { layoutGraph, type LayoutOptions } from "./core/layout.js";
 import { resolveRule, type RgRule } from "./core/rule.js";
-import {
-  resolveTheme,
-  withAlpha,
-  type RgTheme,
-  type RgThemeInput,
-} from "./core/theme.js";
+import { resolveTheme, withAlpha, type RgTheme, type RgThemeInput } from "./core/theme.js";
 import type { SummarizeFn } from "./core/summary.js";
 import {
   gridLevels,
@@ -135,10 +114,7 @@ export interface RguiOptions {
   /** plain click on a node (no drag movement) */
   onNodeClick?: (nodeId: string, screen: { x: number; y: number }) => void;
   /** right-click / context-menu on a node */
-  onNodeContextMenu?: (
-    nodeId: string,
-    screen: { x: number; y: number },
-  ) => void;
+  onNodeContextMenu?: (nodeId: string, screen: { x: number; y: number }) => void;
   /** selection changed (click select, shift+drag box select, setSelection) */
   onSelectionChange?: (nodeIds: string[]) => void;
   /** a node's pin was toggled via the header glyph */
@@ -178,10 +154,7 @@ export interface RguiOptions {
    */
   summarize?: SummarizeFn;
   /** right-click (no drag) on empty canvas */
-  onCanvasContextMenu?: (
-    screen: { x: number; y: number },
-    world: { x: number; y: number },
-  ) => void;
+  onCanvasContextMenu?: (screen: { x: number; y: number }, world: { x: number; y: number }) => void;
   /**
    * rendering backend (default "auto"): "webgpu" renders the background +
    * grid field on a GPU underlay canvas (graph content stays 2D on top);
@@ -299,15 +272,16 @@ export interface Rgui {
   /** replace the panel set (host mutates panels + calls this or invalidate) */
   setPanels(panels: Panel[]): void;
   /** lightweight runtime debug snapshot for host/e2e inspection */
-  debugPanels(): { count: number; ids: string[]; rects: { id: string; x: number; y: number; w: number; h: number; items: number }[] };
+  debugPanels(): {
+    count: number;
+    ids: string[];
+    rects: { id: string; x: number; y: number; w: number; h: number; items: number }[];
+  };
   /**
    * attach/replace/remove a node-anchored HTML overlay at runtime
    * (declarative alternative: set GraphNode.overlay before rendering)
    */
-  setNodeOverlay(
-    nodeId: string,
-    overlay: HTMLElement | NodeHtmlOverlay | null,
-  ): void;
+  setNodeOverlay(nodeId: string, overlay: HTMLElement | NodeHtmlOverlay | null): void;
   /**
    * programmatic resize (for nodes that want to size themselves) — snapped
    * to minimums and clamped against neighbors (一格一物), then re-rendered
@@ -361,21 +335,15 @@ export interface Rgui {
   destroy(): void;
 }
 
-type Hit =
-  | { type: "node"; node: GraphNode }
-  | { type: "pseudo"; pseudo: PseudoNode };
+type Hit = { type: "node"; node: GraphNode } | { type: "pseudo"; pseudo: PseudoNode };
 
-export function createRgui(
-  canvas: HTMLCanvasElement,
-  options: RguiOptions = {},
-): Rgui {
+export function createRgui(canvas: HTMLCanvasElement, options: RguiOptions = {}): Rgui {
   const rule = resolveRule(options.rule);
   // one mutable theme object for the viewer's lifetime: layers/renderers
   // close over it and read colors per frame, so setTheme = assign + redraw
   const theme = resolveTheme(options.theme);
   // an explicit background option wins over the theme (incl. false)
-  const themeBg = () =>
-    options.background === undefined ? theme.background : options.background;
+  const themeBg = () => (options.background === undefined ? theme.background : options.background);
   let graph: Graph = options.graph ?? { nodes: [], edges: [] };
   let lastRg: RenderGraph | null = null;
   let lastBuildK = Infinity;
@@ -446,33 +414,14 @@ export function createRgui(
    * always render as upright 2-D cards. Project a world point through the
    * rotation about the world point at the viewport center.
    */
-  function projectWorldPt(
-    x: number,
-    y: number,
-    z = 0,
-  ): readonly [number, number] {
-    const [cwx, cwy] = screenToWorld(
-      view,
-      canvas.clientWidth / 2,
-      canvas.clientHeight / 2,
-    );
+  function projectWorldPt(x: number, y: number, z = 0): readonly [number, number] {
+    const [cwx, cwy] = screenToWorld(view, canvas.clientWidth / 2, canvas.clientHeight / 2);
     const dx = x - cwx;
     const dy = y - cwy;
-    return [
-      cwx + A[0] * dx + A[1] * dy + Zcol[0] * z,
-      cwy + A[2] * dx + A[3] * dy + Zcol[1] * z,
-    ];
+    return [cwx + A[0] * dx + A[1] * dy + Zcol[0] * z, cwy + A[2] * dx + A[3] * dy + Zcol[1] * z];
   }
-  function unprojectWorldPt(
-    x: number,
-    y: number,
-    z = 0,
-  ): readonly [number, number] {
-    const [cwx, cwy] = screenToWorld(
-      view,
-      canvas.clientWidth / 2,
-      canvas.clientHeight / 2,
-    );
+  function unprojectWorldPt(x: number, y: number, z = 0): readonly [number, number] {
+    const [cwx, cwy] = screenToWorld(view, canvas.clientWidth / 2, canvas.clientHeight / 2);
     const dx = x - cwx - Zcol[0] * z;
     const dy = y - cwy - Zcol[1] * z;
     return [cwx + Ainv[0] * dx + Ainv[1] * dy, cwy + Ainv[2] * dx + Ainv[3] * dy];
@@ -624,9 +573,7 @@ export function createRgui(
       const e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2; // easeInOut
       sel.call(
         zoomBehavior.transform,
-        zoomIdentity
-          .translate(from.x + (to.x - from.x) * e, from.y + (to.y - from.y) * e)
-          .scale(k),
+        zoomIdentity.translate(from.x + (to.x - from.x) * e, from.y + (to.y - from.y) * e).scale(k),
       );
       if (u < 1) requestAnimationFrame(step);
     };
@@ -634,24 +581,19 @@ export function createRgui(
   }
 
   function indicatorAt(sx: number, sy: number): OffscreenIndicator | null {
-    for (const it of lastIndicators)
-      if (Math.hypot(it.ax - sx, it.ay - sy) <= 12) return it;
+    for (const it of lastIndicators) if (Math.hypot(it.ax - sx, it.ay - sy) <= 12) return it;
     return null;
   }
 
   let selection = new Set<string>();
   function applySelection(next: Set<string>) {
-    const changed =
-      next.size !== selection.size || [...next].some((id) => !selection.has(id));
+    const changed = next.size !== selection.size || [...next].some((id) => !selection.has(id));
     selection = next;
     if (changed) options.onSelectionChange?.([...next]);
     invalidate();
   }
 
-  function drawSelectionLayer(
-    ctx: CanvasRenderingContext2D,
-    t: ViewTransform,
-  ) {
+  function drawSelectionLayer(ctx: CanvasRenderingContext2D, t: ViewTransform) {
     // highlight selected nodes (screen-constant stroke)
     if (selection.size) {
       ctx.save();
@@ -659,19 +601,12 @@ export function createRgui(
       ctx.lineWidth = 2;
       for (const id of selection) {
         const n =
-          (rotActive ? displayNodes.get(id) : undefined) ??
-          graph.nodes.find((m) => m.id === id);
+          (rotActive ? displayNodes.get(id) : undefined) ?? graph.nodes.find((m) => m.id === id);
         if (!n) continue;
         const x = n.x * t.k + t.x;
         const y = n.y * t.k + t.y;
         ctx.beginPath();
-        ctx.roundRect(
-          x - 3,
-          y - 3,
-          n.w * t.k + 6,
-          nodeHeight(n) * t.k + 6,
-          10,
-        );
+        ctx.roundRect(x - 3, y - 3, n.w * t.k + 6, nodeHeight(n) * t.k + 6, 10);
         ctx.stroke();
       }
       ctx.restore();
@@ -691,8 +626,7 @@ export function createRgui(
     }
   }
 
-  const fieldProvider = () =>
-    lastIndicators.map((it) => ({ x: it.cx, y: it.cy }));
+  const fieldProvider = () => lastIndicators.map((it) => ({ x: it.cx, y: it.cy }));
   const contentLayers: DrawLayer[] = [
     // world layers rotate with the viewport; chrome stays upright
     ...(options.layers ?? []),
@@ -708,35 +642,16 @@ export function createRgui(
       const carry =
         lastRg && t.k < lastBuildK - 1e-12
           ? lastRg.pseudo.flatMap((p) =>
-              p.members
-                .slice(1)
-                .map((m, i) => [p.members[i]!.id, m.id] as [string, string]),
+              p.members.slice(1).map((m, i) => [p.members[i]!.id, m.id] as [string, string]),
             )
           : undefined;
       lastBuildK = t.k;
-      lastRg = drawGraph(
-        ctx,
-        t,
-        dGraph,
-        rule,
-        options.summarize,
-        undefined,
-        theme,
-        carry,
-      );
+      lastRg = drawGraph(ctx, t, dGraph, rule, options.summarize, undefined, theme, carry);
     },
     (ctx, t) => drawSelectionLayer(ctx, t),
     (ctx, t, size) => {
       lastIndicators = lastRg
-        ? drawOffscreenIndicators(
-            ctx,
-            t,
-            lastRg,
-            size,
-            rule,
-            undefined,
-            theme,
-          )
+        ? drawOffscreenIndicators(ctx, t, lastRg, size, rule, undefined, theme)
         : [];
     },
     (ctx, t) => drawGhostWire(ctx, t),
@@ -760,13 +675,7 @@ export function createRgui(
   const zComposed = () => zArrow * (rotActive ? fieldVec3().z : 1);
   // NOTE: the grid layer is NOT world-rotated — dots keep their positions,
   // only the field direction follows the box rotation
-  const gridLayer = createGridDotsLayer(
-    rule,
-    fieldProvider,
-    zComposed,
-    fieldTiltProvider,
-    theme,
-  );
+  const gridLayer = createGridDotsLayer(rule, fieldProvider, zComposed, fieldTiltProvider, theme);
 
   // backend selection: GPU underlay canvas for bg+grid, 2D content on top
   const wantGpu =
@@ -794,10 +703,8 @@ export function createRgui(
       "position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;";
     const parent = canvas.parentElement;
     if (parent) {
-      if (getComputedStyle(parent).position === "static")
-        parent.style.position = "relative";
-      if (getComputedStyle(canvas).position === "static")
-        canvas.style.position = "relative";
+      if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
+      if (getComputedStyle(canvas).position === "static") canvas.style.position = "relative";
       if (!canvas.style.zIndex) canvas.style.zIndex = "1";
       parent.insertBefore(underlay, canvas);
     }
@@ -869,9 +776,7 @@ export function createRgui(
   let pointer = { sx: 0, sy: 0 };
 
   const fmt = (v: number, d = 2) =>
-    Math.abs(v) >= 1e6 || (Math.abs(v) < 0.01 && v !== 0)
-      ? v.toExponential(d)
-      : +v.toFixed(d) + "";
+    Math.abs(v) >= 1e6 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(d) : +v.toFixed(d) + "";
 
   let lastDebugHtml = "";
   let lastDebugTs = 0;
@@ -887,9 +792,7 @@ export function createRgui(
     const h = canvas.clientHeight;
     const [cwx, cwy] = screenToWorld(view, w / 2, h / 2);
     const [pwx, pwy] = screenToWorld(view, pointer.sx, pointer.sy);
-    const rem = parseFloat(
-      getComputedStyle(document.documentElement).fontSize,
-    );
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const html =
       `<span class="dim">scale </span><span class="hi">${fmt(view.k, 3)}×</span>` +
       `<span class="dim"> dpr </span>${devicePixelRatio}` +
@@ -922,17 +825,14 @@ export function createRgui(
     const visible = lastRg?.nodes ?? dGraph.nodes;
     // container frames sit BEHIND their children: cards hit first, and
     // among nested frames the innermost (smallest) one wins
-    const hasKids = new Set(
-      graph.nodes.filter((n) => n.parent).map((n) => n.parent!),
-    );
+    const hasKids = new Set(graph.nodes.filter((n) => n.parent).map((n) => n.parent!));
     let frameHit: GraphNode | null = null;
     for (let i = visible.length - 1; i >= 0; i--) {
       const n = visible[i]!;
       const h = nodeHeight(n);
       if (wx < n.x || wx > n.x + n.w || wy < n.y || wy > n.y + h) continue;
       if (!hasKids.has(n.id)) return { type: "node", node: n };
-      if (!frameHit || n.w * h < frameHit.w * nodeHeight(frameHit))
-        frameHit = n;
+      if (!frameHit || n.w * h < frameHit.w * nodeHeight(frameHit)) frameHit = n;
     }
     return frameHit ? { type: "node", node: frameHit } : null;
   }
@@ -1015,8 +915,7 @@ export function createRgui(
   }
 
   /** hits return DISPLAY clones under rotation — mutate the BASE node */
-  const baseOf = (n: GraphNode): GraphNode =>
-    graph.nodes.find((m) => m.id === n.id) ?? n;
+  const baseOf = (n: GraphNode): GraphNode => graph.nodes.find((m) => m.id === n.id) ?? n;
 
   /**
    * PER-AXIS snap steps: each axis snaps to the finer of the viewing main
@@ -1024,20 +923,14 @@ export function createRgui(
    * layer for y) — a wide-flat node moves coarsely in x, finely in y.
    * Zoomed out, the node's layers cap the coarseness.
    */
-  const nodeSnapStep = (
-    viewStep: number,
-    ...nodes: GraphNode[]
-  ): readonly [number, number] => {
+  const nodeSnapStep = (viewStep: number, ...nodes: GraphNode[]): readonly [number, number] => {
     let lx = 0;
     let ly = 0;
     for (const n of nodes) {
       lx = Math.max(lx, sizeLayerStep(n.w, rule.radix));
       ly = Math.max(ly, sizeLayerStep(nodeHeight(n), rule.radix));
     }
-    return [
-      lx ? Math.min(viewStep, lx) : viewStep,
-      ly ? Math.min(viewStep, ly) : viewStep,
-    ];
+    return [lx ? Math.min(viewStep, lx) : viewStep, ly ? Math.min(viewStep, ly) : viewStep];
   };
 
   let drag:
@@ -1156,10 +1049,7 @@ export function createRgui(
     ctx.globalAlpha = 0.9;
     ctx.lineWidth = 2;
     ctx.setLineDash([7, 5]);
-    const bow = Math.max(
-      40 * t.k,
-      Math.hypot(drag.toSx - x0, drag.toSy - y0) * 0.4,
-    );
+    const bow = Math.max(40 * t.k, Math.hypot(drag.toSx - x0, drag.toSy - y0) * 0.4);
     // leave the source port along its edge normal; enter the cursor from the
     // mirrored direction, so the ghost reads the same as the finished wire
     ctx.beginPath();
@@ -1177,8 +1067,7 @@ export function createRgui(
   }
 
   /** stable identity of a wire, for diffing the derived set */
-  const edgeKey = (e: Edge) =>
-    `${e.from.node}/${e.from.port}>${e.to.node}/${e.to.port}`;
+  const edgeKey = (e: Edge) => `${e.from.node}/${e.from.port}>${e.to.node}/${e.to.port}`;
 
   /**
    * Reconcile the SNAP-CONNECTED edges with the current geometry: nodes
@@ -1204,10 +1093,7 @@ export function createRgui(
         : undefined,
     });
     const prev = graph.edges.filter((e) => e.temp);
-    if (
-      prev.length === next.length &&
-      prev.every((e, i) => edgeKey(e) === edgeKey(next[i]!))
-    )
+    if (prev.length === next.length && prev.every((e, i) => edgeKey(e) === edgeKey(next[i]!)))
       return false;
     // mutate in place: hosts may hold a reference to the edges array
     graph.edges.length = 0;
@@ -1220,8 +1106,7 @@ export function createRgui(
   function validConnection(a: PortHit, b: PortHit): boolean {
     if (a.ref.side === b.ref.side || a.ref.node === b.ref.node) return false;
     const [from, to] = a.ref.side === "out" ? [a, b] : [b, a];
-    if (options.isValidConnection)
-      return options.isValidConnection(from.ref, to.ref);
+    if (options.isValidConnection) return options.isValidConnection(from.ref, to.ref);
     return from.port.kind === to.port.kind;
   }
 
@@ -1497,9 +1382,7 @@ export function createRgui(
       // figma preset: plain / right drag on empty = box select (space or
       // middle button pans via d3); classic: shift+drag only
       const marquee =
-        input === "figma"
-          ? !spaceHeld && (ev.button === 0 || ev.button === 2)
-          : ev.shiftKey;
+        input === "figma" ? !spaceHeld && (ev.button === 0 || ev.button === 2) : ev.shiftKey;
       if (marquee) {
         drag = {
           type: "marquee",
@@ -1531,8 +1414,7 @@ export function createRgui(
       // dragging a member of a multi-selection moves the whole selection —
       // selected containers bring their contents along
       const ids = new Set(selection);
-      for (const id of selection)
-        for (const d of descendantsOf(graph, id)) ids.add(d.id);
+      for (const id of selection) for (const d of descendantsOf(graph, id)) ids.add(d.id);
       const members = [...ids]
         .map((id) => graph.nodes.find((m) => m.id === id))
         .filter((m): m is GraphNode => !!m && !m.pinned);
@@ -1599,7 +1481,11 @@ export function createRgui(
     pointer = { sx: vx0, sy: vy0 };
     if (!drag) {
       const gh = gripHitAt(vx0, vy0);
-      canvas.style.cursor = gh ? (gh.corner === "nw" || gh.corner === "se" ? "nwse-resize" : "nesw-resize") : "grab";
+      canvas.style.cursor = gh
+        ? gh.corner === "nw" || gh.corner === "se"
+          ? "nwse-resize"
+          : "nesw-resize"
+        : "grab";
     }
     if (drag) {
       const [wx, wy] = screenToWorld(view, vx0, vy0);
@@ -1646,15 +1532,9 @@ export function createRgui(
       } else if (drag.type === "panelItem") {
         drag.sx = ev.offsetX;
         drag.sy = ev.offsetY;
-        if (
-          Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4
-        )
-          drag.moved = true;
+        if (Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4) drag.moved = true;
       } else if (drag.type === "panel") {
-        if (
-          Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4
-        )
-          drag.moved = true;
+        if (Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4) drag.moved = true;
         if (drag.moved) {
           // dragging makes the anchor an explicit screen position; snap to
           // the viewport margins and flush against the other panels
@@ -1680,8 +1560,7 @@ export function createRgui(
       } else if (drag.type === "smartLink") {
         drag.toSx = vx0;
         drag.toSy = vy0;
-        if (Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4)
-          drag.moved = true;
+        if (Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) >= 4) drag.moved = true;
       } else if (drag.type === "node") {
         if (drag.node.pinned) return; // pinned nodes do not move
         // SNAP ON THE RENDERED PLANE: grid-align the target in display
@@ -1690,16 +1569,9 @@ export function createRgui(
         // the rotated plane instead of the visible one
         const h0 = nodeHeight(drag.node);
         const [sx0, sy0] = nodeSnapStep(step, drag.node);
-        const [tdx, tdy] = [
-          snap(wx - drag.dx, sx0),
-          snap(wy - drag.dy, sy0),
-        ];
+        const [tdx, tdy] = [snap(wx - drag.dx, sx0), snap(wy - drag.dy, sy0)];
         const [bcx, bcy] = rotActive
-          ? unprojectWorldPt(
-              tdx + drag.node.w / 2,
-              tdy + h0 / 2,
-              drag.node.z ?? 0,
-            )
+          ? unprojectWorldPt(tdx + drag.node.w / 2, tdy + h0 / 2, drag.node.z ?? 0)
           : ([tdx + drag.node.w / 2, tdy + h0 / 2] as const);
         const { x: nx, y: ny } = resolveOverlap(
           drag.node,
@@ -1813,8 +1685,7 @@ export function createRgui(
       return;
     }
     if (drag.type === "marquee") {
-      const moved =
-        Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) >= 4;
+      const moved = Math.hypot(drag.x1 - drag.x0, drag.y1 - drag.y0) >= 4;
       if (!moved) {
         // empty-canvas CLICK: wire click, else clear selection; right-button
         // click falls through to the contextmenu event
@@ -1835,13 +1706,7 @@ export function createRgui(
       const [wx1, wy1] = screenToWorld(view, Math.max(va0, va1), Math.max(vb0, vb1));
       const picked = new Set(
         (lastRg?.nodes ?? dGraph.nodes)
-          .filter(
-            (n) =>
-              n.x < wx1 &&
-              n.x + n.w > wx0 &&
-              n.y < wy1 &&
-              n.y + nodeHeight(n) > wy0,
-          )
+          .filter((n) => n.x < wx1 && n.x + n.w > wx0 && n.y < wy1 && n.y + nodeHeight(n) > wy0)
           .map((n) => n.id),
       );
       // merged blocks in the marquee contribute all their members
@@ -1859,9 +1724,7 @@ export function createRgui(
       const target = portAt(vux, vuy);
       if (target && validConnection(drag.from, target)) {
         const [from, to] =
-          drag.from.ref.side === "out"
-            ? [drag.from.ref, target.ref]
-            : [target.ref, drag.from.ref];
+          drag.from.ref.side === "out" ? [drag.from.ref, target.ref] : [target.ref, drag.from.ref];
         options.onConnect?.(from, to);
       } else if (!target) {
         // released on empty canvas — let the host offer "create node here"
@@ -1878,9 +1741,7 @@ export function createRgui(
         const target = hitAt(vux, vuy);
         const [wx, wy] = screenToWorld(view, vux, vuy);
         const targetNodeId =
-          target?.type === "node" && target.node.id !== drag.from.id
-            ? target.node.id
-            : undefined;
+          target?.type === "node" && target.node.id !== drag.from.id ? target.node.id : undefined;
         options.onSmartLinkEnd?.(drag.from.id, {
           screen: { x: ev.offsetX, y: ev.offsetY },
           world: { x: wx, y: wy },
@@ -1893,11 +1754,8 @@ export function createRgui(
           x: drag.node.x,
           y: drag.node.y,
         });
-        for (const c of drag.subtree)
-          options.onNodeMoveEnd?.(c.id, { x: c.x, y: c.y });
-      } else if (
-        Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) < 4
-      ) {
+        for (const c of drag.subtree) options.onNodeMoveEnd?.(c.id, { x: c.x, y: c.y });
+      } else if (Math.hypot(ev.offsetX - drag.downX, ev.offsetY - drag.downY) < 4) {
         if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
           // multi-select: toggle membership instead of replacing
           const next = new Set(selection);
@@ -1910,9 +1768,7 @@ export function createRgui(
         options.onNodeClick?.(drag.node.id, { x: ev.offsetX, y: ev.offsetY });
       }
     } else if (drag.type === "group") {
-      if (drag.moved)
-        for (const n of drag.nodes)
-          options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
+      if (drag.moved) for (const n of drag.nodes) options.onNodeMoveEnd?.(n.id, { x: n.x, y: n.y });
     } else if (drag.type === "pseudo") {
       if (drag.moved) {
         // pseudo drags report every member's final BASE position
@@ -1947,9 +1803,7 @@ export function createRgui(
     const nodes = lastRg?.nodes ?? dGraph.nodes;
     const comp = flushComponents(nodes, flushSegments(nodes));
     const root = comp.get(hit.node.id);
-    const ids = nodes
-      .filter((n) => comp.get(n.id) === root)
-      .map((n) => n.id);
+    const ids = nodes.filter((n) => comp.get(n.id) === root).map((n) => n.id);
     applySelection(new Set(ids.length ? ids : [hit.node.id]));
   };
 
@@ -1980,10 +1834,7 @@ export function createRgui(
       if (!e && options.onCanvasContextMenu) {
         ev.preventDefault();
         const [wx, wy] = screenToWorld(view, vcx, vcy);
-        options.onCanvasContextMenu(
-          { x: ev.offsetX, y: ev.offsetY },
-          { x: wx, y: wy },
-        );
+        options.onCanvasContextMenu({ x: ev.offsetX, y: ev.offsetY }, { x: wx, y: wy });
       }
     }
   };
@@ -2039,10 +1890,7 @@ export function createRgui(
       nk = nk2;
     }
     if (nx !== view.x || ny !== view.y || nk !== view.k) {
-      sel.call(
-        zoomBehavior.transform,
-        zoomIdentity.translate(nx, ny).scale(nk),
-      );
+      sel.call(zoomBehavior.transform, zoomIdentity.translate(nx, ny).scale(nk));
     }
     if (p.active || z.active) navRaf = requestAnimationFrame(navTick);
   };
@@ -2054,8 +1902,7 @@ export function createRgui(
   const cycleFocus = (dir: number) => {
     const ns = graph.nodes;
     if (!ns.length) return;
-    if (focusIndex < 0 || focusIndex >= ns.length)
-      focusIndex = dir > 0 ? 0 : ns.length - 1;
+    if (focusIndex < 0 || focusIndex >= ns.length) focusIndex = dir > 0 ? 0 : ns.length - 1;
     else focusIndex = (focusIndex + dir + ns.length) % ns.length;
     const n = ns[focusIndex]!;
     applySelection(new Set([n.id]));
@@ -2135,10 +1982,7 @@ export function createRgui(
 
   const typingInField = (ev: KeyboardEvent) => {
     const t = ev.target as HTMLElement | null;
-    return !!(
-      t &&
-      (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)
-    );
+    return !!(t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable));
   };
 
   const onKeyDown = (ev: KeyboardEvent) => {
@@ -2269,33 +2113,24 @@ export function createRgui(
       (inStreak
         ? wheelStreak.zoom // mid-burst: keep the burst's classification
         : ev.deltaMode !== 0 || // line/page mode = real mouse wheel
-          (ev.deltaX === 0 &&
-            Number.isInteger(ev.deltaY) &&
-            Math.abs(ev.deltaY) >= 50)); // isolated discrete tick
-    if (ev.ctrlKey) wheelStreak.ts = 0; // pinch resets the burst
+          (ev.deltaX === 0 && Number.isInteger(ev.deltaY) && Math.abs(ev.deltaY) >= 50)); // isolated discrete tick
+    if (ev.ctrlKey)
+      wheelStreak.ts = 0; // pinch resets the burst
     else wheelStreak = { ts: now, zoom: isZoom };
     if (isZoom) {
       // clamp per-event delta so pinch (small fractional deltas) stays
       // smooth while discrete mouse-wheel ticks (±120) don't explode
-      const d = Math.max(
-        -40,
-        Math.min(40, ev.deltaY * (ev.deltaMode === 0 ? 1 : 20)),
-      );
+      const d = Math.max(-40, Math.min(40, ev.deltaY * (ev.deltaMode === 0 ? 1 : 20)));
       const factor = Math.exp(-d * 0.012);
       const k = Math.min(1e6, Math.max(1e-6, view.k * factor));
       // keep the world point under the cursor invariant
       const [wx, wy] = screenToWorld(view, ox, oy);
-      sel.call(
-        zoomBehavior.transform,
-        zoomIdentity.translate(ox - wx * k, oy - wy * k).scale(k),
-      );
+      sel.call(zoomBehavior.transform, zoomIdentity.translate(ox - wx * k, oy - wy * k).scale(k));
     } else {
       // touchpad two-finger scroll pans both axes (view is always 2-D)
       sel.call(
         zoomBehavior.transform,
-        zoomIdentity
-          .translate(view.x - ev.deltaX, view.y - ev.deltaY)
-          .scale(view.k),
+        zoomIdentity.translate(view.x - ev.deltaX, view.y - ev.deltaY).scale(view.k),
       );
     }
   };
@@ -2320,11 +2155,7 @@ export function createRgui(
       if (panelHitAt(lastPanelRects, me.offsetX, me.offsetY)) return false;
       const [fvx, fvy] = toView(me.offsetX, me.offsetY);
       if (gripHitAt(fvx, fvy)) return false; // resize grip
-      if (
-        (options.onConnect || options.isValidConnection) &&
-        portAt(fvx, fvy)
-      )
-        return false; // wire drag wins
+      if ((options.onConnect || options.isValidConnection) && portAt(fvx, fvy)) return false; // wire drag wins
       return !hitAt(fvx, fvy);
     })
     .on("zoom", (ev: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
@@ -2341,14 +2172,9 @@ export function createRgui(
   sel.call(
     zoomBehavior.transform,
     options.view
-      ? zoomIdentity
-          .translate(options.view.x, options.view.y)
-          .scale(options.view.k)
+      ? zoomIdentity.translate(options.view.x, options.view.y).scale(options.view.k)
       : // default: world origin at the viewport center
-        zoomIdentity.translate(
-          canvas.clientWidth / 2,
-          canvas.clientHeight / 2,
-        ),
+        zoomIdentity.translate(canvas.clientWidth / 2, canvas.clientHeight / 2),
   );
 
   const ro = new ResizeObserver(() => {
@@ -2471,10 +2297,7 @@ export function createRgui(
         })),
       };
     },
-    setNodeOverlay(
-      nodeId: string,
-      overlay: HTMLElement | NodeHtmlOverlay | null,
-    ) {
+    setNodeOverlay(nodeId: string, overlay: HTMLElement | NodeHtmlOverlay | null) {
       const n = graph.nodes.find((m) => m.id === nodeId);
       if (!n) {
         console.warn(`[rgui] setNodeOverlay: unknown node "${nodeId}"`);
@@ -2504,12 +2327,7 @@ export function createRgui(
         }
         // size law: 1..radix grids at some layer, never below minimums
         const minH = nodeMinHeight(n);
-        const snapped = snapNodeSize(
-          n.w,
-          nodeHeight(n),
-          rule.radix,
-          rule.sizeLaw,
-        );
+        const snapped = snapNodeSize(n.w, nodeHeight(n), rule.radix, rule.sizeLaw);
         const nw = Math.max(nodeMinWidth(n), snapped.w);
         const nh = Math.max(minH, snapped.h);
         if (nw !== n.w || nh !== nodeHeight(n)) {
@@ -2606,12 +2424,7 @@ export function createRgui(
       const nodes = lastRg?.nodes ?? dGraph.nodes;
       const segments = flushSegments(nodes);
       // dissolved into a seam (direct contact) → not drawn as a wire
-      if (
-        flushPairKeys(segments).has(
-          [edge.from.node, edge.to.node].sort().join("|"),
-        )
-      )
-        return null;
+      if (flushPairKeys(segments).has([edge.from.node, edge.to.node].sort().join("|"))) return null;
       const layout = computePortLayout(graph, nodes, segments);
       const pf = layout.get(`${edge.from.node}/out/${edge.from.port}`);
       const pt = layout.get(`${edge.to.node}/in/${edge.to.port}`);
@@ -2622,10 +2435,7 @@ export function createRgui(
       const cx0 = x0 + (pf.edge === "right" ? 1 : -1) * dx;
       const cx1 = x1 + (pt.edge === "right" ? 1 : -1) * dx;
       // cubic bezier at u=0.5 (controls' y equal endpoint y)
-      const [mx, my] = fromView(
-        0.125 * (x0 + x1) + 0.375 * (cx0 + cx1),
-        0.5 * (y0 + y1),
-      );
+      const [mx, my] = fromView(0.125 * (x0 + x1) + 0.375 * (cx0 + cx1), 0.5 * (y0 + y1));
       return { x: mx, y: my };
     },
     setView(v: ViewTransform, opts?: { animate?: boolean; durationMs?: number }) {
@@ -2634,10 +2444,7 @@ export function createRgui(
         return;
       }
       cancelFly();
-      sel.call(
-        zoomBehavior.transform,
-        zoomIdentity.translate(v.x, v.y).scale(v.k),
-      );
+      sel.call(zoomBehavior.transform, zoomIdentity.translate(v.x, v.y).scale(v.k));
     },
     fitView(paddingPx = 48) {
       if (!graph.nodes.length) return;
@@ -2647,11 +2454,7 @@ export function createRgui(
       const y1 = Math.max(...graph.nodes.map((n) => n.y + nodeHeight(n)));
       const W = canvas.clientWidth;
       const H = canvas.clientHeight;
-      const k = Math.min(
-        (W - 2 * paddingPx) / (x1 - x0),
-        (H - 2 * paddingPx) / (y1 - y0),
-        1e6,
-      );
+      const k = Math.min((W - 2 * paddingPx) / (x1 - x0), (H - 2 * paddingPx) / (y1 - y0), 1e6);
       const cx = (x0 + x1) / 2;
       const cy = (y0 + y1) / 2;
       sel.call(

@@ -27,12 +27,10 @@ export interface LaneView {
 }
 
 /** flow-axis: world → screen y. */
-export const worldToScreenY = (v: LaneView, wy: number) =>
-  (wy - v.scrollY) * v.zoomY;
+export const worldToScreenY = (v: LaneView, wy: number) => (wy - v.scrollY) * v.zoomY;
 
 /** flow-axis: screen → world y. */
-export const screenToWorldY = (v: LaneView, sy: number) =>
-  sy / v.zoomY + v.scrollY;
+export const screenToWorldY = (v: LaneView, sy: number) => sy / v.zoomY + v.scrollY;
 
 /** flow-axis world span currently visible (world units per viewport). */
 export const visibleSpan = (v: LaneView) => v.height / v.zoomY;

@@ -101,7 +101,9 @@ describe("federated graph envelope", () => {
   });
 
   test("federatedTerminalPreview sanitizes hostile hints and respects privacy", () => {
-    expect(federatedTerminalPreview({ renderHints: { preview: { kind: "text" } } })).toBeUndefined();
+    expect(
+      federatedTerminalPreview({ renderHints: { preview: { kind: "text" } } }),
+    ).toBeUndefined();
     expect(federatedTerminalPreview({ renderHints: {} })).toBeUndefined();
     expect(
       federatedTerminalPreview({

@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  evTimestampMs,
-  foldYearProjector,
-  type FoldProjection,
-} from "./temporal.js";
+import { evTimestampMs, foldYearProjector, type FoldProjection } from "./temporal.js";
 
 function project(tMs: number): FoldProjection {
   const result = foldYearProjector.project(tMs);
@@ -11,11 +7,7 @@ function project(tMs: number): FoldProjection {
   return result!;
 }
 
-function utcDateMs(
-  year: number,
-  month = 0,
-  day = 1,
-): number {
+function utcDateMs(year: number, month = 0, day = 1): number {
   const date = new Date(0);
   date.setUTCFullYear(year, month, day);
   date.setUTCHours(0, 0, 0, 0);
@@ -76,9 +68,7 @@ describe("foldYearProjector", () => {
     const startOfMarch = project(Date.UTC(2023, 2, 1));
     expect(endOfCommonFebruary.phase0).toBeLessThan((1 + 28 / 29) / 12);
     expect(startOfMarch.phase0).toBe(2 / 12);
-    expect(startOfMarch.phase0 - endOfCommonFebruary.phase0).toBeGreaterThan(
-      1 / (29 * 12) - 1e-10,
-    );
+    expect(startOfMarch.phase0 - endOfCommonFebruary.phase0).toBeGreaterThan(1 / (29 * 12) - 1e-10);
   });
 
   test("keeps sampled valid phases in [0, 1)", () => {
@@ -99,17 +89,14 @@ describe("foldYearProjector", () => {
   });
 
   test("row keys and indices do not depend on projection order", () => {
-    const timestamps = [
-      Date.UTC(2026, 6, 11),
-      Date.UTC(2024, 1, 29),
-      Date.UTC(2025, 11, 31),
-    ];
+    const timestamps = [Date.UTC(2026, 6, 11), Date.UTC(2024, 1, 29), Date.UTC(2025, 11, 31)];
     const forward = timestamps.map((tMs) => project(tMs));
-    const reverse = timestamps.toReversed().map((tMs) => project(tMs)).toReversed();
+    const reverse = timestamps
+      .toReversed()
+      .map((tMs) => project(tMs))
+      .toReversed();
 
-    expect(reverse.map(({ rowKey }) => rowKey)).toEqual(
-      forward.map(({ rowKey }) => rowKey),
-    );
+    expect(reverse.map(({ rowKey }) => rowKey)).toEqual(forward.map(({ rowKey }) => rowKey));
     expect(reverse.map(({ rowIndex }) => rowIndex)).toEqual(
       forward.map(({ rowIndex }) => rowIndex),
     );
@@ -201,7 +188,12 @@ describe2("finer fold projectors", () => {
 
   test2("foldRowStartMs inverts rowIndex for every fold", () => {
     const t = Date.UTC(2026, 6, 11, 14, 30, 15);
-    for (const proj of [foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector]) {
+    for (const proj of [
+      foldMonthProjector,
+      foldWeekProjector,
+      foldDayProjector,
+      foldHourProjector,
+    ]) {
       const p = proj.project(t)!;
       const start = foldRowStartMs(proj.id, p.rowIndex);
       expect2(proj.project(start)!.rowIndex).toBe(p.rowIndex);
@@ -242,7 +234,9 @@ describe2("decimal year fold projectors", () => {
     const minusOne = foldDecadeProjector.project(utcDateMs(-1))!;
     const minusTen = foldDecadeProjector.project(utcDateMs(-10))!;
     expect2({ row: zero.rowIndex, phase: zero.phase0, key: zero.rowKey }).toEqual({
-      row: 0, phase: 0, key: "0s",
+      row: 0,
+      phase: 0,
+      key: "0s",
     });
     expect2(nine.rowIndex).toBe(0);
     expect2(nine.phase0).toBeGreaterThan(0.9);
@@ -258,7 +252,7 @@ describe2("decimal year fold projectors", () => {
     const b = foldDecadeProjector.project(utcDateMs(2001, 6, 11))!;
     expect2(a.phase0).toBeCloseTo(b.phase0, 14);
 
-    const c = foldCenturyProjector.project(utcDateMs(1924, 1, 29,))!;
+    const c = foldCenturyProjector.project(utcDateMs(1924, 1, 29))!;
     const d = foldCenturyProjector.project(utcDateMs(2024, 1, 29))!;
     expect2(c.phase0).toBeCloseTo(d.phase0, 14);
   });
@@ -316,7 +310,13 @@ describe2("adversarial probes (self-review of ba588b2)", () => {
   });
 
   test2("nominal mid-row instant stays inside its row for every fold", () => {
-    const projs = [foldYearProjector, foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector];
+    const projs = [
+      foldYearProjector,
+      foldMonthProjector,
+      foldWeekProjector,
+      foldDayProjector,
+      foldHourProjector,
+    ];
     let seed = 42;
     const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     for (const proj of projs) {
@@ -332,7 +332,13 @@ describe2("adversarial probes (self-review of ba588b2)", () => {
 
 describe2("Date TimeClip extremes (codex review of 6a92730)", () => {
   test2("projections at ±8.64e15 either reject or keep the inverse contract total", () => {
-    const projs = [foldYearProjector, foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector];
+    const projs = [
+      foldYearProjector,
+      foldMonthProjector,
+      foldWeekProjector,
+      foldDayProjector,
+      foldHourProjector,
+    ];
     for (const proj of projs) {
       for (const t of [-8.64e15, 8.64e15, -8.64e15 + 1, 8.64e15 - 1]) {
         const p = proj.project(t);
@@ -350,7 +356,13 @@ describe2("Date TimeClip extremes (codex review of 6a92730)", () => {
 
   test2("ordinary modern instants are unaffected by the edge guards", () => {
     const t = Date.UTC(2026, 6, 11, 14, 30);
-    for (const proj of [foldYearProjector, foldMonthProjector, foldWeekProjector, foldDayProjector, foldHourProjector]) {
+    for (const proj of [
+      foldYearProjector,
+      foldMonthProjector,
+      foldWeekProjector,
+      foldDayProjector,
+      foldHourProjector,
+    ]) {
       expect2(proj.project(t)).not.toBeNull();
     }
   });
@@ -358,53 +370,71 @@ describe2("Date TimeClip extremes (codex review of 6a92730)", () => {
 
 describe2("precisionWindow", () => {
   test2("constructs exact half-open calendar cycles across leap and common February", () => {
-    expect2(precisionWindow({
-      tMs: Date.UTC(2024, 1, 29, 12),
-      precision: { kind: "calendar", unit: "month" },
-    })).toEqual([Date.UTC(2024, 1, 1), Date.UTC(2024, 2, 1)]);
-    expect2(precisionWindow({
-      tMs: Date.UTC(2023, 1, 28, 12),
-      precision: { kind: "calendar", unit: "month" },
-    })).toEqual([Date.UTC(2023, 1, 1), Date.UTC(2023, 2, 1)]);
+    expect2(
+      precisionWindow({
+        tMs: Date.UTC(2024, 1, 29, 12),
+        precision: { kind: "calendar", unit: "month" },
+      }),
+    ).toEqual([Date.UTC(2024, 1, 1), Date.UTC(2024, 2, 1)]);
+    expect2(
+      precisionWindow({
+        tMs: Date.UTC(2023, 1, 28, 12),
+        precision: { kind: "calendar", unit: "month" },
+      }),
+    ).toEqual([Date.UTC(2023, 1, 1), Date.UTC(2023, 2, 1)]);
   });
 
   test2("preserves years 0 through 99 and negative UTC years", () => {
     for (const year of [42, 0, -42]) {
-      expect2(precisionWindow({
-        tMs: utcDateMs(year, 6, 1),
-        precision: { kind: "calendar", unit: "year" },
-      })).toEqual([utcDateMs(year), utcDateMs(year + 1)]);
+      expect2(
+        precisionWindow({
+          tMs: utcDateMs(year, 6, 1),
+          precision: { kind: "calendar", unit: "year" },
+        }),
+      ).toEqual([utcDateMs(year), utcDateMs(year + 1)]);
     }
   });
 
   test2("constructs day, hour, and minute windows containing the instant", () => {
     const tMs = Date.UTC(2026, 6, 11, 14, 37, 45, 123);
-    expect2(precisionWindow({
-      tMs,
-      precision: { kind: "calendar", unit: "day" },
-    })).toEqual([Date.UTC(2026, 6, 11), Date.UTC(2026, 6, 12)]);
-    expect2(precisionWindow({
-      tMs,
-      precision: { kind: "calendar", unit: "hour" },
-    })).toEqual([Date.UTC(2026, 6, 11, 14), Date.UTC(2026, 6, 11, 15)]);
-    expect2(precisionWindow({
-      tMs,
-      precision: { kind: "calendar", unit: "minute" },
-    })).toEqual([Date.UTC(2026, 6, 11, 14, 37), Date.UTC(2026, 6, 11, 14, 38)]);
+    expect2(
+      precisionWindow({
+        tMs,
+        precision: { kind: "calendar", unit: "day" },
+      }),
+    ).toEqual([Date.UTC(2026, 6, 11), Date.UTC(2026, 6, 12)]);
+    expect2(
+      precisionWindow({
+        tMs,
+        precision: { kind: "calendar", unit: "hour" },
+      }),
+    ).toEqual([Date.UTC(2026, 6, 11, 14), Date.UTC(2026, 6, 11, 15)]);
+    expect2(
+      precisionWindow({
+        tMs,
+        precision: { kind: "calendar", unit: "minute" },
+      }),
+    ).toEqual([Date.UTC(2026, 6, 11, 14, 37), Date.UTC(2026, 6, 11, 14, 38)]);
   });
 
   test2("rejects uncertainty and missing or unrepresentable instants", () => {
-    expect2(precisionWindow({
-      tMs: Date.UTC(2026, 0, 1),
-      precision: { kind: "uncertainty", beforeYears: 2, afterYears: 3 },
-    })).toBeNull();
-    expect2(precisionWindow({
-      precision: { kind: "calendar", unit: "day" },
-    })).toBeNull();
-    expect2(precisionWindow({
-      tMs: 8.64e15,
-      precision: { kind: "calendar", unit: "year" },
-    })).toBeNull();
+    expect2(
+      precisionWindow({
+        tMs: Date.UTC(2026, 0, 1),
+        precision: { kind: "uncertainty", beforeYears: 2, afterYears: 3 },
+      }),
+    ).toBeNull();
+    expect2(
+      precisionWindow({
+        precision: { kind: "calendar", unit: "day" },
+      }),
+    ).toBeNull();
+    expect2(
+      precisionWindow({
+        tMs: 8.64e15,
+        precision: { kind: "calendar", unit: "year" },
+      }),
+    ).toBeNull();
   });
 });
 
@@ -412,23 +442,27 @@ describe2("projectWindow", () => {
   test2("keeps a whole window in one row and preserves partial phases", () => {
     const start = Date.UTC(2026, 6, 11, 14, 15);
     const end = Date.UTC(2026, 6, 11, 14, 45);
-    expect2(projectWindow("hour", start, end)).toEqual([{
-      rowIndex: Math.floor(start / 3_600_000),
-      phase0: 0.25,
-      phase1: 0.75,
-      full: false,
-    }]);
+    expect2(projectWindow("hour", start, end)).toEqual([
+      {
+        rowIndex: Math.floor(start / 3_600_000),
+        phase0: 0.25,
+        phase1: 0.75,
+        full: false,
+      },
+    ]);
   });
 
   test2("uses half-open row boundaries for an exact end at midnight", () => {
     const start = Date.UTC(2026, 6, 11);
     const end = Date.UTC(2026, 6, 12);
-    expect2(projectWindow("day", start, end)).toEqual([{
-      rowIndex: Math.floor(start / 86_400_000),
-      phase0: 0,
-      phase1: 1,
-      full: true,
-    }]);
+    expect2(projectWindow("day", start, end)).toEqual([
+      {
+        rowIndex: Math.floor(start / 86_400_000),
+        phase0: 0,
+        phase1: 1,
+        full: true,
+      },
+    ]);
   });
 
   test2("spans three or more rows with full middle fragments", () => {
@@ -445,27 +479,27 @@ describe2("projectWindow", () => {
   });
 
   test2("maps common-February ghost space without filling it", () => {
-    const fragments = projectWindow(
-      "year",
-      Date.UTC(2023, 1, 1),
-      Date.UTC(2023, 2, 1),
-    );
-    expect2(fragments).toEqual([{
-      rowIndex: 2023,
-      phase0: 1 / 12,
-      phase1: 2 / 12,
-      full: false,
-    }]);
+    const fragments = projectWindow("year", Date.UTC(2023, 1, 1), Date.UTC(2023, 2, 1));
+    expect2(fragments).toEqual([
+      {
+        rowIndex: 2023,
+        phase0: 1 / 12,
+        phase1: 2 / 12,
+        full: false,
+      },
+    ]);
   });
 
   test2("supports years 0 through 99, negative years, and exact year boundaries", () => {
     for (const year of [42, 0, -42]) {
-      expect2(projectWindow("year", utcDateMs(year), utcDateMs(year + 1))).toEqual([{
-        rowIndex: year,
-        phase0: 0,
-        phase1: 1,
-        full: true,
-      }]);
+      expect2(projectWindow("year", utcDateMs(year), utcDateMs(year + 1))).toEqual([
+        {
+          rowIndex: year,
+          phase0: 0,
+          phase1: 1,
+          full: true,
+        },
+      ]);
     }
   });
 

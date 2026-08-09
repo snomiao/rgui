@@ -19,8 +19,7 @@ const viewer = () => (window as unknown as { viewer?: ViewerLike }).viewer;
 const mq = matchMedia("(prefers-color-scheme: light)");
 const saved = localStorage.getItem(KEY);
 let choice: Choice = saved === "light" || saved === "dark" ? saved : "auto";
-const effective = (): Mode =>
-  choice === "auto" ? (mq.matches ? "light" : "dark") : choice;
+const effective = (): Mode => (choice === "auto" ? (mq.matches ? "light" : "dark") : choice);
 
 const ICON: Record<Choice, string> = { auto: "◐", light: "☀", dark: "☾" };
 

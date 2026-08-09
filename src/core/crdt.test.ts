@@ -13,7 +13,10 @@ import {
 } from "./crdt.js";
 
 const clone = (s: GraphCrdtState): GraphCrdtState => JSON.parse(JSON.stringify(s));
-const nodeIds = (s: GraphCrdtState) => crdtToGraph(s).nodes.map((n) => n.id).sort();
+const nodeIds = (s: GraphCrdtState) =>
+  crdtToGraph(s)
+    .nodes.map((n) => n.id)
+    .sort();
 const view = (s: GraphCrdtState) => JSON.stringify(crdtToGraph(s));
 
 describe("GraphCrdt", () => {
@@ -26,7 +29,11 @@ describe("GraphCrdt", () => {
     expect(g.nodes.map((n) => n.id).sort()).toEqual(["n1", "n2"]);
     expect(g.nodes.find((n) => n.id === "n1")?.fields.title).toBe("one");
     expect(g.edges).toEqual([
-      { id: crdtEdgeId({ node: "n1", port: "out" }, { node: "n2", port: "in" }), from: { node: "n1", port: "out" }, to: { node: "n2", port: "in" } },
+      {
+        id: crdtEdgeId({ node: "n1", port: "out" }, { node: "n2", port: "in" }),
+        from: { node: "n1", port: "out" },
+        to: { node: "n2", port: "in" },
+      },
     ]);
   });
 
@@ -140,7 +147,13 @@ describe("GraphCrdt", () => {
       if (op < 0.45) crdtAddNode(s, actors[r]!, id, { n: Math.floor(rnd() * 100) });
       else if (op < 0.65) crdtRemoveNode(s, id);
       else if (op < 0.85) crdtSetFields(s, actors[r]!, id, { n: Math.floor(rnd() * 100) });
-      else crdtAddEdge(s, actors[r]!, { node: id, port: "out" }, { node: `n${Math.floor(rnd() * 8)}`, port: "in" });
+      else
+        crdtAddEdge(
+          s,
+          actors[r]!,
+          { node: id, port: "out" },
+          { node: `n${Math.floor(rnd() * 8)}`, port: "in" },
+        );
     }
     const total1 = mergeGraphCrdt(mergeGraphCrdt(replicas[0]!, replicas[1]!), replicas[2]!);
     const total2 = mergeGraphCrdt(replicas[2]!, mergeGraphCrdt(replicas[1]!, replicas[0]!));

@@ -56,8 +56,8 @@ it entirely on `private` nodes) and `federatedGraphToRgui()` attaches the
 node.renderHints = {
   preview: {
     kind: "terminal",
-    title: "codex · ~/ws/demo",   // title-bar text (defaults to node title)
-    status: "active",              // active | needs_input | stuck | exited | idle
+    title: "codex · ~/ws/demo", // title-bar text (defaults to node title)
+    status: "active", // active | needs_input | stuck | exited | idle
     lines: ["❯ codex --full-auto", "• Ran bun test — 12 pass"], // newest last
   },
 };

@@ -66,8 +66,7 @@ export const CATEGORY_COLOR: Record<string, string> = {
  * KIND_COLOR / CATEGORY_COLOR to pick exact colors) */
 function hashColor(name: string): string {
   let h = 0;
-  for (let i = 0; i < name.length; i++)
-    h = (h * 31 + name.charCodeAt(i)) % 360;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
   // hsl(h, 45%, 55%) emitted as hex so theme utils (withAlpha) can parse it
   const s = 0.45;
   const l = 0.55;
@@ -190,20 +189,15 @@ export function drawGraph(
     // a lone wire carries the whole signal whatever the port's fanout says
     const policy = degree > 1 ? sourceFanout(graph, e) : "broadcast";
     // this wire's share of a split — per-edge weights, normalized over the group
-    const share =
-      policy === "split" ? edgeShare(group, e) : 1;
+    const share = policy === "split" ? edgeShare(group, e) : 1;
     // "split" wires each carry only their share: thin them toward it (sqrt, so a
     // 1/8 split stays visible rather than vanishing)
-    const width =
-      style?.width ??
-      (policy === "split" ? Math.max(0.9, 2 * Math.sqrt(share)) : 2);
+    const width = style?.width ?? (policy === "split" ? Math.max(0.9, 2 * Math.sqrt(share)) : 2);
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.min(width, width / t.k); // cap at `width` screen px
     // "route" wires carry a whole chunk only some of the time — draw them as
     // discrete dots, distinct from the long dashes of an event stream
-    const dash =
-      style?.dash ??
-      (policy === "route" ? [0.5, 6] : e.dashed ? [6, 5] : []);
+    const dash = style?.dash ?? (policy === "route" ? [0.5, 6] : e.dashed ? [6, 5] : []);
     ctx.lineCap = policy === "route" ? "round" : "butt";
     ctx.setLineDash(dash.map((d) => d / t.k));
     // control points bow OUT of each port along its edge normal
@@ -256,9 +250,7 @@ export function drawGraph(
  * signal algebra governs it and the wire draws plain.
  */
 function fanKey(ref: EndpointRef): string | null {
-  return ref.at === "node" && ref.side === "out"
-    ? `${ref.node.id}/${ref.index}`
-    : null;
+  return ref.at === "node" && ref.side === "out" ? `${ref.node.id}/${ref.index}` : null;
 }
 
 /**
@@ -336,21 +328,16 @@ function drawSolderJoint(
   segments: FlushSegment[],
   k: number,
 ) {
-  const seg = segments.find(
-    (s) =>
-      (s.a === a && s.b === b) || (s.a === b && s.b === a),
-  );
+  const seg = segments.find((s) => (s.a === a && s.b === b) || (s.a === b && s.b === a));
   if (!seg) return;
   // place the chevron near the connected ports' rows, clamped into the seam
   const oi = a.outputs.findIndex((p) => p.id === e.source.from.port);
   const ii = b.inputs.findIndex((p) => p.id === e.source.to.port);
   const py =
-    ((oi >= 0 ? outputPortPos(a, oi)[1] : seg.from) +
-      (ii >= 0 ? inputPortPos(b, ii)[1] : seg.to)) /
+    ((oi >= 0 ? outputPortPos(a, oi)[1] : seg.from) + (ii >= 0 ? inputPortPos(b, ii)[1] : seg.to)) /
     2;
   const px =
-    ((oi >= 0 ? outputPortPos(a, oi)[0] : seg.from) +
-      (ii >= 0 ? inputPortPos(b, ii)[0] : seg.to)) /
+    ((oi >= 0 ? outputPortPos(a, oi)[0] : seg.from) + (ii >= 0 ? inputPortPos(b, ii)[0] : seg.to)) /
     2;
   const margin = 9;
   // flow direction: from the output node's center toward the input node's
@@ -362,14 +349,8 @@ function drawSolderJoint(
       : a.y + nodeHeight(a) / 2 <= b.y + nodeHeight(b) / 2
         ? Math.PI / 2 // downward through the horizontal seam
         : -Math.PI / 2;
-  const cx =
-    seg.axis === "v"
-      ? seg.at
-      : Math.min(seg.to - margin, Math.max(seg.from + margin, px));
-  const cy =
-    seg.axis === "v"
-      ? Math.min(seg.to - margin, Math.max(seg.from + margin, py))
-      : seg.at;
+  const cx = seg.axis === "v" ? seg.at : Math.min(seg.to - margin, Math.max(seg.from + margin, px));
+  const cy = seg.axis === "v" ? Math.min(seg.to - margin, Math.max(seg.from + margin, py)) : seg.at;
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -432,13 +413,7 @@ function endpointPlaced(
  * one hook pixel becomes `s` screen pixels and a 2x node's hand-drawn body
  * magnifies exactly like its type does. At s=1 this is the old `scale(1/k)`.
  */
-function hookSpace(
-  ctx: CanvasRenderingContext2D,
-  n: GraphNode,
-  x: number,
-  y: number,
-  k: number,
-) {
+function hookSpace(ctx: CanvasRenderingContext2D, n: GraphNode, x: number, y: number, k: number) {
   ctx.translate(x, y);
   const s = contentScale(n);
   ctx.scale(s / k, s / k);
@@ -694,38 +669,31 @@ function drawNodeBorder(
   ctx.lineWidth = 1.5 * contentScale(n);
   ctx.strokeStyle = T.ink;
   ctx.beginPath();
-  for (const seg of subtractIntervals(
-    { from: n.x + tl, to: n.x + n.w - tr },
-    cov.top,
-  )) {
+  for (const seg of subtractIntervals({ from: n.x + tl, to: n.x + n.w - tr }, cov.top)) {
     ctx.moveTo(seg.from, n.y);
     ctx.lineTo(seg.to, n.y);
   }
-  for (const seg of subtractIntervals(
-    { from: n.y + tr, to: n.y + h - br },
-    cov.right,
-  )) {
+  for (const seg of subtractIntervals({ from: n.y + tr, to: n.y + h - br }, cov.right)) {
     ctx.moveTo(n.x + n.w, seg.from);
     ctx.lineTo(n.x + n.w, seg.to);
   }
-  for (const seg of subtractIntervals(
-    { from: n.x + bl, to: n.x + n.w - br },
-    cov.bottom,
-  )) {
+  for (const seg of subtractIntervals({ from: n.x + bl, to: n.x + n.w - br }, cov.bottom)) {
     ctx.moveTo(seg.from, n.y + h);
     ctx.lineTo(seg.to, n.y + h);
   }
-  for (const seg of subtractIntervals(
-    { from: n.y + tl, to: n.y + h - bl },
-    cov.left,
-  )) {
+  for (const seg of subtractIntervals({ from: n.y + tl, to: n.y + h - bl }, cov.left)) {
     ctx.moveTo(n.x, seg.from);
     ctx.lineTo(n.x, seg.to);
   }
-  if (tl) ctx.moveTo(n.x, n.y + tl), ctx.arc(n.x + tl, n.y + tl, tl, Math.PI, 1.5 * Math.PI);
-  if (tr) ctx.moveTo(n.x + n.w - tr, n.y), ctx.arc(n.x + n.w - tr, n.y + tr, tr, 1.5 * Math.PI, 2 * Math.PI);
-  if (br) ctx.moveTo(n.x + n.w, n.y + h - br), ctx.arc(n.x + n.w - br, n.y + h - br, br, 0, 0.5 * Math.PI);
-  if (bl) ctx.moveTo(n.x + bl, n.y + h), ctx.arc(n.x + bl, n.y + h - bl, bl, 0.5 * Math.PI, Math.PI);
+  if (tl) (ctx.moveTo(n.x, n.y + tl), ctx.arc(n.x + tl, n.y + tl, tl, Math.PI, 1.5 * Math.PI));
+  if (tr)
+    (ctx.moveTo(n.x + n.w - tr, n.y),
+      ctx.arc(n.x + n.w - tr, n.y + tr, tr, 1.5 * Math.PI, 2 * Math.PI));
+  if (br)
+    (ctx.moveTo(n.x + n.w, n.y + h - br),
+      ctx.arc(n.x + n.w - br, n.y + h - br, br, 0, 0.5 * Math.PI));
+  if (bl)
+    (ctx.moveTo(n.x + bl, n.y + h), ctx.arc(n.x + bl, n.y + h - bl, bl, 0.5 * Math.PI, Math.PI));
   ctx.stroke();
   if (remote) {
     ctx.save();
@@ -825,8 +793,7 @@ function drawNodePorts(
           ctx.fillText(
             p.label,
             pl.x,
-            pl.y +
-              (pl.edge === "bottom" ? m.portR + 8 * m.s : -m.portR - 8 * m.s),
+            pl.y + (pl.edge === "bottom" ? m.portR + 8 * m.s : -m.portR - 8 * m.s),
           );
         }
       }
@@ -918,14 +885,7 @@ function drawPseudoNode(
       ctx.beginPath();
       ctx.rect(PSEUDO.pad, top, w - 2 * PSEUDO.pad, maxH);
       ctx.clip();
-      drawSummaryContent(
-        ctx,
-        content,
-        PSEUDO.pad,
-        top,
-        w - 2 * PSEUDO.pad,
-        maxH,
-      );
+      drawSummaryContent(ctx, content, PSEUDO.pad, top, w - 2 * PSEUDO.pad, maxH);
       ctx.restore();
     }
   }
@@ -934,10 +894,7 @@ function drawPseudoNode(
 
 const SUMMARY_LINE_H = 14;
 
-function summaryHeight(
-  ctx: CanvasRenderingContext2D,
-  c: SummaryContent,
-): number {
+function summaryHeight(ctx: CanvasRenderingContext2D, c: SummaryContent): number {
   if (c.kind === "text") return Math.min(c.lines.length, 4) * SUMMARY_LINE_H;
   if (c.kind === "kv") return Math.min(c.rows.length, 4) * SUMMARY_LINE_H;
   return c.height ?? 36;
@@ -1063,8 +1020,7 @@ function portDir(rule: RgRule, io: "in" | "out", edge: Side): -1 | 0 | 1 {
 }
 
 /** which axis a port's chevron runs along */
-const portAxis = (edge: Side): "h" | "v" =>
-  edge === "top" || edge === "bottom" ? "v" : "h";
+const portAxis = (edge: Side): "h" | "v" => (edge === "top" || edge === "bottom" ? "v" : "h");
 
 /** outward unit normal of an edge — the direction a wire leaves the port */
 export function edgeNormal(edge: Side): [number, number] {
@@ -1106,17 +1062,10 @@ export function offscreenIndicators(
 ): OffscreenIndicator[] {
   const { width: W, height: H } = size;
   const m = 18; // edge inset for the markers
-  const clamp = (v: number, lo: number, hi: number) =>
-    Math.min(hi, Math.max(lo, v));
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
   const out: OffscreenIndicator[] = [];
-  const add = (
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number,
-    color: string,
-  ) => {
+  const add = (x0: number, y0: number, x1: number, y1: number, color: string) => {
     // under viewport rotation, test the mapped center against the viewport
     // grown by the rect's half-diagonal (a solid approximation)
     let sx = (x0 + x1) / 2;
@@ -1130,8 +1079,8 @@ export function offscreenIndicators(
     if (off) {
       const ax = clamp(sx, m, W - m);
       const ay = clamp(sy, m, H - m);
-      const wx = (((x0 + x1) / 2) - t.x) / t.k;
-      const wy = (((y0 + y1) / 2) - t.y) / t.k;
+      const wx = ((x0 + x1) / 2 - t.x) / t.k;
+      const wy = ((y0 + y1) / 2 - t.y) / t.k;
       out.push({
         ax,
         ay,

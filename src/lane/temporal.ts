@@ -111,11 +111,9 @@ function projectFoldYear(tMs: number): FoldProjection | null {
   const month = instant.getUTCMonth();
   const dayIndex = instant.getUTCDate() - 1;
   const millisInDay =
-    (((instant.getUTCHours() * 60 + instant.getUTCMinutes()) * 60 +
-      instant.getUTCSeconds()) * 1000) +
+    ((instant.getUTCHours() * 60 + instant.getUTCMinutes()) * 60 + instant.getUTCSeconds()) * 1000 +
     instant.getUTCMilliseconds();
-  const monthPhase =
-    (dayIndex + millisInDay / MS_PER_DAY) / MONTH_DAY_SLOTS[month]!;
+  const monthPhase = (dayIndex + millisInDay / MS_PER_DAY) / MONTH_DAY_SLOTS[month]!;
   const phase = (month + monthPhase) / 12;
   // Defensive invariant guard; valid Date components make this unreachable.
   if (!(phase >= 0 && phase < 1)) return null;
@@ -185,10 +183,7 @@ const pad2 = (n: number) => String(n).padStart(2, "0");
 function rowRepresentable(foldId: string, rowIndex: number): boolean {
   const start = foldRowStartMs(foldId, rowIndex);
   const end = foldRowStartMs(foldId, rowIndex + 1);
-  return (
-    Number.isFinite(new Date(start).getTime()) &&
-    Number.isFinite(new Date(end).getTime())
-  );
+  return Number.isFinite(new Date(start).getTime()) && Number.isFinite(new Date(end).getTime());
 }
 
 function clipped(tMs: number): Date | null {
@@ -271,14 +266,22 @@ export const foldHourProjector: TemporalProjector = {
 
 function projectorForFold(foldId: FoldId): TemporalProjector {
   switch (foldId) {
-    case "millennium": return foldMillenniumProjector;
-    case "century": return foldCenturyProjector;
-    case "decade": return foldDecadeProjector;
-    case "year": return foldYearProjector;
-    case "month": return foldMonthProjector;
-    case "week": return foldWeekProjector;
-    case "day": return foldDayProjector;
-    case "hour": return foldHourProjector;
+    case "millennium":
+      return foldMillenniumProjector;
+    case "century":
+      return foldCenturyProjector;
+    case "decade":
+      return foldDecadeProjector;
+    case "year":
+      return foldYearProjector;
+    case "month":
+      return foldMonthProjector;
+    case "week":
+      return foldWeekProjector;
+    case "day":
+      return foldDayProjector;
+    case "hour":
+      return foldHourProjector;
   }
 }
 
@@ -304,11 +307,8 @@ export function projectWindow(
 ): FoldWindowFragment[] {
   const clippedStart = new Date(startMs).getTime();
   const clippedEnd = new Date(endMs).getTime();
-  if (
-    !Number.isFinite(clippedStart) ||
-    !Number.isFinite(clippedEnd) ||
-    clippedStart >= clippedEnd
-  ) return [];
+  if (!Number.isFinite(clippedStart) || !Number.isFinite(clippedEnd) || clippedStart >= clippedEnd)
+    return [];
 
   const projector = projectorForFold(foldId);
   const start = projector.project(clippedStart);

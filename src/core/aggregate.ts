@@ -31,15 +31,13 @@ export type MergeRule =
 
 const TRUTHY = new Set(["on", "true", "yes", "1", "enabled"]);
 const FALSY = new Set(["off", "false", "no", "0", "disabled"]);
-const isBoolish = (v: string) =>
-  TRUTHY.has(v.toLowerCase()) || FALSY.has(v.toLowerCase());
+const isBoolish = (v: string) => TRUTHY.has(v.toLowerCase()) || FALSY.has(v.toLowerCase());
 
 /** merge a list of field values under a rule (display string out) */
 export function aggregate(values: string[], rule: MergeRule): string {
   if (!values.length) return "";
   if (typeof rule === "function") return rule(values);
-  const nums = () =>
-    values.map((v) => parseFloat(v)).filter((n) => Number.isFinite(n));
+  const nums = () => values.map((v) => parseFloat(v)).filter((n) => Number.isFinite(n));
   switch (rule) {
     case "any": // boolean OR ≡ max over {0,1}
     case "all": // boolean AND ≡ min over {0,1}
@@ -88,9 +86,7 @@ export function aggregate(values: string[], rule: MergeRule): string {
     }
     case "same": {
       const distinct = new Set(values);
-      return distinct.size === 1
-        ? values[0]!
-        : `mixed (${distinct.size})`;
+      return distinct.size === 1 ? values[0]! : `mixed (${distinct.size})`;
     }
     case "first":
       return values[0]!;
@@ -149,10 +145,7 @@ export function fieldSummarize(
     if (!byKey.size) return null;
     const rows: [string, string][] = [];
     for (const [k, values] of byKey) {
-      const merged = aggregate(
-        values,
-        nodeRules.get(k) ?? rules[k] ?? fallback,
-      );
+      const merged = aggregate(values, nodeRules.get(k) ?? rules[k] ?? fallback);
       if (merged) rows.push([k, merged]);
     }
     return rows.length ? { kind: "kv", rows: rows.slice(0, 4) } : null;
@@ -176,10 +169,7 @@ export function ordered(
   order: string[] | ((v: string) => number),
   dir: "max" | "min" = "max",
 ): (values: string[]) => string {
-  const key =
-    typeof order === "function"
-      ? order
-      : (v: string) => order.indexOf(v);
+  const key = typeof order === "function" ? order : (v: string) => order.indexOf(v);
   return (values) => {
     let best = values[0]!;
     let bestK = key(best);
@@ -194,7 +184,6 @@ export function ordered(
     return best;
   };
 }
-
 
 /**
  * ADVANCED: arbitrary quantile of the numeric values (q in 0..1, linear

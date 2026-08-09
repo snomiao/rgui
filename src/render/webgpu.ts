@@ -252,14 +252,7 @@ export function createWebGPUGridRenderer(
   // growable scratch buffer reused across frames (allocation-free steady state)
   let scratch = new Float32Array(4096 * STRIDE);
   let scratchLen = 0;
-  const pushInst = (
-    sx: number,
-    sy: number,
-    r: number,
-    a: number,
-    tx: number,
-    ty: number,
-  ) => {
+  const pushInst = (sx: number, sy: number, r: number, a: number, tx: number, ty: number) => {
     if (scratchLen + STRIDE > scratch.length) {
       const bigger = new Float32Array(scratch.length * 2);
       bigger.set(scratch);
@@ -366,9 +359,7 @@ export function createWebGPUGridRenderer(
         ar / 255, ag / 255, ab / 255, 0,
       ]),
     );
-    const bg =
-      (typeof background === "function" ? background() : background) ??
-      theme.background;
+    const bg = (typeof background === "function" ? background() : background) ?? theme.background;
     const clearValue =
       bg === false
         ? { r: 0, g: 0, b: 0, a: 0 }

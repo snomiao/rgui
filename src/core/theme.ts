@@ -92,10 +92,7 @@ export const LIGHT_THEME: RgTheme = {
  * Theme input: a built-in name, or a partial palette over a base
  * ({ base: "light", accent: "#e91e63" } — omitted base = dark).
  */
-export type RgThemeInput =
-  | "dark"
-  | "light"
-  | (Partial<RgTheme> & { base?: "dark" | "light" });
+export type RgThemeInput = "dark" | "light" | (Partial<RgTheme> & { base?: "dark" | "light" });
 
 /** Resolve input to a fresh mutable RgTheme (safe to Object.assign later). */
 export function resolveTheme(input?: RgThemeInput): RgTheme {
@@ -111,7 +108,12 @@ export function themeRgb(color: string): [number, number, number] {
   if (c.startsWith("#")) {
     const h = c.slice(1);
     const full =
-      h.length === 3 ? h.split("").map((d) => d + d).join("") : h.slice(0, 6);
+      h.length === 3
+        ? h
+            .split("")
+            .map((d) => d + d)
+            .join("")
+        : h.slice(0, 6);
     const n = parseInt(full, 16);
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   }

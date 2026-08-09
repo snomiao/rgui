@@ -203,9 +203,7 @@ export function allowedMerges(measure: Measure): MergeRule[] {
     "mean",
     "median",
   ];
-  return measure === "extensive"
-    ? [...ADDITIVE_RULES, ...selection]
-    : selection;
+  return measure === "extensive" ? [...ADDITIVE_RULES, ...selection] : selection;
 }
 
 /**
@@ -226,8 +224,7 @@ export function isMergeLegal(rule: MergeRule, measure: Measure): boolean {
  * not know placement, so it never performs that check; it exports the predicate
  * and lets the host apply it to its own edges.
  */
-export const isDuplicable = (o: Ownership): boolean =>
-  o === "copy" || o === "clone";
+export const isDuplicable = (o: Ownership): boolean => o === "copy" || o === "clone";
 
 /**
  * May several consumers hold this value at once? True for everything but "move".
@@ -255,8 +252,7 @@ export function isFanoutLegal(ownership: Ownership, fanout: Fanout): boolean {
 export const isConserved = (s: SignalSpec): boolean => s.ownership === "move";
 
 /** is duplicating it legal but expensive? (a warning, never an error) */
-export const isCostlyToCopy = (s: SignalSpec): boolean =>
-  s.ownership === "clone";
+export const isCostlyToCopy = (s: SignalSpec): boolean => s.ownership === "clone";
 
 /** resolve a port's declared algebra against the defaults */
 export function resolveSignal(port: Port): SignalSpec {
@@ -271,8 +267,7 @@ export function resolveSignal(port: Port): SignalSpec {
 }
 
 /** the key a fan-out group is addressed by: "nodeId.portId" */
-export const fanoutKey = (nodeId: string, portId: string): string =>
-  `${nodeId}.${portId}`;
+export const fanoutKey = (nodeId: string, portId: string): string => `${nodeId}.${portId}`;
 
 /**
  * The policy governing one fan-out group. The port declares the default; the
@@ -280,24 +275,16 @@ export const fanoutKey = (nodeId: string, portId: string): string =>
  * recorder (broadcast) in one graph and a worker pool (route) in another. That
  * is a topology decision, and topology belongs to the graph.
  */
-export function groupFanout(
-  graph: Graph,
-  nodeId: string,
-  portId: string,
-): Fanout {
+export function groupFanout(graph: Graph, nodeId: string, portId: string): Fanout {
   const override = graph.fanout?.[fanoutKey(nodeId, portId)];
   if (override) return override;
-  const p = graph.nodes
-    .find((n) => n.id === nodeId)
-    ?.outputs.find((o) => o.id === portId);
+  const p = graph.nodes.find((n) => n.id === nodeId)?.outputs.find((o) => o.id === portId);
   return p ? resolveSignal(p).fanout : DEFAULT_SIGNAL.fanout;
 }
 
 /** the edges leaving one output port, in graph order */
 export function fanoutGroup(graph: Graph, nodeId: string, portId: string) {
-  return graph.edges.filter(
-    (e) => e.from.node === nodeId && e.from.port === portId,
-  );
+  return graph.edges.filter((e) => e.from.node === nodeId && e.from.port === portId);
 }
 
 /**
@@ -305,11 +292,7 @@ export function fanoutGroup(graph: Graph, nodeId: string, portId: string) {
  * the shares may differ within a group — the policy may not. An edge with no
  * `weight` counts as 1.
  */
-export function groupWeights(
-  graph: Graph,
-  nodeId: string,
-  portId: string,
-): number[] {
+export function groupWeights(graph: Graph, nodeId: string, portId: string): number[] {
   const edges = fanoutGroup(graph, nodeId, portId);
   return normalizeWeights(
     edges.length,
@@ -480,8 +463,7 @@ export function forkValue<T, A = unknown>(
       );
     return splitAtoms(az.atoms(value), weights).map((p) => az.join(p));
   }
-  if (typeof value === "number")
-    return splitQuantity(value, weights) as unknown as T[];
+  if (typeof value === "number") return splitQuantity(value, weights) as unknown as T[];
   // a non-numeric continuous value has no defined cut — refuse rather than guess
   throw new TypeError(
     `rgui: fanout "split" with grain "continuous" needs a numeric value (got ${typeof value})`,
@@ -596,8 +578,10 @@ export function checkSignals(graph: Graph): SignalDiagnostic[] {
     const s = resolveSignal(p);
     const policy = groupFanout(graph, nodeId, portId);
 
-    if (fanoutGroup(graph, nodeId, portId).some((e) => e.weight !== undefined) &&
-      policy !== "split")
+    if (
+      fanoutGroup(graph, nodeId, portId).some((e) => e.weight !== undefined) &&
+      policy !== "split"
+    )
       out.push({
         severity: "warn",
         code: "weight-without-split",

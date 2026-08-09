@@ -69,12 +69,7 @@ export interface NodeHtmlOverlay {
 
 export interface OverlayManager {
   /** glue/refresh all overlays for the current frame */
-  sync(
-    graph: Graph,
-    visibleNodes: GraphNode[] | null,
-    view: ViewTransform,
-    rule: RgRule,
-  ): void;
+  sync(graph: Graph, visibleNodes: GraphNode[] | null, view: ViewTransform, rule: RgRule): void;
   destroy(): void;
 }
 
@@ -116,8 +111,7 @@ export function createOverlayManager(
   function applyControlPassthrough(el: HTMLElement) {
     el.style.pointerEvents = "none";
     if (el.matches?.(CONTROLS)) el.style.pointerEvents = "auto";
-    for (const c of el.querySelectorAll<HTMLElement>(CONTROLS))
-      c.style.pointerEvents = "auto";
+    for (const c of el.querySelectorAll<HTMLElement>(CONTROLS)) c.style.pointerEvents = "auto";
   }
 
   /** can any scrollable between target and the layer consume this wheel? */
@@ -126,10 +120,7 @@ export function createOverlayManager(
     while (el && el !== layer) {
       const style = getComputedStyle(el);
       const oy = style.overflowY;
-      if (
-        (oy === "auto" || oy === "scroll") &&
-        el.scrollHeight > el.clientHeight + 1
-      ) {
+      if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1) {
         const down = ev.deltaY > 0;
         const canScroll = down
           ? el.scrollTop + el.clientHeight < el.scrollHeight - 1
@@ -171,8 +162,7 @@ export function createOverlayManager(
     if (layer) return layer;
     const parent = canvas.parentElement;
     if (!parent) return null;
-    if (getComputedStyle(parent).position === "static")
-      parent.style.position = "relative";
+    if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
     layer = document.createElement("div");
     layer.className = "rgui-overlay-layer";
     // viewport clip by default; wrapper is a pass-through. overscroll
@@ -221,15 +211,8 @@ export function createOverlayManager(
     mounted.delete(id);
   }
 
-  function sync(
-    graph: Graph,
-    visibleNodes: GraphNode[] | null,
-    view: ViewTransform,
-    rule: RgRule,
-  ) {
-    const want = new Map(
-      graph.nodes.filter((n) => n.overlay).map((n) => [n.id, n]),
-    );
+  function sync(graph: Graph, visibleNodes: GraphNode[] | null, view: ViewTransform, rule: RgRule) {
+    const want = new Map(graph.nodes.filter((n) => n.overlay).map((n) => [n.id, n]));
     // unmount overlays whose node vanished or whose element was replaced
     for (const [id, m] of [...mounted]) {
       const n = want.get(id);

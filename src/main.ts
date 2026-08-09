@@ -60,8 +60,7 @@ stt.body = (ctx, rect) => {
   ctx.beginPath();
   for (let x = 0; x <= rect.width; x += 2) {
     const y =
-      rect.height / 2 +
-      Math.sin(x / 9 + phase) * Math.sin(x / 37 + phase / 3) * rect.height * 0.4;
+      rect.height / 2 + Math.sin(x / 9 + phase) * Math.sin(x / 37 + phase / 3) * rect.height * 0.4;
     x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   }
   ctx.stroke();
@@ -113,10 +112,7 @@ const viewer = rgui(canvas, {
     if (info.level === "pseudo") {
       return {
         kind: "text",
-        lines: [
-          nodes.map((n) => n.title).join(" → "),
-          `${nodes.length} nodes · rusty-fox`,
-        ],
+        lines: [nodes.map((n) => n.title).join(" → "), `${nodes.length} nodes · rusty-fox`],
       };
     }
     const n = nodes[0]!;
@@ -140,8 +136,7 @@ const viewer = rgui(canvas, {
     return key ? { kind: "kv", rows: [[key[0], key[1]]] } : null;
   },
   onPinChange: (id, pinned) => console.log("[rgui] pin", id, pinned),
-  onPanelMove: (panel, anchor) =>
-    console.log("[rgui] panelMove", panel.id, anchor),
+  onPanelMove: (panel, anchor) => console.log("[rgui] panelMove", panel.id, anchor),
   panels: [
     {
       id: "palette",
@@ -228,10 +223,8 @@ function lawExample(radix: number, law: SizeLaw, wg: number, hg: number): string
 function sync(radix: number, law: SizeLaw) {
   viewer.setRule({ radix, sizeLaw: law });
   for (const b of radixBox.querySelectorAll("button")) {
-    if (b.dataset.radix)
-      b.setAttribute("aria-pressed", String(Number(b.dataset.radix) === radix));
-    if (b.dataset.law)
-      b.setAttribute("aria-pressed", String(b.dataset.law === law));
+    if (b.dataset.radix) b.setAttribute("aria-pressed", String(Number(b.dataset.radix) === radix));
+    if (b.dataset.law) b.setAttribute("aria-pressed", String(b.dataset.law === law));
   }
   const rungs = scaleLadder(radix)
     .map((s) => (s === 1 ? `<b>1x</b>` : `${s}x`))
