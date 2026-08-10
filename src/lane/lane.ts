@@ -364,8 +364,23 @@ export function createLane(
   // super-linearly (φ^speed on the exponent) so you can cross many scales fast
   const PHI = 1.618033988749895;
   const WHEEL_BASE = 0.016; // 5× gain for trackpad horizontal-scroll / pinch zoom
+  const WHEEL_GESTURE_GAP_MS = 180;
+  const DIRECTION_SNAP_TAN = Math.tan(Math.PI / 18); // ±10° from an axis
+  type WheelAxis = "x" | "y" | "free";
+  let wheelAxis: WheelAxis = "free";
+  let lastPlainWheelT = -Infinity;
   let wheelVel = 0; // EMA of |delta| px per ms
   let lastWheelT = 0;
+
+  function startingWheelAxis(dx: number, dy: number): WheelAxis {
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    if (ax === 0 && ay === 0) return "free";
+    if (ay <= ax * DIRECTION_SNAP_TAN) return "x";
+    if (ax <= ay * DIRECTION_SNAP_TAN) return "y";
+    return "free";
+  }
+
   function onWheel(e: WheelEvent) {
     e.preventDefault();
     focusAnim = null; // user took over
@@ -380,11 +395,27 @@ export function createLane(
     // browsers expose for horizontal scrolling when deltaX is unavailable.
     const pinch = e.ctrlKey || e.metaKey;
     const shiftedHorizontal = !pinch && e.shiftKey && dX === 0;
-    const panPx = pinch || shiftedHorizontal ? 0 : dY;
-    const zoomPx = pinch ? -dY : shiftedHorizontal ? dY : dX;
+    const now = performance.now();
+    let panPx: number;
+    let zoomPx: number;
+    if (pinch) {
+      panPx = 0;
+      zoomPx = -dY;
+      lastPlainWheelT = -Infinity;
+    } else if (shiftedHorizontal) {
+      panPx = 0;
+      zoomPx = dY;
+      lastPlainWheelT = -Infinity;
+    } else {
+      if (now - lastPlainWheelT > WHEEL_GESTURE_GAP_MS) {
+        wheelAxis = startingWheelAxis(dX, dY);
+      }
+      lastPlainWheelT = now;
+      panPx = wheelAxis === "x" ? 0 : dY;
+      zoomPx = wheelAxis === "y" ? 0 : dX;
+    }
 
     if (zoomPx !== 0) {
-      const now = performance.now();
       const dt = Math.min(200, Math.max(8, now - lastWheelT));
       lastWheelT = now;
       wheelVel = wheelVel * 0.6 + (Math.abs(zoomPx) / dt) * 0.4; // px/ms, smoothed
