@@ -363,7 +363,7 @@ export function createLane(
   // velocity-adaptive zoom: slow scroll stays precise; a fast flick accelerates
   // super-linearly (φ^speed on the exponent) so you can cross many scales fast
   const PHI = 1.618033988749895;
-  const WHEEL_BASE = 0.032; // 10× gain for trackpad horizontal-scroll / pinch zoom
+  const WHEEL_BASE = 0.016; // 5× gain for trackpad horizontal-scroll / pinch zoom
   let wheelVel = 0; // EMA of |delta| px per ms
   let lastWheelT = 0;
   function onWheel(e: WheelEvent) {
