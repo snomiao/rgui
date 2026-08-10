@@ -387,9 +387,7 @@ window.addEventListener("drop", async (e) => {
 });
 
 const urlInput = document.querySelector<HTMLInputElement>("#calurl")!;
-urlInput.addEventListener("keydown", async (e) => {
-  if (e.key !== "Enter") return;
-  const raw = urlInput.value.trim();
+async function importUrl(raw: string) {
   if (!raw) return;
   const url = raw.replace(/^webcal:\/\//i, "https://");
   toast("fetching…", 1500);
@@ -401,7 +399,18 @@ urlInput.addEventListener("keydown", async (e) => {
   } catch {
     toast("that server blocks browser access (CORS) — download the .ics and drop it here", 6000);
   }
+}
+
+urlInput.addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  await importUrl(urlInput.value.trim());
 });
+
+const initialIcsUrl = new URLSearchParams(location.search).get("ics")?.trim();
+if (initialIcsUrl) {
+  urlInput.value = initialIcsUrl;
+  void importUrl(initialIcsUrl);
+}
 
 // ── export ────────────────────────────────────────────────────────────────
 document.querySelector<HTMLButtonElement>("#saveBtn")?.addEventListener("click", () => {

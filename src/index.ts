@@ -226,6 +226,26 @@ export {
   type LaneEnv,
 } from "./lane/lane.js";
 export {
+  createTimelineSource,
+  type CatMeta,
+  type TimelineEvent,
+  type TimelineSource,
+  type TimelineDataset,
+  type TimelineEra,
+  type TimelineCycle,
+  type TimelineFetchApi,
+  type SearchHit,
+} from "./lane/timeline.js";
+export {
+  parseIcs,
+  parseIcsDate,
+  parseIcsDuration,
+  serializeIcs,
+  zoneOffsetMs,
+  type IcsCalendar,
+  type IcsEvent,
+} from "./calendar/ics.js";
+export {
   kindOf,
   kindCounts,
   chunkRows,
