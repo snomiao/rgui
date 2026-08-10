@@ -2,8 +2,8 @@
  * rgui lane — the engine for limited-visual-width / vertical-zoom rendering.
  *
  * `createLane(canvas, { source })` owns the {@link LaneView}, a dpr-aware
- * Canvas-2D render loop, and all input (scroll = move, ⌘/ctrl-scroll or pinch
- * = zoom, drag = move, R/F zoom, W/S move). It is deliberately dataset-blind:
+ * Canvas-2D render loop, and all input (vertical scroll = move, horizontal
+ * scroll or pinch = zoom, drag = move, R/F zoom, W/S move). It is deliberately dataset-blind:
  * everything domain-specific lives behind {@link LaneSource}, so folder trees
  * (src/lane/tree.ts) and time series (src/lane/timeseries.ts) share one engine.
  */
@@ -355,8 +355,10 @@ export function createLane(
 
   // ── input ───────────────────────────────────────────────────────────────
   const WHEEL_LINE_PX = 16;
-  function wheelDeltaPx(e: WheelEvent): number {
-    return e.deltaMode === 1 ? e.deltaY * WHEEL_LINE_PX : e.deltaY;
+  function wheelDeltaPx(e: WheelEvent, delta: number): number {
+    if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) return delta * WHEEL_LINE_PX;
+    if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) return delta * view.height;
+    return delta;
   }
   // velocity-adaptive zoom: slow scroll stays precise; a fast flick accelerates
   // super-linearly (φ^speed on the exponent) so you can cross many scales fast
@@ -370,19 +372,30 @@ export function createLane(
     pointerY = localY(e);
     pointerX = localX(e);
     pointerInside = true;
-    const dPx = wheelDeltaPx(e);
-    if (e.ctrlKey || e.metaKey) {
+    const dY = wheelDeltaPx(e, e.deltaY);
+    const dX = wheelDeltaPx(e, e.deltaX);
+    // A browser trackpad pinch arrives as ctrl/meta + vertical wheel. For plain
+    // two-axis scrolling, Y moves through the lane while X changes scale:
+    // right zooms in, left zooms out. Shift+wheel is the mouse-wheel fallback
+    // browsers expose for horizontal scrolling when deltaX is unavailable.
+    const pinch = e.ctrlKey || e.metaKey;
+    const shiftedHorizontal = !pinch && e.shiftKey && dX === 0;
+    const panPx = pinch || shiftedHorizontal ? 0 : dY;
+    const zoomPx = pinch ? -dY : shiftedHorizontal ? dY : dX;
+
+    if (zoomPx !== 0) {
       const now = performance.now();
       const dt = Math.min(200, Math.max(8, now - lastWheelT));
       lastWheelT = now;
-      wheelVel = wheelVel * 0.6 + (Math.abs(dPx) / dt) * 0.4; // px/ms, smoothed
+      wheelVel = wheelVel * 0.6 + (Math.abs(zoomPx) / dt) * 0.4; // px/ms, smoothed
       // 0 while zooming slowly (<~0.25 px/ms) → precise; grows when fast
       const s = Math.max(0, (wheelVel - 0.25) / 0.9);
       const accel = Math.pow(PHI, Math.min(s, 6)); // φ^speed, capped
-      zoomAt(view, Math.exp(-dPx * WHEEL_BASE * accel), zoomAnchor(pointerY), zoomLimits());
-    } else {
-      view.scrollY += dPx / view.zoomY;
-      scrollDamp(dPx);
+      zoomAt(view, Math.exp(zoomPx * WHEEL_BASE * accel), zoomAnchor(pointerY), zoomLimits());
+    }
+    if (panPx !== 0) {
+      view.scrollY += panPx / view.zoomY;
+      scrollDamp(panPx);
     }
     invalidate();
   }
