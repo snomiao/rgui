@@ -406,10 +406,17 @@ urlInput.addEventListener("keydown", async (e) => {
   await importUrl(urlInput.value.trim());
 });
 
-const initialIcsUrl = new URLSearchParams(location.search).get("ics")?.trim();
-if (initialIcsUrl) {
-  urlInput.value = initialIcsUrl;
-  void importUrl(initialIcsUrl);
+const initialIcsUrls = new URLSearchParams(location.search)
+  .getAll("ics")
+  .map((url) => url.trim())
+  .filter(Boolean);
+if (initialIcsUrls.length) {
+  void (async () => {
+    for (const url of initialIcsUrls) {
+      urlInput.value = url;
+      await importUrl(url);
+    }
+  })();
 }
 
 // ── export ────────────────────────────────────────────────────────────────
