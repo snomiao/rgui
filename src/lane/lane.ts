@@ -413,10 +413,9 @@ export function createLane(
     pointerInside = true;
     const dY = wheelDeltaPx(e, e.deltaY);
     const dX = wheelDeltaPx(e, e.deltaX);
-    // A browser trackpad pinch arrives as ctrl/meta + vertical wheel. For plain
-    // two-axis scrolling, Y moves through the lane while X changes scale:
-    // right zooms in, left zooms out. Shift+wheel is the mouse-wheel fallback
-    // browsers expose for horizontal scrolling when deltaX is unavailable.
+    // A browser trackpad pinch arrives as ctrl/meta + vertical wheel. Plain
+    // two-axis vectors go through the four-operation classifier below, while
+    // Shift+wheel remains the mouse-wheel fallback for explicit zoom.
     const pinch = e.ctrlKey || e.metaKey;
     const shiftedHorizontal = !pinch && e.shiftKey && dX === 0;
     const now = performance.now();
