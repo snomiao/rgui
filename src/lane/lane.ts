@@ -16,7 +16,6 @@ import {
   type RgThemeInput,
 } from "../core/theme.js";
 import {
-  clampScroll,
   lodStep,
   screenToWorldY,
   visibleSpan,
@@ -240,7 +239,6 @@ export function createLane(
     raf = 0;
     if (view.width === 0 || view.height === 0) return;
     if (!fitted) fit();
-    clampScroll(view, source.extent(), view.height * 0.5);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = theme.background;

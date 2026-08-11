@@ -54,10 +54,9 @@ export function zoomAt(
 }
 
 /**
- * Clamp scroll to the source extent. When content is shorter than the
- * viewport it pins to the top; otherwise it keeps the content edge-to-edge
- * without overscroll (a little bottom slack so the last row isn't glued to
- * the edge).
+ * Optional host-side clamp to the source extent. The built-in lane deliberately
+ * does not call this: its flow axis scrolls without bounds, while sources can
+ * use off-screen indicators to keep distant data discoverable.
  */
 export function clampScroll(
   v: LaneView,
