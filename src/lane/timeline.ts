@@ -1297,18 +1297,63 @@ export function createTimelineSource(
   ) {
     const sy = worldToScreenY(view, 0);
     if (sy < -2 || sy > view.height + 2) return;
-    ctx.strokeStyle = withAlpha(theme.accent, 0.9);
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(x0, sy + 0.5);
-    ctx.lineTo(W, sy + 0.5);
-    ctx.stroke();
-    ctx.lineWidth = 1;
+    drawAnimatedNowStroke(ctx, theme, x0, sy + 0.5, W, sy + 0.5);
     ctx.font = "10px ui-monospace, Menlo, monospace";
     ctx.fillStyle = theme.accent;
     ctx.textAlign = "right";
     ctx.textBaseline = "bottom";
     ctx.fillText(`now · ${PRESENT_YEAR}`, W - 6, sy - 2);
+  }
+
+  const reduceNowMotion = typeof matchMedia === "function"
+    && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let nowAnimTimer: ReturnType<typeof setTimeout> | null = null;
+  function requestNowAnimation() {
+    if (reduceNowMotion || nowAnimTimer !== null) return;
+    nowAnimTimer = setTimeout(() => {
+      nowAnimTimer = null;
+      onUpdate();
+    }, 33);
+  }
+
+  function drawAnimatedNowStroke(
+    ctx: CanvasRenderingContext2D,
+    theme: RgTheme,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+  ) {
+    const t = reduceNowMotion ? 0 : performance.now();
+    const pulse = reduceNowMotion ? 0 : (Math.sin(t / 260) + 1) / 2;
+    ctx.save();
+    ctx.strokeStyle = withAlpha(theme.accent, 0.72 + pulse * 0.22);
+    ctx.lineWidth = 1.25 + pulse * 0.65;
+    if (!reduceNowMotion) {
+      ctx.setLineDash([7, 6]);
+      ctx.lineDashOffset = -(t / 45) % 13;
+      ctx.shadowColor = withAlpha(theme.accent, 0.55);
+      ctx.shadowBlur = 3 + pulse * 4;
+    }
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+    if (!reduceNowMotion) {
+      const phase = (t % 1800) / 1800;
+      ctx.fillStyle = theme.accent;
+      ctx.beginPath();
+      ctx.arc(
+        x0 + (x1 - x0) * phase,
+        y0 + (y1 - y0) * phase,
+        2 + pulse,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    }
+    ctx.restore();
+    requestNowAnimation();
   }
 
   /** the fold GRID inside a folding track: vertical phase-slot columns (with
@@ -2492,13 +2537,7 @@ export function createTimelineSource(
     if (nowP && nowP.rowIndex >= yearTop && nowP.rowIndex <= yearBot) {
       const x = phaseX(nowP.phase0);
       const y0 = rowTopY(nowP.rowIndex);
-      ctx.strokeStyle = withAlpha(theme.accent, 0.9);
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(x, y0 + 1);
-      ctx.lineTo(x, y0 + rowH - 1);
-      ctx.stroke();
-      ctx.lineWidth = 1;
+      drawAnimatedNowStroke(ctx, theme, x, y0 + 1, x, y0 + rowH - 1);
     }
 
     // events — LOD ladder by row height: dots → micro-lane dots → labels;
