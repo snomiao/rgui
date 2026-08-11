@@ -365,20 +365,44 @@ export function createLane(
   const PHI = 1.618033988749895;
   const WHEEL_BASE = 0.016; // 5× gain for trackpad horizontal-scroll / pinch zoom
   const WHEEL_GESTURE_GAP_MS = 180;
-  const DIRECTION_SNAP_TAN = Math.tan(Math.PI / 18); // ±10° from an axis
-  type WheelAxis = "x" | "y" | "free";
-  let wheelAxis: WheelAxis = "free";
+  const WHEEL_DIRECTION_MIN_PX = 0.25;
+  const WHEEL_DIRECTION_EMA = 0.35;
+  type WheelOperation = "zoom-in" | "scroll-up" | "zoom-out" | "scroll-down";
+  let wheelOperation: WheelOperation | null = null;
+  let smoothWheelX = 0;
+  let smoothWheelY = 0;
   let lastPlainWheelT = -Infinity;
   let wheelVel = 0; // EMA of |delta| px per ms
   let lastWheelT = 0;
 
-  function startingWheelAxis(dx: number, dy: number): WheelAxis {
-    const ax = Math.abs(dx);
-    const ay = Math.abs(dy);
-    if (ax === 0 && ay === 0) return "free";
-    if (ay <= ax * DIRECTION_SNAP_TAN) return "x";
-    if (ax <= ay * DIRECTION_SNAP_TAN) return "y";
-    return "free";
+  // Screen-space wheel angle: right=0°, up=90°, left=180°, down=270°.
+  const wheelAngle = (dx: number, dy: number) =>
+    (Math.atan2(-dy, dx) * 180 / Math.PI + 360) % 360;
+
+  function nearestWheelOperation(angle: number): WheelOperation {
+    if (angle < 45 || angle >= 315) return "zoom-in";
+    if (angle < 135) return "scroll-up";
+    if (angle < 225) return "zoom-out";
+    return "scroll-down";
+  }
+
+  // Each operation owns its nearest-axis 90° sector plus a 15° overlap on
+  // both sides. The overlap belongs to the CURRENT operation (hysteresis), so
+  // boundary noise can never alternate pan and zoom frame by frame.
+  function operationHolds(op: WheelOperation, angle: number): boolean {
+    switch (op) {
+      case "zoom-in": return angle <= 60 || angle >= 300;
+      case "scroll-up": return angle >= 30 && angle <= 150;
+      case "zoom-out": return angle >= 120 && angle <= 240;
+      case "scroll-down": return angle >= 210 && angle <= 330;
+    }
+  }
+
+  function resetPlainWheelGesture() {
+    wheelOperation = null;
+    smoothWheelX = 0;
+    smoothWheelY = 0;
+    lastPlainWheelT = -Infinity;
   }
 
   function onWheel(e: WheelEvent) {
@@ -401,18 +425,39 @@ export function createLane(
     if (pinch) {
       panPx = 0;
       zoomPx = -dY;
-      lastPlainWheelT = -Infinity;
+      resetPlainWheelGesture();
     } else if (shiftedHorizontal) {
       panPx = 0;
       zoomPx = dY;
-      lastPlainWheelT = -Infinity;
+      resetPlainWheelGesture();
     } else {
-      if (now - lastPlainWheelT > WHEEL_GESTURE_GAP_MS) {
-        wheelAxis = startingWheelAxis(dX, dY);
+      const magnitude = Math.hypot(dX, dY);
+      if (magnitude < WHEEL_DIRECTION_MIN_PX) {
+        invalidate();
+        return;
+      }
+      const ux = dX / magnitude;
+      const uy = dY / magnitude;
+      const fresh = now - lastPlainWheelT > WHEEL_GESTURE_GAP_MS;
+      if (fresh || !wheelOperation) {
+        smoothWheelX = ux;
+        smoothWheelY = uy;
+        wheelOperation = nearestWheelOperation(wheelAngle(ux, uy));
+      } else {
+        smoothWheelX += (ux - smoothWheelX) * WHEEL_DIRECTION_EMA;
+        smoothWheelY += (uy - smoothWheelY) * WHEEL_DIRECTION_EMA;
+        const angle = wheelAngle(smoothWheelX, smoothWheelY);
+        if (!operationHolds(wheelOperation, angle)) {
+          wheelOperation = nearestWheelOperation(angle);
+        }
       }
       lastPlainWheelT = now;
-      panPx = wheelAxis === "x" ? 0 : dY;
-      zoomPx = wheelAxis === "y" ? 0 : dX;
+      panPx = wheelOperation === "scroll-up"
+        ? -magnitude
+        : wheelOperation === "scroll-down" ? magnitude : 0;
+      zoomPx = wheelOperation === "zoom-in"
+        ? magnitude
+        : wheelOperation === "zoom-out" ? -magnitude : 0;
     }
 
     if (zoomPx !== 0) {
