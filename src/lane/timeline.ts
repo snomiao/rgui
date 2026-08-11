@@ -652,6 +652,8 @@ export interface TimelineDataset {
   title: string;
   tracks: CatMeta[];
   statics: Ev[];
+  /** live-now marker in this dataset's fixed y-origin and temporal frame */
+  now?: (realNowMs: number) => { y: number; tMs: number };
   eras?: Era[];
   cycles?: Cycle[];
   /** oldest years-before-present the axis reaches (default: Big Bang) */
@@ -1066,6 +1068,16 @@ export function createTimelineSource(
     logAxis
       ? -Math.sign(yBP) * Math.log10(1 + Math.abs(yBP) / LIN)
       : -yBP;
+  const liveNow = () => {
+    const realNowMs = Date.now();
+    const marker = ds?.now?.(realNowMs) ?? {
+      y: (PRESENT_EPOCH - realNowMs / 1000) / SPY,
+      tMs: realNowMs,
+    };
+    return Number.isFinite(marker.y) && Number.isFinite(marker.tMs)
+      ? marker
+      : { y: 0, tMs: PRESENT_EPOCH * 1000 };
+  };
   const yBPof = (worldY: number) => {
     const s = -worldY;
     return logAxis
@@ -1295,28 +1307,27 @@ export function createTimelineSource(
     x0: number,
     W: number,
   ) {
-    const sy = worldToScreenY(view, 0);
+    const marker = liveNow();
+    const sy = worldToScreenY(view, worldOf(marker.y));
     if (sy < -2 || sy > view.height + 2) return;
-    drawAnimatedNowStroke(ctx, theme, x0, sy + 0.5, W, sy + 0.5);
+    drawLiveNowStroke(ctx, theme, x0, sy + 0.5, W, sy + 0.5);
     ctx.font = "10px ui-monospace, Menlo, monospace";
     ctx.fillStyle = theme.accent;
     ctx.textAlign = "right";
     ctx.textBaseline = "bottom";
-    ctx.fillText(`now · ${PRESENT_YEAR}`, W - 6, sy - 2);
+    ctx.fillText(`now · ${new Date(marker.tMs).getUTCFullYear()}`, W - 6, sy - 2);
   }
 
-  const reduceNowMotion = typeof matchMedia === "function"
-    && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let nowAnimTimer: ReturnType<typeof setTimeout> | null = null;
-  function requestNowAnimation() {
-    if (reduceNowMotion || nowAnimTimer !== null) return;
-    nowAnimTimer = setTimeout(() => {
-      nowAnimTimer = null;
+  let nowFlowTimer: ReturnType<typeof setTimeout> | null = null;
+  function requestNowFlow() {
+    if (nowFlowTimer !== null) return;
+    nowFlowTimer = setTimeout(() => {
+      nowFlowTimer = null;
       onUpdate();
     }, 33);
   }
 
-  function drawAnimatedNowStroke(
+  function drawLiveNowStroke(
     ctx: CanvasRenderingContext2D,
     theme: RgTheme,
     x0: number,
@@ -1324,36 +1335,14 @@ export function createTimelineSource(
     x1: number,
     y1: number,
   ) {
-    const t = reduceNowMotion ? 0 : performance.now();
-    const pulse = reduceNowMotion ? 0 : (Math.sin(t / 260) + 1) / 2;
-    ctx.save();
-    ctx.strokeStyle = withAlpha(theme.accent, 0.72 + pulse * 0.22);
-    ctx.lineWidth = 1.25 + pulse * 0.65;
-    if (!reduceNowMotion) {
-      ctx.setLineDash([7, 6]);
-      ctx.lineDashOffset = -(t / 45) % 13;
-      ctx.shadowColor = withAlpha(theme.accent, 0.55);
-      ctx.shadowBlur = 3 + pulse * 4;
-    }
+    ctx.strokeStyle = withAlpha(theme.accent, 0.9);
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
     ctx.stroke();
-    if (!reduceNowMotion) {
-      const phase = (t % 1800) / 1800;
-      ctx.fillStyle = theme.accent;
-      ctx.beginPath();
-      ctx.arc(
-        x0 + (x1 - x0) * phase,
-        y0 + (y1 - y0) * phase,
-        2 + pulse,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-    }
-    ctx.restore();
-    requestNowAnimation();
+    ctx.lineWidth = 1;
+    requestNowFlow();
   }
 
   /** the fold GRID inside a folding track: vertical phase-slot columns (with
@@ -2533,11 +2522,11 @@ export function createTimelineSource(
     }
 
     // "now" marker: a tick at today's phase in the current row
-    const nowP = fv.projector.project(PRESENT_EPOCH * 1000);
+    const nowP = fv.projector.project(liveNow().tMs);
     if (nowP && nowP.rowIndex >= yearTop && nowP.rowIndex <= yearBot) {
       const x = phaseX(nowP.phase0);
       const y0 = rowTopY(nowP.rowIndex);
-      drawAnimatedNowStroke(ctx, theme, x, y0 + 1, x, y0 + rowH - 1);
+      drawLiveNowStroke(ctx, theme, x, y0 + 1, x, y0 + rowH - 1);
     }
 
     // events — LOD ladder by row height: dots → micro-lane dots → labels;

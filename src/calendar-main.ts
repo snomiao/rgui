@@ -193,6 +193,10 @@ function buildSource(): TimelineSource {
       title: "calendar",
       tracks: [{ cat: "cal", label: "agenda", color: "#7dd3fc" }],
       statics: visible.map(toEv),
+      now: (realNowMs) => ({
+        y: (toShifted(nowMs) - toShifted(realNowMs)) / 1000 / SPY,
+        tMs: toShifted(realNowMs),
+      }),
       oldestYBP: 2,
       futureYears: 2,
       fitYBP: { top: 1.2 * DAY_Y, bot: -6 * DAY_Y },
