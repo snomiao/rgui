@@ -158,6 +158,7 @@ import {
   FOLD_PERIOD_MS,
   precisionWindow,
   projectWindow,
+  foldRowSpan,
 } from "./temporal.js";
 
 describe2("finer fold projectors", () => {
@@ -405,6 +406,33 @@ describe2("precisionWindow", () => {
       tMs: 8.64e15,
       precision: { kind: "calendar", unit: "year" },
     })).toBeNull();
+  });
+});
+
+describe2("foldRowSpan", () => {
+  test2("agrees with projectWindow's fragment count", () => {
+    const cases = [
+      ["hour", Date.UTC(2026, 6, 11, 14, 15), Date.UTC(2026, 6, 11, 14, 45)],
+      ["day", Date.UTC(2026, 6, 11), Date.UTC(2026, 6, 12)],
+      ["day", Date.UTC(2026, 6, 11, 12), Date.UTC(2026, 6, 14, 6)],
+      ["week", Date.UTC(2026, 6, 7, 6), Date.UTC(2026, 6, 24, 18)],
+      ["month", Date.UTC(2026, 0, 15), Date.UTC(2026, 5, 2)],
+    ] as const;
+    for (const [foldId, start, end] of cases) {
+      expect2(foldRowSpan(foldId, start, end)).toBe(projectWindow(foldId, start, end).length);
+    }
+  });
+
+  test2("counts rows a fine fold could never materialise", () => {
+    // a decade at hour resolution: 87672 rows, no fragment list allocated
+    expect2(foldRowSpan("hour", Date.UTC(2020, 0, 1), Date.UTC(2030, 0, 1))).toBe(87672);
+  });
+
+  test2("rejects invalid, empty, and TimeClip-edge windows", () => {
+    expect2(foldRowSpan("day", Number.NaN, 0)).toBe(0);
+    expect2(foldRowSpan("day", 10, 10)).toBe(0);
+    expect2(foldRowSpan("day", 20, 10)).toBe(0);
+    expect2(foldRowSpan("year", 8.64e15, 8.64e15 + 10)).toBe(0);
   });
 });
 

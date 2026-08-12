@@ -334,6 +334,23 @@ export function projectWindow(
   return fragments;
 }
 
+/**
+ * How many fold rows a half-open instant window touches, without materialising
+ * the fragments — a window may cover millions of rows at a fine fold, so the
+ * caller cannot afford projectWindow just to count. 0 for invalid or empty
+ * windows (same rejection rules as projectWindow's endpoints).
+ */
+export function foldRowSpan(foldId: FoldId, startMs: number, endMs: number): number {
+  const a = new Date(startMs).getTime();
+  const b = new Date(endMs).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a >= b) return 0;
+  const projector = projectorForFold(foldId);
+  const first = projector.project(a);
+  const last = projector.project(b - 1);
+  if (!first || !last) return 0;
+  return last.rowIndex - first.rowIndex + 1;
+}
+
 function fracOfDayUTC(d: Date): number {
   return (
     (((d.getUTCHours() * 60 + d.getUTCMinutes()) * 60 + d.getUTCSeconds()) * 1000 +

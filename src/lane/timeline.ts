@@ -32,6 +32,7 @@ import {
   projectWindow,
   foldHourProjector,
   foldMonthProjector,
+  foldRowSpan,
   foldRowStartMs,
   foldWeekProjector,
   foldYearProjector,
@@ -761,10 +762,17 @@ export function createTimelineSource(
   const OLDEST = ds?.oldestYBP ?? BIG_BANG;
   const FUT_HORIZON = ds?.futureYears ?? FUTURE_HORIZON;
   let byCat = new Map<Cat, Ev[]>();
+  /** categories carrying duration events — only these reserve a span rail.
+   *  A DATA property, not a viewport one: the grid's phase geometry must not
+   *  reflow while scrolling. */
+  let spanCats = new Set<Cat>();
   function reindex() {
     byCat = new Map();
-    for (const e of points)
+    spanCats = new Set();
+    for (const e of points) {
       (byCat.get(e.cat) ?? byCat.set(e.cat, []).get(e.cat)!).push(e);
+      if (e.durMs && e.durMs > 0) spanCats.add(e.cat);
+    }
   }
   reindex();
 
@@ -1155,6 +1163,8 @@ export function createTimelineSource(
     const botW = screenToWorldY(view, H);
     foldLabelRects = []; // repopulated by whichever event path draws labels
     drawnGlyphs.clear(); // repopulated with this frame's ACTUAL glyph pixels
+    drawnRects = []; // span-rail bars, likewise
+    framePointer = env.pointer;
     foldHeaderAxes.length = 0; // pseudo-x-axes queued by folding tracks
     heatCells.clear(); // per-cell densities, repopulated by folding tracks
 
@@ -1361,7 +1371,7 @@ export function createTimelineSource(
     if (!trackFold || fold !== "none") return;
     const rem = remPx();
     if (!trackWideEnough(cat, w, rem)) return;
-    const contentW = trackContentW(w, rem);
+    const contentW = trackContentW(cat, w, rem);
     const tCenter = tMsOfYbp(yBPof(screenToWorldY(view, H / 2)));
     if (!Number.isFinite(tCenter) || !Number.isFinite(new Date(tCenter).getTime())) return;
     for (const lf of LADDER_FINE_FIRST) {
@@ -1377,7 +1387,7 @@ export function createTimelineSource(
       const yBot0 = worldToScreenY(view, worldOf(ybpOfTMs(end)));
       if (Math.abs(yBot0 - yTop0) < rem) continue;
 
-      const gx = (phase: number) => trackContentX0(x0, rem) + phase * contentW;
+      const gx = (phase: number) => trackContentX0(cat, x0, rem) + phase * contentW;
 
       // aggregate the two heat channels for this track at THIS level:
       // count = integer nominal events per cell (labels, dot suppression,
@@ -1517,7 +1527,7 @@ export function createTimelineSource(
       // last, above everything) — queue this track's axis for that pass
       let every = div.labelEvery;
       while ((contentW / div.slots) * every < 30 && every < div.slots) every *= 2;
-      foldHeaderAxes.push({ x0: trackContentX0(x0, rem), contentW, div, every });
+      foldHeaderAxes.push({ x0: trackContentX0(cat, x0, rem), contentW, div, every });
 
       // horizontal cycle-band separators + y-axis row labels + month ghosts
       const drawRow = (row: number): number | null => {
@@ -1555,7 +1565,9 @@ export function createTimelineSource(
                 ctx.textAlign = "left";
                 ctx.textBaseline = "middle";
                 ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
-                ctx.fillText(label, x0 + 4, top + Math.min(bandPx / 2, 9));
+                // clamped to the gutter: past it sits the span rail, whose
+                // bars would paint over the tail of an overflowing label
+                ctx.fillText(fit(ctx, label, Y_GUTTER_REM * rem - 6), x0 + 4, top + Math.min(bandPx / 2, 9));
               }
             }
           }
@@ -1611,7 +1623,16 @@ export function createTimelineSource(
     const vis: Array<{ e: Ev; sy: number }> = [];
     for (const e of list) {
       const wy = worldOf(e.y);
-      if (wy < topW || wy > botW) continue;
+      let onScreen = wy >= topW && wy <= botW;
+      if (!onScreen && e.durMs && e.durMs > 0) {
+        // a long event stays on screen after its START scrolls off: its SPAN
+        // decides visibility, else a multi-row bar vanishes mid-scroll
+        const t0 = tMsOfEv(e);
+        const we = t0 == null ? NaN : worldOf(ybpOfTMs(t0 + e.durMs));
+        if (Number.isFinite(we))
+          onScreen = Math.min(wy, we) <= botW && Math.max(wy, we) >= topW;
+      }
+      if (!onScreen) continue;
       vis.push({ e, sy: worldToScreenY(view, wy) });
     }
     vis.sort((a, b) => b.e.imp - a.e.imp);
@@ -1633,34 +1654,53 @@ export function createTimelineSource(
     type BarFrag = { e: Ev; p0: number; p1: number; isStart: boolean; allDay: boolean };
     const rowFrags = new Map<string, { level: string; row: number; frags: BarFrag[] }>();
     const barInfo = new Map<Ev, { ax: number; ay: number; laneH: number; x1: number }>();
+    // events too long to fold: one continuous bar in the span rail (below)
+    const verticals: Array<{ e: Ev; t0: number; t1: number; level: string }> = [];
+    const verticalSet = new Set<Ev>();
     {
       const rem4 = remPx();
-      const cw4 = trackContentW(w, rem4);
-      const cx4 = trackContentX0(x0, rem4);
+      const cw4 = trackContentW(cat, w, rem4);
+      const cx4 = trackContentX0(cat, x0, rem4);
       for (const { e, sy } of vis) {
-        if (sy < HEADER_H - 2 || sy > H + 2) continue;
+        const durMs = e.durMs ?? 0;
+        // a spanning event may reach the viewport from an off-screen start
+        if (durMs <= 0 && (sy < HEADER_H - 2 || sy > H + 2)) continue;
         if (vspan > influenceOf(e) * influenceDots()) continue;
         const fp = trackFoldPos(e, view, x0, w);
         fpCache.set(e, fp);
         if (!fp) continue;
         const cls = classifyEv(e, fp.level, fp.slots, fp.bandPx, H);
         clsCache.set(e, cls);
-        if (cls.lod !== "point" || !e.durMs || e.durMs <= 0) continue;
+        if (cls.lod === "tint" || durMs <= 0) continue;
+        const rowLen = FOLD_PERIOD_MS[fp.level];
+        if (!rowLen) continue;
+        const td = tMsOfEv(e);
+        if (td == null) continue;
+        // ≥VERTICAL_MIN_ROWS rows → the span rail instead of the grid. Measured
+        // on the event's OWN window, never the viewport-clipped one, so
+        // scrolling can't flip a bar between rail and grid mid-gesture. Runs
+        // ahead of the heat-cell test on purpose: that test keys on the START
+        // cell only, and a dense start must not erase a week-long span.
+        if (foldRowSpan(fp.level, td, td + durMs) >= VERTICAL_MIN_ROWS) {
+          verticals.push({ e, t0: td, t1: td + durMs, level: fp.level });
+          verticalSet.add(e);
+          continue;
+        }
+        // shorter windows keep the grid: interval-lod ones as the precision
+        // wash (second pass), point-lod ones as wrapped Gantt fragments
+        if (cls.lod !== "point") continue;
+        if (sy < HEADER_H - 2 || sy > H + 2) continue; // grid bars follow their start
         const hc0 = heatCells.get(e.cat);
         if (
           heatEnabled && hc0 && hc0.level === fp.level &&
           (hc0.cells.get(`${fp.row}:${fp.slot}`) ?? 0) > HEAT_DOT_MAX
         )
           continue; // dense cell represents it
-        const rowLen = FOLD_PERIOD_MS[fp.level];
-        if (!rowLen) continue;
         const allDay = e.precision?.kind === "calendar" && e.precision.unit === "day";
-        if (!allDay && (e.durMs / rowLen) * cw4 < 3) continue; // sub-readable → dot
-        const td = tMsOfEv(e);
-        if (td == null) continue;
+        if (!allDay && (durMs / rowLen) * cw4 < 3) continue; // sub-readable → dot
         const { r0, r1 } = visibleRowRange(fp.level, view, H, fp.row);
         const clipA = Math.max(td, foldRowStartMs(fp.level, r0));
-        const clipB = Math.min(td + e.durMs, foldRowStartMs(fp.level, r1 + 1));
+        const clipB = Math.min(td + durMs, foldRowStartMs(fp.level, r1 + 1));
         if (clipB <= clipA) continue;
         for (const fr of projectWindow(fp.level, clipA, clipB).slice(0, 60)) {
           const key = `${fp.level}:${fr.rowIndex}`;
@@ -1713,11 +1753,26 @@ export function createTimelineSource(
         const bodyTop = rTop + stripH;
         const laneH = T.n ? Math.max(2, Math.min(20, (rBot - bodyTop) / T.n)) : 0;
         const drawBar = (f: BarFrag, y: number, hh: number, alpha: number) => {
-          const bx0 = cx4 + f.p0 * cw4;
-          const bw = Math.max(2, (f.p1 - f.p0) * cw4);
-          const by0 = Math.max(y, HEADER_H);
-          const by1 = Math.min(y + hh - 1, H);
+          let bx0 = cx4 + f.p0 * cw4;
+          let bw = Math.max(2, (f.p1 - f.p0) * cw4);
+          let by0 = Math.max(y, HEADER_H);
+          let by1 = Math.min(y + hh - 1, H);
           if (by1 <= by0) return;
+          // only the START fragment glides: it is the one that was (or
+          // becomes) the span-rail bar, so the eye can follow the switch.
+          // The wrapped continuation fragments have no counterpart on the
+          // other side of the transition and simply appear.
+          if (f.isStart) {
+            const g = glideRect(f.e, `grid:${lf}`, { x0: bx0, y0: by0, x1: bx0 + bw, y1: by1 });
+            if (g.moving) {
+              anyGliding = true;
+              bx0 = g.r.x0;
+              bw = Math.max(2, g.r.x1 - g.r.x0);
+              by0 = Math.max(g.r.y0, HEADER_H);
+              by1 = Math.min(g.r.y1, H);
+              if (by1 <= by0) return;
+            }
+          }
           const c = evColor(f.e);
           ctx.fillStyle = withAlpha(c, alpha);
           ctx.fillRect(bx0, by0, bw, by1 - by0);
@@ -1728,6 +1783,139 @@ export function createTimelineSource(
         };
         for (const f of ad) drawBar(f, rTop + (A.lane.get(f) ?? 0) * adLaneH, adLaneH, 0.45);
         for (const f of timed) drawBar(f, bodyTop + (T.lane.get(f) ?? 0) * laneH, laneH, 0.62);
+      }
+
+      // ── span rail: multi-row events as VERTICAL tracks ────────────────────
+      // Time runs down the lane, so an event that outlasts a fold row is one
+      // unbroken bar down the rail — no wrapping, no phase-x (a bar parked at
+      // phase(start) for five rows would claim "3pm every day"). Concurrent
+      // spans pack into side-by-side columns; the rail's width is reserved by
+      // the geometry helpers, so the grid never reflows around it.
+      if (verticals.length) {
+        const railX0 = trackSpanRailX0(x0, rem4);
+        const railW = Math.max(4, cx4 - railX0 - 3);
+        ctx.fillStyle = withAlpha(theme.textFaint, 0.06);
+        ctx.fillRect(railX0, HEADER_H, railW, Math.max(0, H - HEADER_H));
+        // greedy packing on TIME (not phase): overlapping spans take separate
+        // columns, sequential ones reuse one
+        verticals.sort((a, b) => a.t0 - b.t0 || a.t1 - b.t1);
+        const colEnd: number[] = [];
+        const col = new Map<Ev, number>();
+        for (const v of verticals) {
+          let ci = colEnd.findIndex((end) => end <= v.t0);
+          if (ci < 0) {
+            ci = colEnd.length;
+            colEnd.push(0);
+          }
+          colEnd[ci] = v.t1;
+          col.set(v.e, ci);
+        }
+        // Google-Calendar overlap, not equal columns: splitting the rail N
+        // ways turns every bar into a thread. Instead each concurrent span
+        // insets a step from the left and runs to the rail's right edge,
+        // painting over its predecessor — every bar keeps a wide body, and
+        // the exposed left strip of each earlier bar still says it is there.
+        const nCols = Math.max(1, colEnd.length);
+        const step = nCols > 1
+          ? Math.min(railW * 0.3, Math.max(4, (railW - 9) / (nCols - 1)))
+          : 0;
+        // geometry first, paint second: staggered bars overlap, so "the one
+        // under the pointer" is the LAST one covering it — resolving that
+        // needs every rect in hand (lighting each bar independently lit them
+        // all at once wherever they overlap).
+        type RailBar = {
+          v: (typeof verticals)[number];
+          bx0: number; bw: number; by0: number; by1: number;
+          yTop: number; yBot: number;
+        };
+        const bars: RailBar[] = [];
+        for (const v of verticals) {
+          const ya = worldToScreenY(view, worldOf(ybpOfTMs(v.t0)));
+          const yb = worldToScreenY(view, worldOf(ybpOfTMs(v.t1)));
+          if (!Number.isFinite(ya) || !Number.isFinite(yb)) continue;
+          const ci = col.get(v.e) ?? 0;
+          // glide on the UNCLIPPED endpoints, clamp after: clamping first
+          // would animate the viewport edge instead of the event's own start
+          // and end. The key covers level AND column, so a re-pack slides
+          // sideways rather than jumping.
+          const g = glideRect(v.e, `rail:${v.level}:${ci}`, {
+            x0: railX0 + ci * step,
+            y0: Math.min(ya, yb),
+            x1: railX0 + railW,
+            y1: Math.max(ya, yb),
+          });
+          if (g.moving) anyGliding = true;
+          const by0 = Math.max(g.r.y0, HEADER_H);
+          const by1 = Math.min(g.r.y1, H);
+          if (by1 - by0 < 2) continue;
+          bars.push({
+            v,
+            bx0: g.r.x0,
+            bw: Math.max(2, g.r.x1 - g.r.x0),
+            by0,
+            by1,
+            yTop: g.r.y0,
+            yBot: g.r.y1,
+          });
+        }
+        let hotIdx = -1;
+        if (framePointer) {
+          const { x: px, y: py } = framePointer;
+          for (let i = 0; i < bars.length; i++) {
+            const b = bars[i]!;
+            if (px >= b.bx0 - 2 && px <= b.bx0 + b.bw + 2 && py >= b.by0 && py <= b.by1)
+              hotIdx = i; // later = drawn on top = the one you can see
+          }
+        }
+        for (let i = 0; i < bars.length; i++) {
+          const { v, bx0, bw, by0, by1, yTop, yBot } = bars[i]!;
+          const c = evColor(v.e);
+          ctx.fillStyle = withAlpha(c, i === hotIdx ? 0.68 : 0.5);
+          ctx.fillRect(bx0, by0, bw, by1 - by0);
+          // caps mark REAL endpoints only — an uncapped end reads as "runs on
+          // past the viewport", which is the honest thing to show
+          ctx.fillStyle = withAlpha(c, 0.95);
+          if (yTop >= HEADER_H) ctx.fillRect(bx0, yTop, bw, 2);
+          if (yBot <= H) ctx.fillRect(bx0, yBot - 2, bw, 2);
+          drawnRects.push({ x0: bx0, x1: bx0 + bw, y0: by0, y1: by1, e: v.e });
+          // hand the bar's center to the DOT glide: if a zoom drops this
+          // event back to a point, it flies out of the bar instead of
+          // reappearing somewhere else
+          glide.set(v.e, { x: bx0 + bw / 2, y: (by0 + by1) / 2, key: `rail:${v.level}` });
+          // the label starts at the bar's LEFT-TOP corner and runs out past
+          // its right edge — horizontal like every other label in the lane
+          // (a rail column is far too narrow to hold text, and rotated text
+          // would be the only thing on screen you must tilt your head for).
+          // Anchoring it ON the bar is what ties the two together; the
+          // overflow is just where the glyphs happen to land. It rides the
+          // top of the VISIBLE extent, so a span you have scrolled into the
+          // middle of still says what it is.
+          if (by1 - by0 >= 14) {
+            ctx.font = "11px ui-monospace, Menlo, monospace";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            const ly = Math.min(Math.max(by0 + 7, HEADER_H + 9), by1 - 3);
+            const lx0 = bx0 + 3;
+            const text = fit(ctx, tr(v.e.label), x0 + w - lx0 - 8);
+            const lx1 = lx0 + ctx.measureText(text).width + 4;
+            const hot = i === hotIdx;
+            // a hovered label always wins its spot; the rest defer to
+            // whatever was placed before them
+            if (hot || !placedRects.some((p) => Math.abs(p.y - ly) < 12 && lx0 < p.x1 && lx1 > p.x0)) {
+              placedRects.push({ x0: lx0, x1: lx1, y: ly });
+              foldLabelRects.push({ x0: lx0, x1: lx1, y: ly, e: v.e });
+              // hovering a bar lifts ITS label out of the pile: the part
+              // hanging over the grid gets a plate of the event's own color,
+              // so you can read which bar you are pointing at
+              if (hot) {
+                ctx.fillStyle = withAlpha(c, 0.92);
+                ctx.fillRect(lx0 - 3, ly - 8, lx1 - lx0 + 4, 16);
+              }
+              ctx.fillStyle = hot ? theme.background : theme.text;
+              ctx.fillText(text, lx0, ly);
+            }
+          }
+        }
       }
     }
 
@@ -1751,12 +1939,15 @@ export function createTimelineSource(
         // layer entirely (presence wash carries them).
         const cls = clsCache.get(e) ?? classifyEv(e, fp.level, fp.slots, fp.bandPx, H);
         if (cls.lod === "tint") continue;
+        // the span rail already carries it as one continuous bar — a grid
+        // glyph on top would re-assert the phase the rail deliberately drops
+        if (verticalSet.has(e)) continue;
         if (cls.lod === "interval") {
           const win = cls.win;
           if (win) {
             const rem2 = remPx();
-            const contentW2 = trackContentW(w, rem2);
-            const cx0 = trackContentX0(x0, rem2);
+            const contentW2 = trackContentW(cat, w, rem2);
+            const cx0 = trackContentX0(cat, x0, rem2);
             // pre-clip the window IN TIME to the visible rows before
             // projecting — projectWindow has no internal row cap by contract
             const { r0, r1 } = visibleRowRange(fp.level, view, H, fp.row);
@@ -2228,6 +2419,11 @@ export function createTimelineSource(
   // repopulated every draw; events represented only by heat cells or tint
   // never enter, keeping their (intentional) non-hoverability.
   const drawnGlyphs = new Map<Ev, { x: number; y: number; r: number }>();
+  /** this frame's canvas-local pointer (from LaneEnv), for hover-lit labels */
+  let framePointer: { x: number; y: number } | null = null;
+  // rect-shaped glyphs (span-rail bars): a 300px-tall, 8px-wide bar has no
+  // useful center, so it hit-tests as the rectangle it is, not as a circle
+  let drawnRects: { x0: number; x1: number; y0: number; y1: number; e: Ev }[] = [];
   // ── OKLCH heat-cells: per-cell event density in the fold grid ─────────────
   // The track already spends HUE on identity, so within a track density is
   // pure magnitude: the track's hue with an OKLCH lightness ramp (sequential,
@@ -2309,6 +2505,7 @@ export function createTimelineSource(
   const FOLD_ANIM_MS = 280;
   let foldAnim: { from: Map<Ev, { x: number; y: number }>; t0: number } | null = null;
   const easeOutBack = (t: number) => 1 + 2.70158 * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+  const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
   /** screen position of an event under the CURRENT mode (fold or continuous) */
   const glyphScreenPos = (e: Ev, view: LaneView): { x: number; y: number } | null => {
     if (fold !== "none") {
@@ -2367,6 +2564,41 @@ export function createTimelineSource(
     if (glide.size > 1200) glide.clear(); // safety valve
     return { x, y, moving };
   };
+  /** the bar analogue of glidePos: a duration event's START and END points
+   *  interpolate to their new screen positions whenever its representation
+   *  changes (grid ⇄ span rail, fold level, division). Without this a bar
+   *  teleports across the track and the eye loses which event it was —
+   *  the same jump-cut glidePos removes for dots. easeOutCubic, not
+   *  easeOutBack: a bar overshooting its own endpoints reads as the span
+   *  briefly covering time it doesn't. */
+  type GRect = { x0: number; y0: number; x1: number; y1: number };
+  const rectGlide = new Map<Ev, { r: GRect; key: string; from?: { r: GRect; t0: number } }>();
+  const glideRect = (e: Ev, key: string, target: GRect): { r: GRect; moving: boolean } => {
+    if (!glideEnabled) return { r: target, moving: false };
+    const prev = rectGlide.get(e);
+    let from = prev && prev.key !== key ? { r: prev.r, t0: performance.now() } : prev?.from;
+    let r = target;
+    let moving = false;
+    if (from) {
+      const t = (performance.now() - from.t0) / GLIDE_MS;
+      if (t < 1) {
+        const k = easeOutCubic(Math.max(0, t));
+        const mix = (a: number, b: number) => a + (b - a) * k;
+        r = {
+          x0: mix(from.r.x0, target.x0),
+          y0: mix(from.r.y0, target.y0),
+          x1: mix(from.r.x1, target.x1),
+          y1: mix(from.r.y1, target.y1),
+        };
+        moving = true;
+      } else {
+        from = undefined;
+      }
+    }
+    rectGlide.set(e, { r, key, from });
+    if (rectGlide.size > 1200) rectGlide.clear(); // safety valve
+    return { r, moving };
+  };
   // content measure capped like a text column — right for narrow multi-track
   // lanes (deep time), wrong for a full-page single-track calendar, so
   // datasets may override (Infinity = edge to edge)
@@ -2392,7 +2624,7 @@ export function createTimelineSource(
         : tracks.find((t) => sx >= t.x0 && sx < t.x0 + t.w);
     if (!tr || tr.meta.cat === "periodic") return null;
     if (!trackWideEnough(tr.meta.cat, tr.w, rem)) return null;
-    return { cx0: trackContentX0(tr.x0, rem), contentW: trackContentW(tr.w, rem), rem };
+    return { cx0: trackContentX0(tr.meta.cat, tr.x0, rem), contentW: trackContentW(tr.meta.cat, tr.w, rem), rem };
   }
   // same level pick as the band chrome: finest level readable at the center
   function pickFoldLevel(
@@ -2420,10 +2652,24 @@ export function createTimelineSource(
   }
   /** slim y-axis gutter inside a folding track: row labels live here,
    *  uncovered by phase-0 events */
-  const Y_GUTTER_REM = 2.6;
-  const trackContentX0 = (x0: number, rem: number) => x0 + Y_GUTTER_REM * rem;
-  const trackContentW = (w: number, rem: number) =>
-    Math.min(w - Y_GUTTER_REM * rem - 8, TRACK_FOLD_MAX_CONTENT_REM * rem);
+  const Y_GUTTER_REM = 4;
+  /** span rail between the gutter and the grid: events too long to fold (see
+   *  VERTICAL_MIN_ROWS) run down it as ONE continuous bar. Reserved
+   *  unconditionally so the grid's phase geometry never depends on which
+   *  events happen to be on screen. */
+  const SPAN_RAIL_REM = 2.2;
+  /** a duration event covering at least this many fold rows leaves the grid:
+   *  wrapped into rows it reads as N separate same-time-of-day events, which
+   *  is the opposite of what a multi-row span means */
+  const VERTICAL_MIN_ROWS = 3;
+  const trackSpanRailX0 = (x0: number, rem: number) => x0 + Y_GUTTER_REM * rem;
+  /** reserved only where the data HAS spans — a deep-time track of instants
+   *  keeps its full content measure */
+  const trackRailW = (cat: Cat, rem: number) => (spanCats.has(cat) ? SPAN_RAIL_REM * rem : 0);
+  const trackContentX0 = (cat: Cat, x0: number, rem: number) =>
+    x0 + Y_GUTTER_REM * rem + trackRailW(cat, rem);
+  const trackContentW = (cat: Cat, w: number, rem: number) =>
+    Math.min(w - Y_GUTTER_REM * rem - trackRailW(cat, rem) - 8, TRACK_FOLD_MAX_CONTENT_REM * rem);
   /** folded position of a dated event inside its track, or null (classic rail).
    *  Picks the FINEST fold level whose local cycle band is ≥1rem tall and
    *  whose phase slots are ≥1rem wide within the track's content measure. */
@@ -2433,7 +2679,7 @@ export function createTimelineSource(
     if (!trackWideEnough(e.cat, w, rem)) return null;
     const t = tMsOfEv(e);
     if (t == null) return null;
-    const contentW = trackContentW(w, rem);
+    const contentW = trackContentW(e.cat, w, rem);
     for (const lf of LADDER_FINE_FIRST) {
       const fv = FOLD_VIEWS[lf];
       const div = chooseDivision(fv, contentW, rem);
@@ -2447,7 +2693,7 @@ export function createTimelineSource(
       const yBot = worldToScreenY(view, worldOf(ybpOfTMs(end)));
       if (Math.abs(yBot - yTop) < rem) continue; // band unreadable → coarser
       return {
-        x: trackContentX0(x0, rem) + p.phase0 * contentW,
+        x: trackContentX0(e.cat, x0, rem) + p.phase0 * contentW,
         y: (yTop + yBot) / 2,
         level: lf,
         bandPx: Math.abs(yBot - yTop),
@@ -2752,6 +2998,16 @@ export function createTimelineSource(
         if (sx >= l.x0 && sx <= l.x1 && Math.abs(sy - l.y) <= 7) {
           const title = l.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
           return { title, detail: l.e.detail, cat: l.e.cat };
+        }
+      }
+      // span-rail bars next: they are far from any dot, so an exact rect test
+      // beats the nearest-center search below. Walked back to front — where
+      // staggered bars overlap, the one you can actually see is the hit.
+      for (let i = drawnRects.length - 1; i >= 0; i--) {
+        const r = drawnRects[i]!;
+        if (sx >= r.x0 - 2 && sx <= r.x1 + 2 && sy >= r.y0 && sy <= r.y1) {
+          const title = r.e.label.replace(/\s+born$/, "").replace(/\s*·.*$/, "").trim();
+          return { title, detail: r.e.detail, cat: r.e.cat };
         }
       }
       // this frame's DRAWN glyphs win next: during a glide/morph the pixels
