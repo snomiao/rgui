@@ -31,6 +31,9 @@ export interface LaneEnv {
   size: { width: number; height: number };
   /** readable flow-axis step (world units per readable cell) at this zoom */
   lodStep: number;
+  /** canvas-local pointer, or null when it is outside. Lets a source hover-
+   *  highlight what it drew without the host re-deriving hit geometry. */
+  pointer: { x: number; y: number } | null;
 }
 
 /** a 1-D dataset the lane can render. World coords run along the flow axis. */
@@ -249,6 +252,9 @@ export function createLane(
       rule,
       size: { width: view.width, height: view.height },
       lodStep: lodStep(view, rule),
+      pointer: pointerInside && pointerX != null && pointerY != null
+        ? { x: pointerX, y: pointerY }
+        : null,
     };
     source.draw(ctx, view, env);
     if ((opts.zoomIndicator ?? true) && pointerInside && pointerY != null)
@@ -377,10 +383,13 @@ export function createLane(
   const wheelAngle = (dx: number, dy: number) =>
     (Math.atan2(-dy, dx) * 180 / Math.PI + 360) % 360;
 
+  // Horizontal intent follows the trackpad's natural-scroll sense: swiping
+  // content LEFT (deltaX > 0, screen angle 0°) pushes the timeline away →
+  // zoom OUT; swiping right pulls it closer → zoom IN.
   function nearestWheelOperation(angle: number): WheelOperation {
-    if (angle < 45 || angle >= 315) return "zoom-in";
+    if (angle < 45 || angle >= 315) return "zoom-out";
     if (angle < 135) return "scroll-up";
-    if (angle < 225) return "zoom-out";
+    if (angle < 225) return "zoom-in";
     return "scroll-down";
   }
 
@@ -389,9 +398,9 @@ export function createLane(
   // boundary noise can never alternate pan and zoom frame by frame.
   function operationHolds(op: WheelOperation, angle: number): boolean {
     switch (op) {
-      case "zoom-in": return angle <= 60 || angle >= 300;
+      case "zoom-out": return angle <= 60 || angle >= 300;
       case "scroll-up": return angle >= 30 && angle <= 150;
-      case "zoom-out": return angle >= 120 && angle <= 240;
+      case "zoom-in": return angle >= 120 && angle <= 240;
       case "scroll-down": return angle >= 210 && angle <= 330;
     }
   }
