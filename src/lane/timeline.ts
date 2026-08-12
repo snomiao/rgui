@@ -492,6 +492,27 @@ function fmtLabel(yBP: number, step: number): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
+/**
+ * A real instant at the resolution the view is showing: `span` is roughly how
+ * many years one label row covers, the same quantity the ruler's step is. Both
+ * axes feed it, so a marker never claims more (or less) precision than the
+ * pixels under it can back.
+ */
+function fmtInstant(tMs: number, span: number): string {
+  // UTC getters on purpose: dataset instants are the UTC-normalized wall clock
+  // the fold projectors read (a zone-shifted frame is applied upstream, so
+  // re-applying the local offset here would double-shift it)
+  const d = new Date(tMs);
+  if (span >= 1) return String(d.getUTCFullYear());
+  if (span >= DAY) return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+  if (span >= HOUR)
+    return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+  if (span >= 10 * SEC) return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+  if (span >= SEC / 10)
+    return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
+  return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, "0")}`;
+}
+
 /** a coarse duration for distances/off-screen indicators */
 function fmtDur(y: number): string {
   y = Math.abs(y);
@@ -1167,6 +1188,7 @@ export function createTimelineSource(
     framePointer = env.pointer;
     headerTop = env.safeTop;
     headerBottom = headerTop + HEADER_H;
+    rulerLabels = [];
     foldHeaderAxes.length = 0; // pseudo-x-axes queued by folding tracks
     heatCells.clear(); // per-cell densities, repopulated by folding tracks
 
@@ -1196,6 +1218,8 @@ export function createTimelineSource(
         drawTrackEvents(ctx, view, theme, t.x0, t.w, H, topW, botW, t.meta.cat);
       }
     }
+
+    drawRulerLabels(ctx, theme, W);
 
     // sticky header strip on top of everything. Its plate covers the STRIP
     // only, never the band above it: what sits up there is the host's own
@@ -1257,11 +1281,10 @@ export function createTimelineSource(
         ctx.moveTo(RULER_W, sy + 0.5);
         ctx.lineTo(W, sy + 0.5);
         ctx.stroke();
-        ctx.fillStyle = theme.textMuted;
-        ctx.textAlign = "right";
         // the rule lines stay full-bleed; only the READING of the ruler moves
         // out from under the host's chrome
-        if (sy >= headerTop + 4) ctx.fillText((yBP < 0 ? "+" : "") + fmtDur(Math.abs(yBP)), RULER_W - 6, sy);
+        if (sy >= headerTop + 4)
+          rulerLabels.push({ text: (yBP < 0 ? "+" : "") + fmtDur(Math.abs(yBP)), y: sy });
       }
       return;
     }
@@ -1278,9 +1301,23 @@ export function createTimelineSource(
       ctx.moveTo(RULER_W, sy + 0.5);
       ctx.lineTo(W, sy + 0.5);
       ctx.stroke();
+      if (sy >= headerTop + 4) rulerLabels.push({ text: fmtLabel(-g, step), y: sy });
+    }
+  }
+
+  /** the time legends, painted AFTER the tracks so events can't bury them.
+   *  They hug the right edge — the side the eye ends a row on — and carry a
+   *  thin plate so a legend stays readable over whatever it crosses. */
+  function drawRulerLabels(ctx: CanvasRenderingContext2D, theme: RgTheme, W: number) {
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "right";
+    for (const l of rulerLabels) {
+      const tw = ctx.measureText(l.text).width;
+      ctx.fillStyle = withAlpha(theme.background, 0.74);
+      ctx.fillRect(W - 10 - tw, l.y - 7, tw + 8, 14);
       ctx.fillStyle = theme.textMuted;
-      ctx.textAlign = "right";
-      if (sy >= headerTop + 4) ctx.fillText(fmtLabel(-g, step), RULER_W - 6, sy);
+      ctx.fillText(l.text, W - 6, l.y);
     }
   }
 
@@ -1317,6 +1354,16 @@ export function createTimelineSource(
     }
   }
 
+  /** years covered by ~one label row at screen-y `sy` — the resolution the
+   *  viewport is actually showing there. Works on both axes (the symlog one
+   *  changes scale down the screen, so it is measured locally, not globally). */
+  const spanPerLabel = (view: LaneView, sy: number) => {
+    const a = yBPof(screenToWorldY(view, sy - 8));
+    const b = yBPof(screenToWorldY(view, sy + 8));
+    const span = Math.abs(a - b);
+    return Number.isFinite(span) ? span : 1;
+  };
+
   function drawNow(
     ctx: CanvasRenderingContext2D,
     view: LaneView,
@@ -1330,9 +1377,11 @@ export function createTimelineSource(
     drawLiveNowStroke(ctx, theme, x0, sy + 0.5, W, sy + 0.5);
     ctx.font = "10px ui-monospace, Menlo, monospace";
     ctx.fillStyle = theme.accent;
-    ctx.textAlign = "right";
+    ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
-    ctx.fillText(`now · ${new Date(marker.tMs).getUTCFullYear()}`, W - 6, sy - 2);
+    // left rail, where the legends used to sit — and at the resolution the
+    // viewport actually shows: a year is a lie once a row is a minute wide
+    ctx.fillText(`now · ${fmtInstant(marker.tMs, spanPerLabel(view, sy))}`, 6, sy - 2);
   }
 
   let nowFlowTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2435,6 +2484,8 @@ export function createTimelineSource(
   // edge to edge underneath, which is what makes the full-bleed look work.
   let headerTop = 0;
   let headerBottom = HEADER_H;
+  /** this frame's ruler legends, queued by drawRuler and painted late */
+  let rulerLabels: { text: string; y: number }[] = [];
   const headerMid = () => headerTop + HEADER_H / 2;
   // rect-shaped glyphs (span-rail bars): a 300px-tall, 8px-wide bar has no
   // useful center, so it hit-tests as the rectangle it is, not as a circle
