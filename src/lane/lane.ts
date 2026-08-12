@@ -2,8 +2,8 @@
  * rgui lane — the engine for limited-visual-width / vertical-zoom rendering.
  *
  * `createLane(canvas, { source })` owns the {@link LaneView}, a dpr-aware
- * Canvas-2D render loop, and all input (vertical scroll = move, horizontal
- * scroll or pinch = zoom, drag = move, R/F zoom, W/S move). It is deliberately dataset-blind:
+ * Canvas-2D render loop, and all input (vertical scroll or drag = move,
+ * horizontal scroll, horizontal drag or pinch = zoom, R/F zoom, W/S move). It is deliberately dataset-blind:
  * everything domain-specific lives behind {@link LaneSource}, so folder trees
  * (src/lane/tree.ts) and time series (src/lane/timeseries.ts) share one engine.
  */
@@ -34,6 +34,10 @@ export interface LaneEnv {
   /** canvas-local pointer, or null when it is outside. Lets a source hover-
    *  highlight what it drew without the host re-deriving hit geometry. */
   pointer: { x: number; y: number } | null;
+  /** px of the canvas top covered by the host's own chrome. The chart still
+   *  paints full-bleed underneath; only TEXT the reader must be able to read
+   *  (sticky headers, axis labels) is pushed below it. */
+  safeTop: number;
 }
 
 /** a 1-D dataset the lane can render. World coords run along the flow axis. */
@@ -101,6 +105,13 @@ export interface LaneOptions {
    * calendar's crosshair + cell highlight) turn it off.
    */
   zoomIndicator?: boolean;
+  /**
+   * px of the canvas top hidden behind the host's floating chrome (toolbars,
+   * chips). Sources push their sticky header/axis labels below it so the two
+   * never overlap, while the chart keeps rendering edge to edge. A function is
+   * re-read every frame — right for a toolbar that rewraps on resize.
+   */
+  safeTop?: number | (() => number);
   onFrame?: (view: LaneView) => void;
 }
 
@@ -255,6 +266,13 @@ export function createLane(
       pointer: pointerInside && pointerX != null && pointerY != null
         ? { x: pointerX, y: pointerY }
         : null,
+      safeTop: Math.max(
+        0,
+        Math.min(
+          view.height / 3, // never let chrome claim the whole viewport
+          (typeof opts.safeTop === "function" ? opts.safeTop() : opts.safeTop) ?? 0,
+        ),
+      ),
     };
     source.draw(ctx, view, env);
     if ((opts.zoomIndicator ?? true) && pointerInside && pointerY != null)
@@ -485,9 +503,28 @@ export function createLane(
   // pointer drag + 2-pointer pinch (touch / trackpad)
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchPrev: { dist: number; midY: number } | null = null;
+  // Single-drag axis lock, the drag counterpart of the wheel classifier: a
+  // TOUCH drag is EITHER a move or a zoom, decided once per gesture and held.
+  // A vertical drag moves the content (as always); a horizontal one zooms, the
+  // same way a horizontal scroll does — on a touchscreen there is no wheel to
+  // reach for. Deciding per-frame instead would let a wobbly pan smear the
+  // zoom. Mouse/pen drags stay pure moves: hosts build their own drag
+  // grammars on them (the calendar drags out new events).
+  const DRAG_AXIS_LOCK_PX = 6; // travel before a gesture commits to an axis
+  const DRAG_ZOOM_BASE = 0.006; // e^(px·base): a 100px drag ≈ 1.8× — a direct
+  // manipulation, so no flick acceleration (that belongs to the wheel)
+  let dragStart: { x: number; y: number } | null = null;
+  let dragAxis: "move" | "zoom" | null = null;
   function onPointerDown(e: PointerEvent) {
     focusAnim = null; // user took over
     pointers.set(e.pointerId, { x: localX(e), y: localY(e) });
+    if (pointers.size === 1 && e.pointerType === "touch") {
+      dragStart = { x: localX(e), y: localY(e) };
+      dragAxis = null;
+    } else {
+      dragStart = null; // pinch owns the gesture
+      dragAxis = null;
+    }
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch {
@@ -521,16 +558,33 @@ export function createLane(
       }
       pinchPrev = cur;
     } else {
-      // single-pointer drag → move the content (drag down = scroll up)
+      const dx = now.x - prev.x;
       const dy = now.y - prev.y;
-      view.scrollY -= dy / view.zoomY;
-      scrollDamp(dy);
+      if (!dragAxis && dragStart) {
+        const ax = now.x - dragStart.x;
+        const ay = now.y - dragStart.y;
+        if (Math.hypot(ax, ay) >= DRAG_AXIS_LOCK_PX)
+          dragAxis = Math.abs(ax) > Math.abs(ay) ? "zoom" : "move";
+      }
+      if (dragAxis === "zoom") {
+        // dragging right pulls the timeline closer (zoom in) — the same sense
+        // as swiping a trackpad right
+        zoomAt(view, Math.exp(dx * DRAG_ZOOM_BASE), zoomAnchor(now.y), zoomLimits());
+      } else {
+        // drag down = scroll up
+        view.scrollY -= dy / view.zoomY;
+        scrollDamp(dy);
+      }
     }
     invalidate();
   }
   function onPointerUp(e: PointerEvent) {
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinchPrev = null;
+    if (pointers.size === 0) {
+      dragStart = null;
+      dragAxis = null;
+    }
     try {
       canvas.releasePointerCapture(e.pointerId);
     } catch {

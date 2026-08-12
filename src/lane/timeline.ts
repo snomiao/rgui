@@ -1165,6 +1165,8 @@ export function createTimelineSource(
     drawnGlyphs.clear(); // repopulated with this frame's ACTUAL glyph pixels
     drawnRects = []; // span-rail bars, likewise
     framePointer = env.pointer;
+    headerTop = env.safeTop;
+    headerBottom = headerTop + HEADER_H;
     foldHeaderAxes.length = 0; // pseudo-x-axes queued by folding tracks
     heatCells.clear(); // per-cell densities, repopulated by folding tracks
 
@@ -1195,20 +1197,23 @@ export function createTimelineSource(
       }
     }
 
-    // sticky header strip on top of everything
+    // sticky header strip on top of everything. Its plate covers the STRIP
+    // only, never the band above it: what sits up there is the host's own
+    // chrome with live chart showing through around it — the full-bleed look
+    // is the point, so nothing may paint a lid over it.
     ctx.fillStyle = withAlpha(theme.background, 0.82);
-    ctx.fillRect(TRACK_X0, 0, W - TRACK_X0, HEADER_H);
+    ctx.fillRect(TRACK_X0, headerTop, W - TRACK_X0, HEADER_H);
     ctx.strokeStyle = withAlpha(theme.textFaint, 0.2);
     ctx.beginPath();
-    ctx.moveTo(TRACK_X0, HEADER_H + 0.5);
-    ctx.lineTo(W, HEADER_H + 0.5);
+    ctx.moveTo(TRACK_X0, headerBottom + 0.5);
+    ctx.lineTo(W, headerBottom + 0.5);
     ctx.stroke();
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     ctx.font = "10px ui-monospace, Menlo, monospace";
     for (const t of tracks) {
       ctx.fillStyle = t.meta.color;
-      ctx.fillText(fit(ctx, tr(t.meta.label), t.w - 8), t.x0 + 6, HEADER_H / 2);
+      ctx.fillText(fit(ctx, tr(t.meta.label), t.w - 8), t.x0 + 6, headerMid());
     }
     // folding tracks: pseudo-x-axis slot labels share the sticky strip
     // (skipping the zone the track's own name occupies)
@@ -1218,7 +1223,7 @@ export function createTimelineSource(
         const x = ax.x0 + (m2 / ax.div.slots) * ax.contentW + 2;
         if (x < ax.x0 + 62) continue; // leave room for the track name
         ctx.fillStyle = withAlpha(theme.textFaint, 0.95);
-        ctx.fillText(tr(ax.div.slotLabel(m2)), x, HEADER_H / 2);
+        ctx.fillText(tr(ax.div.slotLabel(m2)), x, headerMid());
       }
     }
 
@@ -1254,7 +1259,9 @@ export function createTimelineSource(
         ctx.stroke();
         ctx.fillStyle = theme.textMuted;
         ctx.textAlign = "right";
-        ctx.fillText((yBP < 0 ? "+" : "") + fmtDur(Math.abs(yBP)), RULER_W - 6, sy);
+        // the rule lines stay full-bleed; only the READING of the ruler moves
+        // out from under the host's chrome
+        if (sy >= headerTop + 4) ctx.fillText((yBP < 0 ? "+" : "") + fmtDur(Math.abs(yBP)), RULER_W - 6, sy);
       }
       return;
     }
@@ -1273,7 +1280,7 @@ export function createTimelineSource(
       ctx.stroke();
       ctx.fillStyle = theme.textMuted;
       ctx.textAlign = "right";
-      ctx.fillText(fmtLabel(-g, step), RULER_W - 6, sy);
+      if (sy >= headerTop + 4) ctx.fillText(fmtLabel(-g, step), RULER_W - 6, sy);
     }
   }
 
@@ -1464,7 +1471,7 @@ export function createTimelineSource(
         if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
         const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
         const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
-        const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
+        const cy0 = Math.max(Math.min(ya, yb), headerBottom);
         const cy1 = Math.min(Math.max(ya, yb), H);
         if (cy1 <= cy0) continue;
         // perceptible floor + bounded ramp: the conserved p can be ~1e-4 for
@@ -1485,7 +1492,7 @@ export function createTimelineSource(
         if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
         const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
         const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
-        const cy0 = Math.max(Math.min(ya, yb), HEADER_H);
+        const cy0 = Math.max(Math.min(ya, yb), headerBottom);
         const cy1 = Math.min(Math.max(ya, yb), H);
         if (cy1 <= cy0) continue;
         ctx.fillStyle = heatCellColor(cat, Math.max(1, Math.round(ramp.get(key) ?? n)), darkTheme);
@@ -1518,7 +1525,7 @@ export function createTimelineSource(
         ctx.strokeStyle = withAlpha(theme.textFaint, major ? 0.28 : 0.1);
         const x = gx(m2 / div.slots);
         ctx.beginPath();
-        ctx.moveTo(Math.round(x) + 0.5, HEADER_H);
+        ctx.moveTo(Math.round(x) + 0.5, headerBottom);
         ctx.lineTo(Math.round(x) + 0.5, H);
         ctx.stroke();
       }
@@ -1534,7 +1541,7 @@ export function createTimelineSource(
         const ms = foldRowStartMs(lf, row);
         if (!Number.isFinite(ms)) return null;
         const y = worldToScreenY(view, worldOf(ybpOfTMs(ms)));
-        if (y >= HEADER_H - 2 && y <= H + 2) {
+        if (y >= headerBottom - 2 && y <= H + 2) {
           // floor: even the plainest row boundary must beat every vertical
           const strength = Math.max(0.42, boundaryStrength(ms));
           ctx.strokeStyle = withAlpha(theme.textFaint, Math.min(strength, 0.95));
@@ -1556,9 +1563,9 @@ export function createTimelineSource(
             // alternating wash gives day rhythm without more lines
             if (!heatEnabled && row % 2 === 0 && bandPx >= 6) {
               ctx.fillStyle = withAlpha(theme.textFaint, 0.045);
-              ctx.fillRect(x0 + 2, Math.max(top, HEADER_H), w - 6, Math.min(top + bandPx, H) - Math.max(top, HEADER_H));
+              ctx.fillRect(x0 + 2, Math.max(top, headerBottom), w - 6, Math.min(top + bandPx, H) - Math.max(top, headerBottom));
             }
-            if (bandPx >= 13 && top + 8 >= HEADER_H && top <= H) {
+            if (bandPx >= 13 && top + 8 >= headerBottom && top <= H) {
               const label = fv.projector.project(ms)?.rowLabel;
               if (label) {
                 ctx.font = "9px ui-monospace, Menlo, monospace";
@@ -1581,7 +1588,7 @@ export function createTimelineSource(
             const year = Math.floor(row / 12);
             const dim = new Date(Date.UTC(year, (((row % 12) + 12) % 12) + 1, 0)).getUTCDate();
             if (dim < 31) {
-              const a = Math.max(Math.min(y, y1), HEADER_H);
+              const a = Math.max(Math.min(y, y1), headerBottom);
               const b = Math.min(Math.max(y, y1), H);
               if (b > a) {
                 ctx.fillStyle = withAlpha(theme.textFaint, 0.07);
@@ -1594,7 +1601,7 @@ export function createTimelineSource(
       };
       for (let row = p.rowIndex, i = 0; i < 120; i++, row--) {
         const y = drawRow(row);
-        if (y == null || y < HEADER_H - 2) break;
+        if (y == null || y < headerBottom - 2) break;
       }
       for (let row = p.rowIndex + 1, i = 0; i < 120; i++, row++) {
         const y = drawRow(row);
@@ -1664,7 +1671,7 @@ export function createTimelineSource(
       for (const { e, sy } of vis) {
         const durMs = e.durMs ?? 0;
         // a spanning event may reach the viewport from an off-screen start
-        if (durMs <= 0 && (sy < HEADER_H - 2 || sy > H + 2)) continue;
+        if (durMs <= 0 && (sy < headerBottom - 2 || sy > H + 2)) continue;
         if (vspan > influenceOf(e) * influenceDots()) continue;
         const fp = trackFoldPos(e, view, x0, w);
         fpCache.set(e, fp);
@@ -1689,7 +1696,7 @@ export function createTimelineSource(
         // shorter windows keep the grid: interval-lod ones as the precision
         // wash (second pass), point-lod ones as wrapped Gantt fragments
         if (cls.lod !== "point") continue;
-        if (sy < HEADER_H - 2 || sy > H + 2) continue; // grid bars follow their start
+        if (sy < headerBottom - 2 || sy > H + 2) continue; // grid bars follow their start
         const hc0 = heatCells.get(e.cat);
         if (
           heatEnabled && hc0 && hc0.level === fp.level &&
@@ -1755,7 +1762,7 @@ export function createTimelineSource(
         const drawBar = (f: BarFrag, y: number, hh: number, alpha: number) => {
           let bx0 = cx4 + f.p0 * cw4;
           let bw = Math.max(2, (f.p1 - f.p0) * cw4);
-          let by0 = Math.max(y, HEADER_H);
+          let by0 = Math.max(y, headerBottom);
           let by1 = Math.min(y + hh - 1, H);
           if (by1 <= by0) return;
           // only the START fragment glides: it is the one that was (or
@@ -1768,7 +1775,7 @@ export function createTimelineSource(
               anyGliding = true;
               bx0 = g.r.x0;
               bw = Math.max(2, g.r.x1 - g.r.x0);
-              by0 = Math.max(g.r.y0, HEADER_H);
+              by0 = Math.max(g.r.y0, headerBottom);
               by1 = Math.min(g.r.y1, H);
               if (by1 <= by0) return;
             }
@@ -1795,7 +1802,7 @@ export function createTimelineSource(
         const railX0 = trackSpanRailX0(x0, rem4);
         const railW = Math.max(4, cx4 - railX0 - 3);
         ctx.fillStyle = withAlpha(theme.textFaint, 0.06);
-        ctx.fillRect(railX0, HEADER_H, railW, Math.max(0, H - HEADER_H));
+        ctx.fillRect(railX0, headerBottom, railW, Math.max(0, H - headerBottom));
         // greedy packing on TIME (not phase): overlapping spans take separate
         // columns, sequential ones reuse one
         verticals.sort((a, b) => a.t0 - b.t0 || a.t1 - b.t1);
@@ -1845,7 +1852,7 @@ export function createTimelineSource(
             y1: Math.max(ya, yb),
           });
           if (g.moving) anyGliding = true;
-          const by0 = Math.max(g.r.y0, HEADER_H);
+          const by0 = Math.max(g.r.y0, headerBottom);
           const by1 = Math.min(g.r.y1, H);
           if (by1 - by0 < 2) continue;
           bars.push({
@@ -1875,7 +1882,7 @@ export function createTimelineSource(
           // caps mark REAL endpoints only — an uncapped end reads as "runs on
           // past the viewport", which is the honest thing to show
           ctx.fillStyle = withAlpha(c, 0.95);
-          if (yTop >= HEADER_H) ctx.fillRect(bx0, yTop, bw, 2);
+          if (yTop >= headerBottom) ctx.fillRect(bx0, yTop, bw, 2);
           if (yBot <= H) ctx.fillRect(bx0, yBot - 2, bw, 2);
           drawnRects.push({ x0: bx0, x1: bx0 + bw, y0: by0, y1: by1, e: v.e });
           // hand the bar's center to the DOT glide: if a zoom drops this
@@ -1894,7 +1901,7 @@ export function createTimelineSource(
             ctx.font = "11px ui-monospace, Menlo, monospace";
             ctx.textAlign = "left";
             ctx.textBaseline = "middle";
-            const ly = Math.min(Math.max(by0 + 7, HEADER_H + 9), by1 - 3);
+            const ly = Math.min(Math.max(by0 + 7, headerBottom + 9), by1 - 3);
             const lx0 = bx0 + 3;
             const text = fit(ctx, tr(v.e.label), x0 + w - lx0 - 8);
             const lx1 = lx0 + ctx.measureText(text).width + 4;
@@ -1920,7 +1927,7 @@ export function createTimelineSource(
     }
 
     for (const { e, sy } of vis) {
-      if (sy < HEADER_H - 2 || sy > H + 2) continue;
+      if (sy < headerBottom - 2 || sy > H + 2) continue;
       const infl = influenceOf(e);
       if (vspan > infl * influenceDots()) continue; // out of influence → hidden
       const color = evColor(e); // per-event override (overlaid calendars)
@@ -1961,7 +1968,7 @@ export function createTimelineSource(
               if (!Number.isFinite(ms0) || !Number.isFinite(ms1)) continue;
               const ya = worldToScreenY(view, worldOf(ybpOfTMs(ms0)));
               const yb = worldToScreenY(view, worldOf(ybpOfTMs(ms1)));
-              const fy0 = Math.max(Math.min(ya, yb) + 1, HEADER_H);
+              const fy0 = Math.max(Math.min(ya, yb) + 1, headerBottom);
               const fy1 = Math.min(Math.max(ya, yb) - 1, H);
               if (fy1 <= fy0) continue;
               ctx.fillRect(cx0 + fr.phase0 * contentW2, fy0, Math.max(2, (fr.phase1 - fr.phase0) * contentW2), fy1 - fy0);
@@ -2153,7 +2160,7 @@ export function createTimelineSource(
       ctx.fillStyle = theme.textFaint;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillText("—", x0 + w / 2, HEADER_H + 6);
+      ctx.fillText("—", x0 + w / 2, headerBottom + 6);
       return;
     }
     const sub = w / active.length;
@@ -2169,7 +2176,7 @@ export function createTimelineSource(
       const last = Math.ceil(hi / c.period);
       for (let k = first; k <= last && n < 400; k++, n++) {
         const sy = worldToScreenY(view, worldOf(k * c.period));
-        if (sy < HEADER_H || sy > H || Math.abs(sy - lastSy) < 3) continue;
+        if (sy < headerBottom || sy > H || Math.abs(sy - lastSy) < 3) continue;
         lastSy = sy;
         ctx.beginPath();
         ctx.moveTo(cx - 4, sy + 0.5);
@@ -2178,7 +2185,7 @@ export function createTimelineSource(
       }
       // rotated cycle name + period
       ctx.save();
-      ctx.translate(cx, Math.min(H - 8, HEADER_H + 60));
+      ctx.translate(cx, Math.min(H - 8, headerBottom + 60));
       ctx.rotate(-Math.PI / 2);
       ctx.fillStyle = c.color;
       ctx.font = "10px ui-monospace, Menlo, monospace";
@@ -2216,7 +2223,7 @@ export function createTimelineSource(
     const cx = (TRACK_X0 + W) / 2;
     if (aboveN) {
       const dist = above ? fmtDur(Math.abs(above.y - yBPof(topW))) : "";
-      badge(ctx, theme, cx, HEADER_H + 12, "▲", above ? tr(above.label) : undefined, dist, aboveN);
+      badge(ctx, theme, cx, headerBottom + 12, "▲", above ? tr(above.label) : undefined, dist, aboveN);
     }
     if (belowN) {
       const dist = below ? fmtDur(Math.abs(yBPof(botW) - below.y)) : "";
@@ -2421,6 +2428,14 @@ export function createTimelineSource(
   const drawnGlyphs = new Map<Ev, { x: number; y: number; r: number }>();
   /** this frame's canvas-local pointer (from LaneEnv), for hover-lit labels */
   let framePointer: { x: number; y: number } | null = null;
+  // The sticky strip floats at the top of the READABLE area, not of the
+  // canvas: a host that overlays its own chrome (toolbars, chips) reports the
+  // covered band as LaneEnv.safeTop, and every label that must stay readable —
+  // plus every top clip — starts below it. The chart itself still paints
+  // edge to edge underneath, which is what makes the full-bleed look work.
+  let headerTop = 0;
+  let headerBottom = HEADER_H;
+  const headerMid = () => headerTop + HEADER_H / 2;
   // rect-shaped glyphs (span-rail bars): a 300px-tall, 8px-wide bar has no
   // useful center, so it hit-tests as the rectangle it is, not as a circle
   let drawnRects: { x0: number; x1: number; y0: number; y1: number; e: Ev }[] = [];
@@ -2481,7 +2496,7 @@ export function createTimelineSource(
       if (!Number.isFinite(t)) return null;
       return proj.project(t)?.rowIndex ?? null;
     };
-    const a = rowAt(HEADER_H - 40);
+    const a = rowAt(headerBottom - 40);
     const b = rowAt(H + 40);
     const r0 = Math.min(a ?? fallbackRow, b ?? fallbackRow);
     const r1 = Math.max(a ?? fallbackRow, b ?? fallbackRow);
@@ -2861,11 +2876,11 @@ export function createTimelineSource(
     // sticky header: month phase labels (reference year — exact per-row lines
     // above carry the per-year truth; the header is a guide)
     ctx.fillStyle = withAlpha(theme.background, 0.82);
-    ctx.fillRect(FOLD_X0, 0, W - FOLD_X0, HEADER_H);
+    ctx.fillRect(FOLD_X0, headerTop, W - FOLD_X0, HEADER_H);
     ctx.strokeStyle = withAlpha(theme.textFaint, 0.2);
     ctx.beginPath();
-    ctx.moveTo(FOLD_X0, HEADER_H + 0.5);
-    ctx.lineTo(W, HEADER_H + 0.5);
+    ctx.moveTo(FOLD_X0, headerBottom + 0.5);
+    ctx.lineTo(W, headerBottom + 0.5);
     ctx.stroke();
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
@@ -2878,11 +2893,11 @@ export function createTimelineSource(
     for (let m = 0; m < fv.slots; m += every) {
       const x = phaseX(m / fv.slots);
       ctx.fillStyle = theme.textFaint;
-      ctx.fillText(tr(fv.slotLabel(m)), x + 3, HEADER_H / 2);
+      ctx.fillText(tr(fv.slotLabel(m)), x + 3, headerMid());
     }
     ctx.fillStyle = theme.textFaint;
     ctx.textAlign = "right";
-    ctx.fillText(tr(fold), RULER_W - 2, HEADER_H / 2);
+    ctx.fillText(tr(fold), RULER_W - 2, headerMid());
     ctx.textAlign = "left";
   }
 

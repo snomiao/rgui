@@ -498,11 +498,18 @@ window.addEventListener("popstate", () => {
   }
 });
 
+// the toolbar floats OVER the full-bleed canvas and rewraps with the window,
+// so its height is measured every frame rather than assumed
+const barEl = document.querySelector<HTMLDivElement>("#bar");
 const lane = createLane(canvas, {
   source: sources[current]!,
   theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
   debug,
   maxDpr: 2,
+  safeTop: () =>
+    barEl
+      ? Math.max(0, barEl.getBoundingClientRect().bottom - canvas.getBoundingClientRect().top + 6)
+      : 0,
   onFrame: scheduleHash,
 });
 if (restored.scrollY != null || restored.zoomY != null) {

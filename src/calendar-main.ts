@@ -222,10 +222,17 @@ function rebuild(keepView = true) {
 }
 
 source = buildSource();
+// the toolbar floats OVER the full-bleed canvas and rewraps with the window,
+// so its height is measured every frame rather than assumed
+const barEl = document.querySelector<HTMLDivElement>("#bar")!;
 const lane = createLane(canvas, {
   source,
   theme: resolveTheme(),
   maxDpr: 2,
+  safeTop: () => {
+    const b = barEl.getBoundingClientRect();
+    return Math.max(0, b.bottom - canvas.getBoundingClientRect().top + 6);
+  },
   zoomIndicator: false, // the crosshair + cell highlight are the affordance
   onFrame: () => {
     updateGhost();
@@ -543,12 +550,12 @@ canvas.addEventListener(
     // drag past the threshold PICKS THE EVENT UP and moves it on the grid
     const overEv = resolveEventHit(sx, sy);
     if (overEv) {
-      e.stopPropagation();
+      e.stopImmediatePropagation(); // same-target listeners too: keep the lane out
       e.preventDefault();
       evPending = { ev: overEv, x: sx, y: sy, id: e.pointerId };
       return;
     }
-    e.stopPropagation();
+    e.stopImmediatePropagation(); // same-target listeners too: keep the lane out
     e.preventDefault();
     const t = timeAtPoint(sx, sy);
     if (t == null || !Number.isFinite(t)) return;
@@ -578,7 +585,7 @@ canvas.addEventListener(
       }
     }
     if (op && "id" in op && e.pointerId === op.id && ph) {
-      e.stopPropagation();
+      e.stopImmediatePropagation(); // same-target listeners too: keep the lane out
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
       const t = timeAtPoint(e.clientX - rect.left, e.clientY - rect.top);
