@@ -187,6 +187,58 @@ describe("parseIcs / serializeIcs", () => {
     expect(cal.events[0]!.startMs).toBe(Date.UTC(2026, 6, 1, 11));
   });
 
+  test("X-RGUI-PRECISION:MONTH survives parse and round-trip", () => {
+    const text = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:m@x",
+      "DTSTART;VALUE=DATE:20270301",
+      "DTEND;VALUE=DATE:20270401",
+      "X-RGUI-PRECISION:MONTH",
+      "SUMMARY:Milestone somewhere in March",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const cal = parseIcs(text, { fromMs: 0, toMs: Date.UTC(2028, 0, 1) });
+    expect(cal.events[0]!.precision).toBe("month");
+    // Round-trip, so an exporter cannot silently downgrade the event to exact.
+    const back = parseIcs(serializeIcs(cal.events), { fromMs: 0, toMs: Date.UTC(2028, 0, 1) });
+    expect(back.events[0]!.precision).toBe("month");
+  });
+
+  test("an event without the property is exact, not month", () => {
+    // Guards the default: if `precision` were set unconditionally, every event
+    // in every calendar would render as fuzzy and the test above would still pass.
+    const text = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:e@x",
+      "DTSTART;VALUE=DATE:20270301",
+      "DTEND;VALUE=DATE:20270401",
+      "SUMMARY:A genuinely month-long thing",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const cal = parseIcs(text, { fromMs: 0, toMs: Date.UTC(2028, 0, 1) });
+    expect(cal.events[0]!.precision).toBeUndefined();
+  });
+
+  test("an unrecognised precision is dropped, not passed through", () => {
+    const text = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:q@x",
+      "DTSTART;VALUE=DATE:20270101",
+      "DTEND;VALUE=DATE:20280101",
+      "X-RGUI-PRECISION:QUARTER",
+      "SUMMARY:Unsupported resolution",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const cal = parseIcs(text, { fromMs: 0, toMs: Date.UTC(2029, 0, 1) });
+    expect(cal.events[0]!.precision).toBeUndefined();
+  });
+
   test("long summaries fold at 74 chars and unfold back", () => {
     const long = "x".repeat(200);
     const text = serializeIcs([

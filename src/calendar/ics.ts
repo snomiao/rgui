@@ -12,6 +12,13 @@
  *     instances); anything gnarlier keeps the first instance flagged
  *     `recurring` instead of silently-wrong dates
  *   • EXDATE (exact-instant removal)
+ *   • X-RGUI-PRECISION (extension): the resolution the SOURCE actually pins.
+ *     An event whose source says "March 2027" and no more is a month-precision
+ *     event. It is encoded as a whole-month all-day span because that is the
+ *     honest reading — the milestone is somewhere in that month — but a
+ *     whole-month span is shape-identical to a genuinely month-long event, so
+ *     the distinction has to be carried explicitly rather than inferred.
+ *     Renderers use it to avoid drawing edges finer than the datum supports.
  */
 
 export interface IcsEvent {
@@ -24,6 +31,12 @@ export interface IcsEvent {
   allDay: boolean;
   /** RRULE was present but too complex to expand — first instance only */
   recurring?: boolean;
+  /**
+   * Resolution the source pins, when it is coarser than the encoded span.
+   * Absent = the start/end are exact as given. "month" = only the month is
+   * known; the span covers the whole month and its edges are not real.
+   */
+  precision?: "month";
 }
 
 export interface IcsCalendar {
@@ -273,6 +286,10 @@ export function parseIcs(
         if (d) ev.endMs = d.ms;
       } else if (p.name === "DURATION") {
         ev.durMs = parseIcsDuration(p.value.trim()) ?? undefined;
+      } else if (p.name === "X-RGUI-PRECISION") {
+        // Unknown values are ignored rather than passed through: a renderer
+        // that cannot honour a precision must not be told it is honouring one.
+        if (p.value.trim().toUpperCase() === "MONTH") ev.precision = "month";
       } else if (p.name === "RRULE") ev.rrule = p.value.trim();
       else if (p.name === "EXDATE") {
         for (const v of p.value.split(",")) {
@@ -302,6 +319,7 @@ export function parseIcs(
       startMs: p.startMs!,
       endMs,
       allDay,
+      ...(p.precision ? { precision: p.precision } : {}),
     };
   };
   const ovByUid = new Map<string, Map<number, ProtoEvent>>();
@@ -395,6 +413,7 @@ export function serializeIcs(events: readonly IcsEvent[], name = "rgui calendar"
       lines.push(`DTEND:${icsUtc(e.endMs)}`);
     }
     lines.push(`SUMMARY:${escapeText(e.summary)}`);
+    if (e.precision) lines.push(`X-RGUI-PRECISION:${e.precision.toUpperCase()}`);
     if (e.location) lines.push(`LOCATION:${escapeText(e.location)}`);
     if (e.description) lines.push(`DESCRIPTION:${escapeText(e.description)}`);
     lines.push("END:VEVENT");

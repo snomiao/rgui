@@ -24,6 +24,7 @@
  * (their date is zone-free and already sits on the UTC day boundary).
  */
 import { parseIcs, serializeIcs, zoneOffsetMs, type IcsEvent } from "./calendar/ics.js";
+import { durationMs, precisionUnit } from "./calendar/precision.js";
 import { createLane } from "./lane/lane.js";
 import {
   createTimelineSource,
@@ -81,6 +82,7 @@ const fromShifted = (s: number) => {
 
 let fmt!: Intl.DateTimeFormat;
 let fmtDay!: Intl.DateTimeFormat;
+let fmtMonth!: Intl.DateTimeFormat;
 function makeFormatters() {
   fmt = new Intl.DateTimeFormat(undefined, {
     weekday: "short", month: "short", day: "numeric",
@@ -89,6 +91,11 @@ function makeFormatters() {
   // all-day dates are zone-free — format their UTC calendar date as-is
   fmtDay = new Intl.DateTimeFormat(undefined, {
     weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
+  });
+  // month-precision events: naming a day here would put back, in the text a
+  // reader actually reads, the day the encoding refuses to assert.
+  fmtMonth = new Intl.DateTimeFormat(undefined, {
+    year: "numeric", month: "long", timeZone: "UTC",
   });
 }
 makeFormatters();
@@ -158,20 +165,28 @@ function snapForCell(cell: { t0: number; t1: number; x0: number; x1: number }) {
 }
 const snap = (ms: number) => Math.round(ms / snapMs) * snapMs;
 const fmtRange = (e: CalEvent) =>
-  e.allDay
-    ? `${fmtDay.format(e.startMs)} · all day`
-    : `${fmt.format(e.startMs)} → ${fmt.format(e.endMs)}`;
+  e.precision === "month"
+    ? `${fmtMonth.format(e.startMs)} · day not decided`
+    : e.allDay
+      ? `${fmtDay.format(e.startMs)} · all day`
+      : `${fmt.format(e.startMs)} → ${fmt.format(e.endMs)}`;
 
 function toEv(e: CalEvent): TimelineEvent {
   const cal = calById(e.calId);
   const t = e.allDay ? e.startMs : toShifted(e.startMs);
   const dur = e.allDay ? e.endMs - e.startMs : toShifted(e.endMs) - t;
+  // X-RGUI-PRECISION:MONTH — the source pins a month and no more. The feed has
+  // to encode it as a whole-month all-day span (an .ics event needs dates), so
+  // by shape it is indistinguishable from a genuinely month-long event. The
+  // difference is what the edges MEAN: here they are the month's edges, not the
+  // event's. Passing the unit through hands it to the precision LOD, which
+  // draws it as a point while a month is small on screen and opens it into a
+  // soft window once you zoom in past that — instead of a crisp month-long
+  // ribbon asserting a start day and an end day that nobody ever decided.
   return {
     y: (toShifted(nowMs) - t) / 1000 / SPY,
     tMs: t,
-    precision: e.allDay
-      ? { kind: "calendar", unit: "day" }
-      : { kind: "calendar", unit: "minute" },
+    precision: { kind: "calendar", unit: precisionUnit(e) },
     label: e.summary,
     detail: `${cal?.name ?? e.calId} · ${fmtRange(e)}`,
     imp: e.allDay ? 0.6 : 0.5,
@@ -179,8 +194,10 @@ function toEv(e: CalEvent): TimelineEvent {
     color: cal?.color,
     span: DAY_Y / 1440,
     // real extent → duration blocks in the fold (single-day all-day events
-    // already render as their precision day-band; multi-day ones ribbon)
-    durMs: e.allDay && dur <= 86400_000 ? undefined : dur,
+    // already render as their precision day-band; multi-day ones ribbon).
+    // A month-precision event has no known extent, so it gets none: a ribbon
+    // here would be the same false assertion in the fold view.
+    durMs: durationMs(e, dur),
   };
 }
 
