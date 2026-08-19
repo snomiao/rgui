@@ -24,7 +24,7 @@
  * (their date is zone-free and already sits on the UTC day boundary).
  */
 import { parseIcs, serializeIcs, zoneOffsetMs, type IcsEvent } from "./calendar/ics.js";
-import { durationMs, precisionUnit } from "./calendar/precision.js";
+import { durationMs, precisionUnit, spanYears } from "./calendar/precision.js";
 import { createLane } from "./lane/lane.js";
 import {
   createTimelineSource,
@@ -192,7 +192,7 @@ function toEv(e: CalEvent): TimelineEvent {
     imp: e.allDay ? 0.6 : 0.5,
     cat: "cal",
     color: cal?.color,
-    span: DAY_Y / 1440,
+    span: spanYears(e, DAY_Y / 1440),
     // real extent → duration blocks in the fold (single-day all-day events
     // already render as their precision day-band; multi-day ones ribbon).
     // A month-precision event has no known extent, so it gets none: a ribbon

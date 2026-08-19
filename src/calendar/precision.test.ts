@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { durationMs, precisionUnit } from "./precision.js";
+import { durationMs, precisionUnit, spanYears } from "./precision.js";
 import { precisionWindow } from "../lane/temporal.js";
 
 const MONTH = { allDay: true, precision: "month" } as const;
@@ -35,6 +35,19 @@ describe("calendar precision", () => {
 
   test("a timed event keeps its duration", () => {
     expect(durationMs(TIMED, 3600_000)).toBe(3600_000);
+  });
+
+  test("a month-precision event's fuzzy band is half a month, not a minute", () => {
+    const minute = 1 / 365.25 / 1440;
+    expect(spanYears(MONTH, minute)).toBeCloseTo(15.22 / 365.25, 6);
+  });
+
+  test("everything else keeps the caller's default span", () => {
+    // Pins the deliberate narrowness of the change: widening ordinary all-day
+    // events would move every existing calendar, and nothing asked for that.
+    const minute = 1 / 365.25 / 1440;
+    expect(spanYears(ALLDAY, minute)).toBe(minute);
+    expect(spanYears(TIMED, minute)).toBe(minute);
   });
 
   test("month unit resolves to the containing calendar month", () => {

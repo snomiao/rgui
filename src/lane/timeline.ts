@@ -28,6 +28,7 @@ import {
   foldDayProjector,
   foldDecadeProjector,
   foldMillenniumProjector,
+  placementInstant,
   precisionWindow,
   projectWindow,
   foldHourProjector,
@@ -2743,7 +2744,8 @@ export function createTimelineSource(
     if (!trackFold || fold !== "none") return null;
     const rem = remPx();
     if (!trackWideEnough(e.cat, w, rem)) return null;
-    const t = tMsOfEv(e);
+    // placement instant, not the representative one — see placementInstant
+    const t = e.cat === "periodic" ? null : placementInstant(e);
     if (t == null) return null;
     const contentW = trackContentW(e.cat, w, rem);
     for (const lf of LADDER_FINE_FIRST) {

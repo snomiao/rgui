@@ -520,3 +520,55 @@ describe2("projectWindow", () => {
     }
   });
 });
+
+import { describe as describe3, expect as expect3, test as test3 } from "bun:test";
+import { placementInstant as placementInstant3 } from "./temporal.js";
+
+describe3("placementInstant", () => {
+  const MONTH = { kind: "calendar", unit: "month" } as const;
+
+  test3("a month-precision event is placed at the middle of its month", () => {
+    // Not 2027-03-01. The representative instant sits on the boundary the
+    // window exists to withhold, and a glyph drawn there reads as the 1st.
+    expect3(placementInstant3({ tMs: Date.UTC(2027, 2, 1), precision: MONTH })).toBe(
+      (Date.UTC(2027, 2, 1) + Date.UTC(2027, 3, 1)) / 2,
+    );
+  });
+
+  test3("the placement does not depend on where in the month tMs falls", () => {
+    // Two events in the same month must land on the same point — otherwise the
+    // encoder's arbitrary choice of representative day leaks into the picture.
+    expect3(placementInstant3({ tMs: Date.UTC(2027, 2, 1), precision: MONTH })).toBe(
+      placementInstant3({ tMs: Date.UTC(2027, 2, 27, 18), precision: MONTH })!,
+    );
+  });
+
+  test3("short months and long months each get their own middle", () => {
+    // A fixed 15-day offset would answer February wrong.
+    expect3(placementInstant3({ tMs: Date.UTC(2027, 1, 1), precision: MONTH })).toBe(
+      Date.UTC(2027, 1, 15),
+    );
+    expect3(placementInstant3({ tMs: Date.UTC(2024, 1, 1), precision: MONTH })).toBe(
+      Date.UTC(2024, 1, 15, 12),
+    );
+  });
+
+  test3("an event with no calendar precision is left exactly where it is", () => {
+    // Deep-time events carry uncertainty bounds instead, and the continuous
+    // axis already draws those; moving them here would double-count.
+    const t = Date.UTC(2027, 2, 9, 13, 45);
+    expect3(placementInstant3({ tMs: t })).toBe(t);
+    expect3(
+      placementInstant3({ tMs: t, precision: { kind: "uncertainty", beforeYears: 5, afterYears: 5 } }),
+    ).toBe(t);
+  });
+
+  test3("minute precision moves by half a minute — bounded, not exempt", () => {
+    // The rule is uniform; it is the window's width that makes it visible or
+    // not. An exemption list would be a second thing to keep in sync.
+    const t = Date.UTC(2027, 2, 9, 13, 45);
+    expect3(placementInstant3({ tMs: t, precision: { kind: "calendar", unit: "minute" } })).toBe(
+      t + 30_000,
+    );
+  });
+});

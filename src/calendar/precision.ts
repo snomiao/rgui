@@ -34,3 +34,27 @@ export function durationMs(
   if (e.allDay && spanMs <= 86400_000) return undefined;
   return spanMs;
 }
+
+/**
+ * ± uncertainty in YEARS for the continuous (unfolded) axis, which draws a soft
+ * gradient band of this half-width around the event.
+ *
+ * The fold view withholds false precision through the precision window; the
+ * continuous axis does it through this number. A month-precision event given
+ * the default minute-wide span draws a hairline at the month's first instant —
+ * the same misplacement the fold view had, in the view that has no columns to
+ * make it obvious.
+ *
+ * Only the month case is derived here. Widening the default for ordinary
+ * all-day events would be defensible on the same argument, but it would move
+ * every existing calendar's rendering, and nothing has asked it to.
+ */
+export function spanYears(
+  e: Pick<IcsEvent, "allDay" | "precision">,
+  defaultSpanYears: number,
+): number {
+  // half of an average month; the band is a statement about resolution, not a
+  // claim that this particular month has 30.44 days
+  if (e.precision === "month") return (30.44 / 2) / 365.25;
+  return defaultSpanYears;
+}

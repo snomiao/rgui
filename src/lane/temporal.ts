@@ -407,3 +407,32 @@ export const FOLD_PERIOD_MS: Record<string, number> = {
   day: DAY_MS,
   hour: HOUR_MS,
 };
+
+/**
+ * Where to PLACE the glyph: the middle of what the source actually pins,
+ * not the first instant of it.
+ *
+ * The representative instant of a coarse-precision event is the start of its
+ * window — 2027-03-01 for "March 2027" — and drawing the dot there puts it
+ * hard against the left edge of the March column, which reads as the 1st.
+ * That is the very assertion the precision window exists to withhold, moved
+ * from the data into the glyph. The centre asserts nothing: it lands on no
+ * boundary, and it is the one point equidistant from both edges of what is
+ * known.
+ *
+ * The shift is bounded by half the window. A glyph is only drawn as a point
+ * while its window is under a slot wide (past that classifyEv opens it into
+ * a band), so this moves nothing by more than half a slot — invisible for
+ * day and minute precision, and decisive exactly where the window is wide
+ * enough for the old placement to mislead.
+ *
+ * Placement only. `tMs` stays the representative instant, which is what
+ * ordering, hit-test provenance and the detail line report.
+ */
+export function placementInstant(event: PrecisionEvent): number | null {
+  const tMs = evTimestampMs(event);
+  if (tMs == null) return null;
+  if (event.precision?.kind !== "calendar") return tMs;
+  const win = precisionWindow(event);
+  return win ? (win[0] + win[1]) / 2 : tMs;
+}
