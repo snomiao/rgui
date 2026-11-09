@@ -42,6 +42,9 @@ export type GanttLabels = {
   now?: string;
   blocked?: string;
   empty?: string;
+  fold?: string;
+  unfold?: string;
+  open?: string;
 };
 
 export type GanttOptions = {
@@ -56,6 +59,8 @@ export type GanttOptions = {
   canvas?: boolean;
   /** own touch pan: free diagonal drag with momentum (default true) */
   freePan?: boolean;
+  /** a ⋯ button at the right end of each row calls this (the page opens its dialog) */
+  onOpen?: (bar: GanttRow) => void;
 };
 
 /** a bar may carry extra display flags */
@@ -76,6 +81,9 @@ const ZH: Required<GanttLabels> = {
   now: "现在",
   blocked: "阻塞",
   empty: "没有任务",
+  fold: "收起子任务",
+  unfold: "展开子任务",
+  open: "详情 / 发消息",
 };
 
 const SCREENS = 7;
@@ -91,7 +99,10 @@ const CSS = `
 .rg-gantt .rg-cvw canvas{position:absolute;left:0;top:0;pointer-events:none}
 .rg-gantt .rg-rows{position:relative;user-select:none;-webkit-user-select:none}
 .rg-gantt .rg-now{position:absolute;top:0;bottom:0;width:2px;background:#d32f2f;opacity:.7;z-index:2;pointer-events:none;left:calc((var(--n) - var(--o)) * var(--k) * 1px)}
-.rg-gantt .rg-r{height:var(--h);line-height:var(--h);white-space:nowrap;position:relative}
+.rg-gantt .rg-r{height:var(--h);line-height:var(--h);white-space:nowrap;position:relative;display:flex}
+.rg-gantt .rg-sp{flex:1}
+.rg-gantt .rg-open{position:sticky;right:0;z-index:1;border:0;background:rgba(255,255,255,.85);font:inherit;font-size:16px;line-height:1;padding:0 10px;margin:2px 2px;border-radius:4px;cursor:pointer;color:#555}
+.rg-gantt .rg-fold{pointer-events:auto;border:0;background:none;font:inherit;padding:0 4px 0 0;margin-left:-12px;width:16px;cursor:pointer;color:#666}
 .rg-gantt.rg-virt .rg-r{position:absolute;left:0;right:0}
 .rg-gantt .rg-lane{font-weight:600;background:rgba(250,250,250,.85);border-top:1px solid #e5e5e5}
 .rg-gantt .rg-seg{position:absolute;top:3px;bottom:3px;border-radius:3px;box-sizing:border-box;left:calc((var(--a) - var(--o)) * var(--k) * 1px);width:max(2px,calc(var(--d) * var(--k) * 1px))}
@@ -134,6 +145,7 @@ export class GanttChart {
     freePan: boolean;
   };
   private raf = 0;
+  private onOpen?: (bar: GanttRow) => void;
   private ro?: ResizeObserver;
   private axisKey = "";
   private band: [number, number] = [0, -1];
@@ -152,6 +164,7 @@ export class GanttChart {
       canvas: opts.canvas ?? true,
       freePan: opts.freePan ?? true,
     };
+    this.onOpen = opts.onOpen;
     if (!document.getElementById("rg-gantt-css")) {
       const s = document.createElement("style");
       s.id = "rg-gantt-css";
@@ -197,11 +210,7 @@ export class GanttChart {
     const n = this.o.now();
     this.lo = Math.min(n, ...bars.map(startOf));
     this.hi = Math.max(n, ...bars.map((b) => endOf(b, n)));
-    this.lines = [];
-    for (const g of groupRows(bars)) {
-      this.lines.push({ lane: g.lane, segs: [] });
-      for (const b of g.bars as GanttRow[]) this.lines.push({ bar: b, segs: segmentsOf(b, n) });
-    }
+    this.relines();
     this.inner.style.setProperty("--n", String(n - this.base));
     this.band = [0, -1];
     this.renderRows(true);
@@ -210,6 +219,37 @@ export class GanttChart {
       const spp = Math.min(86400 / this.W, fitView(this.lo, this.hi, this.W).spp);
       this.setView({ t0: n - (this.W / 2) * spp, spp });
     } else this.setView(v);
+  }
+
+  /** fold or unfold a row's sub-tasks (rows whose id starts with "<id>/", same lane) */
+  toggle(lane: string, id: string) {
+    const k = `${lane} ${id}`;
+    if (this.folded.has(k)) this.folded.delete(k);
+    else this.folded.add(k);
+    this.relines();
+    this.band = [0, -1];
+    this.renderRows(true);
+    this.draw();
+  }
+
+  private folded = new Set<string>();
+  private kids = new Set<string>();
+  private relines() {
+    const n = this.o.now();
+    this.lines = [];
+    this.kids = new Set();
+    for (const g of groupRows(this.bars)) {
+      const ids = g.bars.map((b) => b.id);
+      for (const id of ids)
+        for (const o of ids) if (o.startsWith(`${id}/`)) this.kids.add(`${g.lane} ${id}`);
+      this.lines.push({ lane: g.lane, segs: [] });
+      for (const b of g.bars as GanttRow[]) {
+        const hidden = [...this.folded].some(
+          (f) => f.startsWith(`${g.lane} `) && b.id.startsWith(`${f.slice(g.lane.length + 1)}/`),
+        );
+        if (!hidden) this.lines.push({ bar: b, segs: segmentsOf(b, n) });
+      }
+    }
   }
 
   fit() {
@@ -433,8 +473,19 @@ export class GanttChart {
         seg.style.cssText = `--a:${s.from - this.base};--d:${Math.max(0, s.to - s.from)};background-color:${c};color:${c}`;
         row.appendChild(seg);
       }
-    const nm = el("span", "rg-name");
-    nm.textContent = (b.blocked ? "❗" : "") + (b.name ?? b.id);
+    const nm = el("span", "rg-name"),
+      fk = `${b.lane} ${b.id}`;
+    if (this.kids.has(fk)) {
+      const f = el("button", "rg-fold");
+      f.textContent = this.folded.has(fk) ? "▸" : "▾";
+      f.title = this.folded.has(fk) ? L.unfold : L.fold;
+      f.onclick = (e) => {
+        e.stopPropagation();
+        this.toggle(b.lane, b.id);
+      };
+      nm.appendChild(f);
+    }
+    nm.append((b.blocked ? "❗" : "") + (b.name ?? b.id));
     const badge = late ? "late" : st === "verified" || st === "open" || st === "planned" ? "" : st;
     if (badge) {
       const i = document.createElement("i");
@@ -443,6 +494,17 @@ export class GanttChart {
       nm.appendChild(i);
     }
     row.appendChild(nm);
+    if (this.onOpen) {
+      const sp = el("span", "rg-sp"),
+        op = el("button", "rg-open");
+      op.textContent = "⋯";
+      op.title = L.open;
+      op.onclick = (e) => {
+        e.stopPropagation();
+        this.onOpen?.(b);
+      };
+      row.append(sp, op);
+    }
     return row;
   }
 
