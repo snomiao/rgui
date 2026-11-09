@@ -112,7 +112,10 @@ export function zoomAt(v: GanttView, x: number, k: number): GanttView {
 }
 
 /** pan by dx pixels (positive = content moves left = later times) */
-export const panBy = (v: GanttView, dx: number): GanttView => ({ t0: v.t0 + dx * v.spp, spp: v.spp });
+export const panBy = (v: GanttView, dx: number): GanttView => ({
+  t0: v.t0 + dx * v.spp,
+  spp: v.spp,
+});
 
 /** a view showing [lo, hi] in width px with a margin of pad px each side */
 export function fitView(lo: number, hi: number, width: number, pad = 24): GanttView {
