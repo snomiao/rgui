@@ -142,7 +142,11 @@ export class GanttChart {
   setBars(bars: GanttRow[]) {
     this.bars = bars;
     if (!this.fitted && bars.length) {
+      // first view: now in the middle, at most a day across (fit() shows everything)
+      const W = this.root.clientWidth || 800;
       this.fit();
+      const spp = Math.min(86400 / W, this.v.spp);
+      this.setView({ t0: this.o.now() - (W / 2) * spp, spp });
       this.fitted = true;
     } else this.schedule();
   }
@@ -155,10 +159,10 @@ export class GanttChart {
     this.setView(fitView(lo, hi, this.root.clientWidth || 800));
   }
 
-  /** keep the zoom, put now at a third of the width */
+  /** keep the zoom, put now in the middle */
   today() {
     const w = this.root.clientWidth || 800;
-    this.setView({ t0: this.o.now() - (w / 3) * this.v.spp, spp: this.v.spp });
+    this.setView({ t0: this.o.now() - (w / 2) * this.v.spp, spp: this.v.spp });
   }
 
   get view(): GanttView {
@@ -178,11 +182,29 @@ export class GanttChart {
     if (!this.bars.length) return v;
     const W = this.root.clientWidth || 800,
       n = this.o.now(),
-      lo = Math.min(n, ...this.bars.map(startOf)),
-      hi = Math.max(n, ...this.bars.map((b) => endOf(b, n))),
+      seen = this.onScreen(),
+      lo = Math.min(n, ...seen.map(startOf)),
+      hi = Math.max(n, ...seen.map((b) => endOf(b, n))),
       keep = (W / 4) * v.spp,
       t0 = Math.min(hi - keep, Math.max(lo + keep - W * v.spp, v.t0));
     return t0 === v.t0 ? v : { t0, spp: v.spp };
+  }
+
+  /** the bars in the rows scrolled into view (pan/zoom stay near what you are looking at) */
+  private onScreen(): GanttBar[] {
+    const H = this.o.rowHeight,
+      top = this.scroll.scrollTop,
+      bottom = top + (this.scroll.clientHeight || 600),
+      out: GanttBar[] = [];
+    let y = 0;
+    for (const g of groupRows(this.bars)) {
+      y += H;
+      for (const b of g.bars) {
+        if (y + H > top && y < bottom) out.push(b);
+        y += H;
+      }
+    }
+    return out;
   }
 
   destroy() {
