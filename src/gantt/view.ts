@@ -166,8 +166,23 @@ export class GanttChart {
   }
 
   setView(v: GanttView) {
-    this.v = v;
+    this.v = this.clamp(v);
     this.schedule();
+  }
+
+  /**
+   * endless both ways, but never lost: at least a quarter of the width keeps
+   * some of the data (every bar and now) in view
+   */
+  private clamp(v: GanttView): GanttView {
+    if (!this.bars.length) return v;
+    const W = this.root.clientWidth || 800,
+      n = this.o.now(),
+      lo = Math.min(n, ...this.bars.map(startOf)),
+      hi = Math.max(n, ...this.bars.map((b) => endOf(b, n))),
+      keep = (W / 4) * v.spp,
+      t0 = Math.min(hi - keep, Math.max(lo + keep - W * v.spp, v.t0));
+    return t0 === v.t0 ? v : { t0, spp: v.spp };
   }
 
   destroy() {
