@@ -22,7 +22,7 @@
     B: { virtual: false, canvas: false, freePan: false },
     C: { virtual: true, canvas: false, freePan: false },
     D: { virtual: true, canvas: true, freePan: false },
-    E: { virtual: true, canvas: true, freePan: true },
+    E: { virtual: true, canvas: true, freePan: true, onOpen() {} },
   };
   // N synthetic bars like st-eta's: lanes of 20, mixed states, spread over 3 days around now
   const n = +q.get("n") || 200,
