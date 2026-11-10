@@ -39,7 +39,12 @@ export type GanttBar = {
   wait?: { t: number; why?: string; on?: string };
   /** 0..1 progress, drawn as an underline coloured ahead / on track / behind */
   progress?: number;
+  /** estimate events: m = moved (long tick), c = confirmed (short), s = state change (dashed);
+   * events of one batch reschedule share a change id and t, so their ticks line up */
+  ticks?: GanttTick[];
 };
+
+export type GanttTick = { t: number; k: "m" | "c" | "s"; change?: string };
 
 export type GanttState =
   | "verified"

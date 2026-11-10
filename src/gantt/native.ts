@@ -422,6 +422,22 @@ export class GanttChart {
           ctx.fillRect(g0, y + 1, Math.max(2, g1 - g0), H - 2);
         }
       }
+      // estimate ticks: moved = full height, confirmed = short, state change = dashed; batch changes in purple
+      if (b?.ticks)
+        for (const tk of b.ticks) {
+          const tx = Math.round(X(tk.t)) + 0.5;
+          if (tx < 0 || tx > W) continue;
+          ctx.globalAlpha = 0.7;
+          ctx.strokeStyle = tk.change ? "#6a1b9a" : "#555";
+          ctx.lineWidth = tk.change ? 2 : 1;
+          ctx.setLineDash(tk.k === "s" ? [2, 2] : []);
+          ctx.beginPath();
+          ctx.moveTo(tx, tk.k === "c" ? y + H - 8 : y + 1);
+          ctx.lineTo(tx, y + H - 1);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.lineWidth = 1;
+        }
       // waiting: hollow and hatched, no fill, no late red
       if (b && b.wait && b.b === undefined) {
         const w0 = Math.max(-2, X(b.a)),
