@@ -66,6 +66,8 @@ export type GanttOptions = {
   canvas?: boolean;
   /** own touch pan: free diagonal drag with momentum (default true) */
   freePan?: boolean;
+  /** symmetric log time axis around now (canvas only): minutes near now and weeks away on one screen */
+  log?: boolean;
   /** a ⋯ button at the right end of each row calls this (the page opens its dialog) */
   onOpen?: (bar: GanttRow) => void;
 };
@@ -96,6 +98,8 @@ const ZH: Required<GanttLabels> = {
 };
 
 const SCREENS = 7;
+/** log axis labels: offsets from now */
+const LOG_STEPS = [300, 900, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 86400, 2 * 86400, 7 * 86400, 14 * 86400, 30 * 86400, 91 * 86400, 365 * 86400];
 const AXIS_H = 24;
 
 const CSS = `
@@ -159,6 +163,7 @@ export class GanttChart {
     labels: Required<GanttLabels>;
     virtual: boolean;
     canvas: boolean;
+    log: boolean;
     freePan: boolean;
   };
   private raf = 0;
@@ -179,6 +184,7 @@ export class GanttChart {
       } as Required<GanttLabels>,
       virtual: opts.virtual ?? true,
       canvas: opts.canvas ?? true,
+      log: opts.log ?? false,
       freePan: opts.freePan ?? true,
     };
     this.onOpen = opts.onOpen;
@@ -225,6 +231,7 @@ export class GanttChart {
     const v = this.view;
     this.bars = bars;
     const n = this.o.now();
+    if (!this.N || !this.isLog) this.N = n;
     this.lo = Math.min(n, ...bars.map(startOf));
     this.hi = Math.max(n, ...bars.map((b) => endOf(b, n)));
     this.relines();
@@ -233,7 +240,7 @@ export class GanttChart {
     this.renderRows(true);
     if (!this.fitted && bars.length) {
       this.fitted = true;
-      const spp = Math.min(86400 / this.W, fitView(this.lo, this.hi, this.W).spp);
+      const spp = openSpp(bars, n, this.W) ?? Math.min(86400 / this.W, fitView(this.lo, this.hi, this.W).spp);
       this.setView({ t0: n - (this.W / 2) * spp, spp });
     } else this.setView(v);
   }
@@ -280,20 +287,64 @@ export class GanttChart {
     }
   }
 
+  // ---- time ↔ content x. linear: (t - T0) / spp. log: now sits at the middle C of the content; the slope
+  // there is 1/spp and it flattens with distance: x = C ± L·ln(1 + |t - now| / (L·spp)), L = W/6
+  private N = 0;
+  private get isLog() {
+    return this.o.log && this.o.canvas;
+  }
+  private cx(t: number) {
+    if (!this.isLog) return (t - this.T0) / this.spp;
+    const d = t - this.N,
+      L = this.W / 6;
+    return (SCREENS * this.W) / 2 + Math.sign(d) * L * Math.log1p(Math.abs(d) / (L * this.spp));
+  }
+  private ct(x: number) {
+    if (!this.isLog) return this.T0 + x * this.spp;
+    const d = x - (SCREENS * this.W) / 2,
+      L = this.W / 6;
+    return this.N + Math.sign(d) * L * this.spp * Math.expm1(Math.abs(d) / L);
+  }
+
+  /** switch the log time axis on or off, keeping now in the middle */
+  setLog(on: boolean) {
+    this.o.log = on;
+    this.N = this.o.now();
+    this.today();
+  }
+  get log() {
+    return this.isLog;
+  }
+
   fit() {
+    if (this.isLog) {
+      // the widest gap from now fills half the screen
+      const far = Math.max(this.N - this.lo, this.hi - this.N, 3600),
+        L = this.W / 6;
+      this.spp = Math.min(MAX_SPP, Math.max(MIN_SPP, far / (L * Math.expm1((this.W / 2 - 24) / L))));
+      return this.today();
+    }
     this.setView(fitView(this.lo, this.hi, this.W));
   }
 
   today() {
+    if (this.isLog) {
+      this.N = this.o.now();
+      this.apply();
+      this.root.scrollLeft = (SCREENS * this.W) / 2 - this.W / 2;
+      return this.frame();
+    }
     this.setView({ t0: this.o.now() - (this.W / 2) * this.spp, spp: this.spp });
   }
 
   get view(): GanttView {
+    if (this.isLog) return { t0: this.ct(this.root.scrollLeft), spp: this.spp };
     return { t0: this.T0 + this.root.scrollLeft * this.spp, spp: this.spp };
   }
 
   setView(v: GanttView) {
     this.spp = Math.min(MAX_SPP, Math.max(MIN_SPP, v.spp));
+    if (this.isLog) return this.today();
     const mid = ((SCREENS - 1) / 2) * this.W;
     this.T0 = v.t0 - mid * this.spp;
     this.apply();
@@ -327,6 +378,37 @@ export class GanttChart {
 
   private apply() {
     const s = this.inner.style;
+    if (this.isLog) {
+      // the now line sits at the middle; the axis shows offsets from now
+      s.setProperty("--o", String(this.N - this.base - (SCREENS * this.W) / 2));
+      s.setProperty("--k", "1");
+      s.setProperty("--n", String(this.N - this.base));
+      this.rows.style.backgroundImage = "none";
+      const key = `log|${this.N}|${this.spp}|${this.W}`;
+      if (key === this.axisKey) return;
+      this.axisKey = key;
+      const out: HTMLElement[] = [],
+        tz = this.o.tzOffset;
+      for (const d of LOG_STEPS) {
+        for (const sg of [-1, 1]) {
+          const t = this.N + sg * d,
+            x = this.cx(t);
+          if (x < 0 || x > SCREENS * this.W || Math.abs(x - (SCREENS * this.W) / 2) < 44) continue;
+          out.push(Object.assign(el("div", "rg-tick"), { textContent: `${sg > 0 ? "+" : ""}${dur(sg * d)}` }));
+          out[out.length - 1]!.style.left = `${x}px`;
+          out[out.length - 1]!.dataset.x = String(x);
+        }
+      }
+      // drop labels that would overlap (closest to now win)
+      const kept = out
+        .sort((a, b) => Math.abs(+a.dataset.x! - (SCREENS * this.W) / 2) - Math.abs(+b.dataset.x! - (SCREENS * this.W) / 2))
+        .filter((e, i, all) => all.slice(0, i).every((o) => Math.abs(+o.dataset.x! - +e.dataset.x!) > 44));
+      const nowT = el("div", "rg-tick");
+      nowT.style.left = `${(SCREENS * this.W) / 2}px`;
+      nowT.textContent = fmt(this.N, tz).slice(-5);
+      this.axis.replaceChildren(nowT, ...kept);
+      return;
+    }
     s.setProperty("--o", String(this.T0 - this.base));
     s.setProperty("--k", String(1 / this.spp));
     const step = tickStep(this.spp),
@@ -366,6 +448,16 @@ export class GanttChart {
   }
 
   private zoomAt(x: number, k: number) {
+    if (this.isLog) {
+      const sl = this.root.scrollLeft,
+        t = this.ct(sl + x),
+        spp = Math.min(MAX_SPP, Math.max(MIN_SPP, this.spp / k));
+      if (spp === this.spp) return;
+      this.spp = spp;
+      this.apply();
+      this.root.scrollLeft = this.cx(t) - x;
+      return this.schedule();
+    }
     const sl = this.root.scrollLeft,
       t = this.T0 + (sl + x) * this.spp,
       spp = Math.min(MAX_SPP, Math.max(MIN_SPP, this.spp / k));
@@ -377,6 +469,7 @@ export class GanttChart {
   }
 
   private edges() {
+    if (this.isLog) return;
     const sl = this.root.scrollLeft,
       W = this.W,
       mid = ((SCREENS - 1) / 2) * W,
@@ -398,6 +491,7 @@ export class GanttChart {
       dpr = globalThis.devicePixelRatio || 1,
       H = this.o.rowHeight,
       st = this.root.scrollTop,
+      sl = this.root.scrollLeft,
       t0 = this.T0 + this.root.scrollLeft * this.spp,
       k = 1 / this.spp,
       W = this.W,
@@ -411,7 +505,7 @@ export class GanttChart {
       const ln = this.lines[i]!,
         y = i * H - st,
         b = ln.bar,
-        X = (t: number) => (t - t0) * k;
+        X = this.isLog ? (t: number) => this.cx(t) - sl : (t: number) => (t - t0) * k;
       // the first plan: a faint grey bar under the current one, when it moved
       if (b && !b.planned && b.due0 !== undefined && (b.due0 !== b.due || (b.a0 ?? b.a) !== b.a)) {
         const g0 = Math.max(-2, X(b.a0 ?? b.a)),
@@ -486,8 +580,8 @@ export class GanttChart {
         continue;
       }
       for (const s of ln.segs) {
-        let x0 = (s.from - t0) * k,
-          x1 = (s.to - t0) * k;
+        let x0 = X(s.from),
+          x1 = X(s.to);
         if (x1 < 0 || x0 > W) continue;
         x0 = Math.max(-2, x0);
         x1 = Math.min(W + 2, Math.max(x0 + 2, x1));
@@ -781,4 +875,20 @@ export function packSlices(kids: GanttRow[], now: number) {
     slices.push({ segs, k });
   }
   return { slices, n: ends.length };
+}
+
+/** open zoom: the soonest-ending open task and its neighbours (±5 by end); their P95 span fills ~3/4 of the width */
+export function openSpp(bars: GanttBar[], now: number, width: number): number | undefined {
+  const open = bars
+    .filter((b) => !b.planned && !b.stale && b.b === undefined && !(b as GanttRow).wait)
+    .sort((x, y) => x.due - y.due);
+  if (!open.length) return undefined;
+  let i = open.findIndex((b) => b.due >= now);
+  if (i < 0) i = open.length - 1;
+  const spans = open
+    .slice(Math.max(0, i - 5), i + 6)
+    .map((b) => Math.max(60, b.due - b.a))
+    .sort((x, y) => x - y),
+    p95 = spans[Math.min(spans.length - 1, Math.ceil(spans.length * 0.95) - 1)]!;
+  return Math.min(MAX_SPP, Math.max(MIN_SPP, p95 / (0.75 * width)));
 }
