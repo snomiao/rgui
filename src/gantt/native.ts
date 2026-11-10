@@ -126,7 +126,14 @@ const CSS = `
 .rg-gantt .rg-empty{padding:20px;color:#888}
 `;
 
-type Line = { lane?: string; bar?: GanttRow; segs: GanttSegment[] };
+/** slices: a folded parent's sub-tasks, each in a thin sub-lane (k of n) of the row */
+type Line = {
+  lane?: string;
+  bar?: GanttRow;
+  segs: GanttSegment[];
+  slices?: { segs: GanttSegment[]; k: number }[];
+  subLanes?: number;
+};
 
 export class GanttChart {
   readonly root: HTMLDivElement;
@@ -252,13 +259,24 @@ export class GanttChart {
       const ids = g.bars.map((b) => b.id);
       for (const id of ids)
         for (const o of ids) if (o.startsWith(`${id}/`)) this.kids.add(`${g.lane} ${id}`);
-      this.lines.push({ lane: g.lane, segs: [] });
+      const start = this.lines.push({ lane: g.lane, segs: [] });
       for (const b of g.bars as GanttRow[]) {
         const hidden = [...this.folded].some(
           (f) => f.startsWith(`${g.lane} `) && b.id.startsWith(`${f.slice(g.lane.length + 1)}/`),
         );
         if (!hidden) this.lines.push({ bar: b, segs: segmentsOf(b, n) });
       }
+      // a folded parent shows its hidden sub-tasks as slices on its own row
+      if (this.folded.size)
+        for (let i = start; i < this.lines.length; i++) {
+          const ln = this.lines[i]!,
+            b = ln.bar;
+          if (!b || !this.folded.has(`${g.lane} ${b.id}`)) continue;
+          const kids = (g.bars as GanttRow[]).filter((c) => c.id.startsWith(`${b.id}/`)),
+            { slices, n: lanes } = packSlices(kids, n);
+          ln.slices = slices;
+          ln.subLanes = lanes;
+        }
     }
   }
 
@@ -426,6 +444,29 @@ export class GanttChart {
           ctx.strokeStyle = c;
           ctx.strokeRect(w0 + 0.5, y + 3.5, w1 - w0 - 1, H - 7);
         }
+        continue;
+      }
+      if (ln.slices?.length) {
+        const nl = ln.subLanes || 1,
+          sh = (H - 6) / nl;
+        ctx.globalAlpha = 0.08;
+        ctx.fillStyle = "#888";
+        for (const s of ln.segs) {
+          const x0 = Math.max(-2, X(s.from)),
+            x1 = Math.min(W + 2, X(s.to));
+          if (x1 > 0 && x0 < W) ctx.fillRect(x0, y + 3, x1 - x0, H - 6);
+        }
+        for (const sl of ln.slices)
+          for (const s of sl.segs) {
+            let x0 = X(s.from),
+              x1 = X(s.to);
+            if (x1 < 0 || x0 > W) continue;
+            x0 = Math.max(-2, x0);
+            x1 = Math.min(W + 2, Math.max(x0 + 2, x1));
+            ctx.globalAlpha = s.part === "range" ? 0.25 : 0.6;
+            ctx.fillStyle = GANTT_COLORS[s.state];
+            ctx.fillRect(x0, y + 3 + sl.k * sh + 0.5, x1 - x0, Math.max(1, sh - 1));
+          }
         continue;
       }
       for (const s of ln.segs) {
@@ -708,4 +749,20 @@ function fmt(t: number, tz: number) {
   const d = new Date((t + tz) * 1000),
     p = (x: number) => String(x).padStart(2, "0");
   return `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** pack sub-tasks into the fewest sub-lanes so overlapping ones never cover each other */
+export function packSlices(kids: GanttRow[], now: number) {
+  const ends: number[] = [],
+    slices: { segs: GanttSegment[]; k: number }[] = [];
+  for (const c of [...kids].sort((x, y) => startOf(x) - startOf(y))) {
+    const segs = segmentsOf(c, now),
+      a = Math.min(...segs.map((s) => s.from)),
+      b = Math.max(...segs.map((s) => s.to));
+    let k = ends.findIndex((e) => e <= a);
+    if (k < 0) k = ends.push(b) - 1;
+    else ends[k] = b;
+    slices.push({ segs, k });
+  }
+  return { slices, n: ends.length };
 }
