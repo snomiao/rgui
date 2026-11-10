@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { fitView, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
+import { dur, fitView, paceOf, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
 
 test("zoomAt keeps the time under the cursor", () => {
   const v = { t0: 1000, spp: 10 },
@@ -22,4 +22,20 @@ test("open bar past its ETA gets a late segment", () => {
 test("planned bar: range lo..hi plus solid core", () => {
   const b = { id: "/x", lane: "l", a: 10, due: 100, planned: true, loA: 0, lo: 50 };
   expect(segmentsOf(b, 0).map((s) => s.part)).toEqual(["range", "core"]);
+});
+
+test("dur: language-free units", () => {
+  expect(dur(300)).toBe("5M");
+  expect(dur(-300)).toBe("-5M");
+  expect(dur(5400)).toBe("1.5H");
+  expect(dur(400 * 86400)).toBe("1.1Y");
+  expect(dur(20)).toBe("0M");
+});
+
+test("paceOf: underline tip against now", () => {
+  const b = { id: "x", lane: "l", a: 0, due: 36000 };
+  expect(paceOf({ ...b, progress: 0.1 }, 18000)).toBe("behind");
+  expect(paceOf({ ...b, progress: 0.9 }, 18000)).toBe("ahead");
+  expect(paceOf({ ...b, progress: 0.5 }, 18000)).toBe("on");
+  expect(paceOf(b, 18000)).toBeUndefined();
 });

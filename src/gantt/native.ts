@@ -29,6 +29,9 @@ import {
   fitView,
   groupRows,
   segmentsOf,
+  dur,
+  paceOf,
+  PACE_COLORS,
   startOf,
   stateOf,
   tickLabel,
@@ -45,6 +48,10 @@ export type GanttLabels = {
   fold?: string;
   unfold?: string;
   open?: string;
+  /** waiting badge: "{d}" = how long it has waited */
+  wait?: string;
+  /** tooltip: "{d}" = how long ago the estimate was confirmed */
+  confirmed?: string;
 };
 
 export type GanttOptions = {
@@ -84,6 +91,8 @@ const ZH: Required<GanttLabels> = {
   fold: "收起子任务",
   unfold: "展开子任务",
   open: "详情 / 发消息",
+  wait: "等待 {d}",
+  confirmed: "{d} 前确认",
 };
 
 const SCREENS = 7;
@@ -113,6 +122,7 @@ const CSS = `
 .rg-gantt .rg-name{position:sticky;left:0;display:inline-block;padding:0 8px 0 14px;z-index:1;pointer-events:none;text-shadow:0 0 3px #fff,0 0 3px #fff;max-width:90vw;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
 .rg-gantt .rg-lane .rg-name{padding-left:6px}
 .rg-gantt .rg-name i{font-style:normal;font-size:11px;margin-left:6px;padding:0 4px;border-radius:3px;color:#fff;text-shadow:none}
+.rg-gantt .rg-name i.rg-wait{background:none;color:inherit;border:1px solid #8d6e63}
 .rg-gantt .rg-empty{padding:20px;color:#888}
 `;
 
@@ -373,6 +383,7 @@ export class GanttChart {
       t0 = this.T0 + this.root.scrollLeft * this.spp,
       k = 1 / this.spp,
       W = this.W,
+      n = this.o.now(),
       h = this.Hv - AXIS_H,
       first = Math.max(0, Math.floor(st / H)),
       last = Math.min(this.lines.length - 1, Math.ceil((st + h) / H));
@@ -380,7 +391,43 @@ export class GanttChart {
     ctx.clearRect(0, 0, W, h);
     for (let i = first; i <= last; i++) {
       const ln = this.lines[i]!,
-        y = i * H - st;
+        y = i * H - st,
+        b = ln.bar,
+        X = (t: number) => (t - t0) * k;
+      // the first plan: a faint grey bar under the current one, when it moved
+      if (b && !b.planned && b.due0 !== undefined && (b.due0 !== b.due || (b.a0 ?? b.a) !== b.a)) {
+        const g0 = Math.max(-2, X(b.a0 ?? b.a)),
+          g1 = Math.min(W + 2, X(b.due0));
+        if (g1 > 0 && g0 < W) {
+          ctx.globalAlpha = 0.16;
+          ctx.fillStyle = "#888";
+          ctx.fillRect(g0, y + 1, Math.max(2, g1 - g0), H - 2);
+        }
+      }
+      // waiting: hollow and hatched, no fill, no late red
+      if (b && b.wait && b.b === undefined) {
+        const w0 = Math.max(-2, X(b.a)),
+          w1 = Math.min(W + 2, Math.max(w0 + 2, X(Math.max(n, b.due))));
+        if (w1 > 0 && w0 < W) {
+          const c = b.wait.on === "human" ? GANTT_COLORS.human : "#8d6e63";
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(w0, y + 3, w1 - w0, H - 6);
+          ctx.clip();
+          ctx.globalAlpha = 0.35;
+          ctx.strokeStyle = c;
+          for (let hx = w0 - H - ((w0 + st) % 8); hx < w1; hx += 8) {
+            ctx.moveTo(hx, y + H - 3);
+            ctx.lineTo(hx + H, y + 3);
+          }
+          ctx.stroke();
+          ctx.restore();
+          ctx.globalAlpha = 0.8;
+          ctx.strokeStyle = c;
+          ctx.strokeRect(w0 + 0.5, y + 3.5, w1 - w0 - 1, H - 7);
+        }
+        continue;
+      }
       for (const s of ln.segs) {
         let x0 = (s.from - t0) * k,
           x1 = (s.to - t0) * k;
@@ -404,6 +451,22 @@ export class GanttChart {
           ctx.lineWidth = 2;
           ctx.strokeRect(x0, y + 3, x1 - x0, H - 6);
           ctx.lineWidth = 1;
+        }
+      }
+      // progress underline: length = progress × bar, colour = ahead / on track / behind against now
+      const pace = b && paceOf(b, n);
+      if (b && pace) {
+        const u0 = X(b.a),
+          u1 = X(b.a + b.progress! * Math.max(60, b.due - b.a));
+        if (u1 > 0 && u0 < W) {
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = PACE_COLORS[pace];
+          ctx.fillRect(
+            Math.max(-2, u0),
+            y + H - 4,
+            Math.max(2, Math.min(W + 2, u1) - Math.max(-2, u0)),
+            3,
+          );
         }
       }
     }
@@ -461,8 +524,9 @@ export class GanttChart {
       row = el("div", "rg-r"),
       st = stateOf(b),
       end = endOf(b, n),
-      late = !b.planned && !b.stale && b.b === undefined && n > b.due;
-    row.title = `${b.name ?? b.id}  ${b.id}\n${fmt(startOf(b), tz)} → ${fmt(end, tz)}${b.planned && b.lo !== undefined ? ` (${fmt(b.lo, tz)}–${fmt(b.due, tz)})` : ""}\n${L.states[late ? "late" : st] ?? st}${b.blocked ? ` · ❗${L.blocked}` : ""}${b.what ? `\n${b.what}` : ""}`;
+      waiting = !!b.wait && b.b === undefined,
+      late = !waiting && !b.planned && !b.stale && b.b === undefined && n > b.due;
+    row.title = `${b.name ?? b.id}  ${b.id}\n${fmt(startOf(b), tz)} → ${fmt(end, tz)}${b.planned && b.lo !== undefined ? ` (${fmt(b.lo, tz)}–${fmt(b.due, tz)})` : ""}\n${L.states[late ? "late" : st] ?? st}${b.blocked ? ` · ❗${L.blocked}` : ""}${waiting && b.wait!.why ? `\n${b.wait!.why}` : ""}${b.confirmed && b.b === undefined ? `\n${L.confirmed.replace("{d}", dur(n - b.confirmed))}` : ""}${b.what ? `\n${b.what}` : ""}`;
     if (!this.o.canvas)
       for (const s of ln.segs) {
         const seg = el(
@@ -490,7 +554,15 @@ export class GanttChart {
     if (badge) {
       const i = document.createElement("i");
       i.style.background = GANTT_COLORS[badge as keyof typeof GANTT_COLORS] ?? "#999";
-      i.textContent = L.states[badge] ?? badge;
+      i.textContent = late
+        ? `${L.states.late ?? "late"} ${dur(b.due - n)}`
+        : (L.states[badge] ?? badge);
+      nm.appendChild(i);
+    }
+    if (waiting) {
+      const i = document.createElement("i");
+      i.className = "rg-wait";
+      i.textContent = L.wait.replace("{d}", dur(n - b.wait!.t));
       nm.appendChild(i);
     }
     row.appendChild(nm);

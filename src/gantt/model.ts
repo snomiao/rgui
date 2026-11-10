@@ -30,6 +30,15 @@ export type GanttBar = {
   stale?: boolean;
   /** on the critical path */
   crit?: boolean;
+  /** the first plan (start / promised end), drawn as a faint ghost bar when it differs */
+  a0?: number;
+  due0?: number;
+  /** last time the estimate was confirmed or touched */
+  confirmed?: number;
+  /** waiting (paused / blocked) since t: drawn hollow and hatched, never "late" */
+  wait?: { t: number; why?: string; on?: string };
+  /** 0..1 progress, drawn as an underline coloured ahead / on track / behind */
+  progress?: number;
 };
 
 export type GanttState =
@@ -159,4 +168,39 @@ export function groupRows(bars: GanttBar[]): { lane: string; bars: GanttBar[] }[
   const m = new Map<string, GanttBar[]>();
   for (const b of bars) m.set(b.lane, [...(m.get(b.lane) ?? []), b]);
   return [...m].map(([lane, bs]) => ({ lane, bars: bs }));
+}
+
+/** language-free duration, minutes and up: "5M", "1.5H", "3D", "2W", "4Mo", "1.1Y" */
+export function dur(sec: number): string {
+  const a = Math.abs(sec),
+    u: [number, string][] = [
+      [365 * 86400, "Y"],
+      [30 * 86400, "Mo"],
+      [7 * 86400, "W"],
+      [86400, "D"],
+      [3600, "H"],
+      [60, "M"],
+    ];
+  for (const [s, n] of u)
+    if (a >= s || n === "M") {
+      const v = a / s;
+      return `${sec < 0 ? "-" : ""}${v >= 10 || n === "M" ? Math.round(v) : +v.toFixed(1)}${n}`;
+    }
+  return "";
+}
+
+export type GanttPace = "ahead" | "on" | "behind";
+export const PACE_COLORS: Record<GanttPace, string> = {
+  ahead: "#2e7d32",
+  on: "#1565c0",
+  behind: "#ef6c00",
+};
+
+/** where the progress underline ends against now: behind (left of now), ahead (right) or on track */
+export function paceOf(b: GanttBar, now: number): GanttPace | undefined {
+  if (b.progress === undefined || b.b !== undefined) return undefined;
+  const span = Math.max(60, b.due - b.a),
+    tip = b.a + b.progress * span,
+    near = Math.max(300, span * 0.05);
+  return tip < now - near ? "behind" : tip > now + near ? "ahead" : "on";
 }
