@@ -53,3 +53,8 @@ test("categorize: a category without its own bar gets a group row, members follo
   expect(categoryOf("/l/ui/a")).toBe("/l/ui");
   expect(categoryOf("/l/solo")).toBeUndefined();
 });
+
+test("categorize: a one-member category gets no group row", () => {
+  const out = categorize([{ id: "/l/x/only", lane: "l", a: 0, due: 1 }]);
+  expect(out.map((x) => x.id)).toEqual(["/l/x/only"]);
+});

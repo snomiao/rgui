@@ -221,7 +221,7 @@ export const isActive = (b: GanttBar) => !b.planned && !b.stale && b.b === undef
 
 /**
  * group each lane's rows by category: the category row first (synthesized when the category has no bar of its
- * own: its span covers the members, open while any member is open), then its members in their order
+ * own and at least two members: its span covers the members, open while any member is open), then its members in their order
  */
 export function categorize<T extends GanttBar>(bars: T[]): (T & { group?: { n: number; open: number } })[] {
   const ids = new Set(bars.map((b) => `${b.lane} ${b.id}`)),
@@ -243,7 +243,7 @@ export function categorize<T extends GanttBar>(bars: T[]): (T & { group?: { n: n
     const own = ms.find((b) => b.id === id),
       rest = ms.filter((b) => b !== own);
     if (own) out.push(own);
-    else if (!ids.has(k) && categoryOf(rest[0]!.id)) {
+    else if (!ids.has(k) && rest.length > 1 && categoryOf(rest[0]!.id)) {
       const open = rest.filter((b) => isActive(b)).length,
         ends = rest.map((b) => b.b ?? b.due);
       out.push({
