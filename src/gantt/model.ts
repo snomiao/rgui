@@ -223,7 +223,7 @@ export const isActive = (b: GanttBar) => !b.planned && !b.stale && b.b === undef
  * group each lane's rows by category: the category row first (synthesized when the category has no bar of its
  * own and at least two members: its span covers the members, open while any member is open), then its members in their order
  */
-export function categorize<T extends GanttBar>(bars: T[]): (T & { group?: { n: number; open: number } })[] {
+export function categorize<T extends GanttBar>(bars: T[], known?: Set<string>): (T & { group?: { n: number; open: number } })[] {
   const ids = new Set(bars.map((b) => `${b.lane} ${b.id}`)),
     order: string[] = [],
     members = new Map<string, T[]>();
@@ -243,7 +243,7 @@ export function categorize<T extends GanttBar>(bars: T[]): (T & { group?: { n: n
     const own = ms.find((b) => b.id === id),
       rest = ms.filter((b) => b !== own);
     if (own) out.push(own);
-    else if (!ids.has(k) && rest.length > 1 && categoryOf(rest[0]!.id)) {
+    else if (!ids.has(k) && !known?.has(id) && rest.length > 1 && categoryOf(rest[0]!.id)) {
       const open = rest.filter((b) => isActive(b)).length,
         ends = rest.map((b) => b.b ?? b.due);
       out.push({
@@ -261,5 +261,40 @@ export function categorize<T extends GanttBar>(bars: T[]): (T & { group?: { n: n
     }
     out.push(...rest);
   }
+  return out;
+}
+
+/**
+ * one lane's rows as a tree, flattened depth-first: a row's parent is the row with the longest id that prefixes it
+ * ("<parent>/…"); children follow their parent directly, in their original order; depth is for indenting
+ */
+export function treeOrder<T extends GanttBar>(rows: T[]): { bar: T; depth: number }[] {
+  const byId = new Map<string, T>(),
+    kids = new Map<T | undefined, T[]>();
+  for (const r of rows) if (!byId.has(r.id)) byId.set(r.id, r);
+  for (const r of rows) {
+    let p: T | undefined,
+      id = r.id;
+    for (let i = id.lastIndexOf("/"); i > 0; i = id.lastIndexOf("/")) {
+      id = id.slice(0, i);
+      const q = byId.get(id);
+      if (q && q !== r) {
+        p = q;
+        break;
+      }
+    }
+    kids.set(p, [...(kids.get(p) ?? []), r]);
+  }
+  const out: { bar: T; depth: number }[] = [],
+    seen = new Set<T>();
+  const walk = (p: T | undefined, depth: number) => {
+    for (const c of kids.get(p) ?? []) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      out.push({ bar: c, depth });
+      walk(c, depth + 1);
+    }
+  };
+  walk(undefined, 0);
   return out;
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { categorize, categoryOf, dur, fitView, paceOf, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
+import { treeOrder, categorize, categoryOf, dur, fitView, paceOf, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
 
 test("zoomAt keeps the time under the cursor", () => {
   const v = { t0: 1000, spp: 10 },
@@ -57,4 +57,12 @@ test("categorize: a category without its own bar gets a group row, members follo
 test("categorize: a one-member category gets no group row", () => {
   const out = categorize([{ id: "/l/x/only", lane: "l", a: 0, due: 1 }]);
   expect(out.map((x) => x.id)).toEqual(["/l/x/only"]);
+});
+
+test("treeOrder: children sit right under their parent, in order, with depth", () => {
+  const r = (id: string) => ({ id, lane: "l", a: 0, due: 1 });
+  const out = treeOrder([r("/l/b/x"), r("/l/a"), r("/l/b"), r("/l/a/1"), r("/l/b/x/y"), r("/l/a/2")]);
+  expect(out.map((x) => `${x.depth}${x.bar.id}`)).toEqual([
+    "0/l/a", "1/l/a/1", "1/l/a/2", "0/l/b", "1/l/b/x", "2/l/b/x/y",
+  ]);
 });

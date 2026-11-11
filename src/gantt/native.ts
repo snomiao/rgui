@@ -40,6 +40,7 @@ import {
   categorize,
   categoryOf,
   isActive,
+  treeOrder,
 } from "./model";
 
 export type GanttLabels = {
@@ -142,6 +143,10 @@ type Line = {
   bar?: GanttRow;
   segs: GanttSegment[];
   slices?: { segs: GanttSegment[]; k: number }[];
+  /** nesting under its parent row (indent) */
+  depth?: number;
+  /** a child owned by another lane than the header above it */
+  otherLane?: string;
   subLanes?: number;
 };
 
@@ -280,42 +285,49 @@ export class GanttChart {
     this.lines = [];
     this.kids = new Set();
     this.folded = new Set();
-    for (const g0 of groupRows(this.bars)) {
-      const g = { lane: g0.lane, bars: categorize(g0.bars as GanttRow[]) };
-      // categories (/<lane>/<category>) fold by default unless a member is started, overdue or blocked;
-      // any row the user folded or unfolded keeps that choice
-      const active = new Set<string>();
-      for (const b of g.bars) {
-        const c = categoryOf(b.id);
-        if (c && isActive(b)) active.add(c);
-      }
-      for (const b of g.bars) {
-        const k = `${g.lane} ${b.id}`,
-          isCat = !categoryOf(b.id) && b.id.split("/").length === 3,
-          def = isCat && !active.has(b.id);
-        if (this.userFold[k] ?? def) this.folded.add(k);
-      }
-      const ids = g.bars.map((b) => b.id);
-      for (const id of ids)
-        for (const o of ids) if (o.startsWith(`${id}/`)) this.kids.add(`${g.lane} ${id}`);
-      const start = this.lines.push({ lane: g.lane, segs: [] });
-      for (const b of g.bars as GanttRow[]) {
-        const hidden = [...this.folded].some(
-          (f) => f.startsWith(`${g.lane} `) && b.id.startsWith(`${f.slice(g.lane.length + 1)}/`),
-        );
-        if (!hidden) this.lines.push({ bar: b, segs: segmentsOf(b, n) });
-      }
-      // a folded parent shows its hidden sub-tasks as slices on its own row
-      if (this.folded.size)
-        for (let i = start; i < this.lines.length; i++) {
-          const ln = this.lines[i]!,
-            b = ln.bar;
-          if (!b || !this.folded.has(`${g.lane} ${b.id}`)) continue;
-          const kids = (g.bars as GanttRow[]).filter((c) => c.id.startsWith(`${b.id}/`)),
-            { slices, n: lanes } = packSlices(kids, n);
-          ln.slices = slices;
-          ln.subLanes = lanes;
+    // one tree by id across lanes: a child sits right under its parent even when another lane owns it
+    // (/tool/learn-gantt in [tool], /tool/learn-gantt/tool-eta/… in [tool-eta]); lane headers head top-level rows
+    const known = new Set(this.bars.map((b) => b.id)),
+      all = groupRows(this.bars).flatMap((g) => categorize(g.bars as GanttRow[], known)),
+      tree = treeOrder(all);
+    // categories fold by default unless a descendant is started, overdue or blocked; user choices win
+    const active = new Set<number>();
+    for (let i = 0; i < tree.length; i++) {
+      if (!isActive(tree[i]!.bar)) continue;
+      for (let j = i - 1, d = tree[i]!.depth; j >= 0 && d > 0; j--)
+        if (tree[j]!.depth < d) {
+          active.add(j);
+          d = tree[j]!.depth;
         }
+    }
+    let lane: string | undefined,
+      hideBelow = Infinity;
+    for (let i = 0; i < tree.length; i++) {
+      const { bar: b, depth } = tree[i]!,
+        k = `${b.lane} ${b.id}`,
+        hasKids = (tree[i + 1]?.depth ?? -1) > depth;
+      if (depth <= hideBelow) hideBelow = Infinity;
+      else continue; // under a folded row
+      if (hasKids) this.kids.add(k);
+      const isCat = !categoryOf(b.id) && b.id.split("/").length === 3,
+        fold = hasKids && (this.userFold[k] ?? (isCat && !active.has(i)));
+      if (depth === 0 && b.lane !== lane) {
+        lane = b.lane;
+        this.lines.push({ lane, segs: [] });
+      }
+      const ln: Line = { bar: b, segs: segmentsOf(b, n), depth };
+      if (depth > 0 && b.lane !== lane) ln.otherLane = b.lane;
+      if (fold) {
+        this.folded.add(k);
+        hideBelow = depth;
+        // a folded row shows its hidden descendants as slices on its own row
+        const kids: GanttRow[] = [];
+        for (let j = i + 1; j < tree.length && tree[j]!.depth > depth; j++) kids.push(tree[j]!.bar);
+        const { slices, n: lanes } = packSlices(kids, n);
+        ln.slices = slices;
+        ln.subLanes = lanes;
+      }
+      this.lines.push(ln);
     }
   }
 
@@ -723,6 +735,7 @@ export class GanttChart {
       }
     const nm = el("span", "rg-name"),
       fk = `${b.lane} ${b.id}`;
+    if (ln.depth) nm.style.paddingLeft = `${14 + ln.depth * 14}px`;
     if (this.kids.has(fk)) {
       const f = el("button", "rg-fold");
       f.textContent = this.folded.has(fk) ? "▸" : "▾";
@@ -733,7 +746,7 @@ export class GanttChart {
       };
       nm.appendChild(f);
     }
-    nm.append((b.blocked ? "❗" : "") + (b.name ?? b.id));
+    nm.append((b.blocked ? "❗" : "") + (ln.otherLane ? `[${ln.otherLane}] ` : "") + (b.name ?? b.id));
     const grp = (b as GanttRow & { group?: { n: number; open: number } }).group;
     if (grp) {
       const c = document.createElement("i");
