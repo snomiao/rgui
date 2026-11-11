@@ -163,7 +163,6 @@ const CSS = `
 .rg-gantt .rg-name i.rg-count{background:none;color:inherit;opacity:.6;border:1px solid currentColor}
 .rg-gantt .rg-name b{font-weight:600}
 .rg-gantt .rg-desc{color:#555}
-@media (max-width:640px){.rg-gantt .rg-desc{display:none}}
 .rg-gantt .rg-empty{padding:20px;color:#888}
 `;
 
@@ -664,8 +663,8 @@ export class GanttChart {
       };
       nm.appendChild(f);
     }
-    // "name: description" (taku 11-11): the name bold; the description follows while there is room (hidden on
-    // phones, cut with … at the right edge on wide screens)
+    // "name: description" (taku 11-11): the name bold; the description follows as far as there is room, on phones
+    // too («能顕示多少就顕示多少»), cut with … at the edge
     nm.append((b.blocked ? "❗" : "") + (ln.otherLane ? `[${ln.otherLane}] ` : ""));
     const nb = document.createElement("b");
     nb.textContent = b.name ?? b.id;
