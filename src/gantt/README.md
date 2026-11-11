@@ -1,7 +1,11 @@
 # @snomiao/rgui/gantt — feeding your own tasks (e.g. syform's roadmap)
 
+From a git tag (dist/ is not committed): `bun add github:takusym/rgui#v0.3.0-tk.4` and import
+`@snomiao/rgui/gantt/src` (TypeScript source; vite/bun bundle it). src/gantt imports nothing outside itself (no three,
+no d3). The built file is also the release asset `gantt.js`.
+
 ```ts
-import { GanttChart, GanttController, bindInput, toBars, LABELS_JA } from "@snomiao/rgui/gantt"; // or the release's gantt.js
+import { GanttChart, GanttController, bindInput, toBars, LABELS_JA } from "@snomiao/rgui/gantt/src"; // or the release's gantt.js
 import { roadmap, type RoadmapItem } from "./roadmap/data";
 const STATUSES = { done: { color: "#2e7d32", label: "完了", closed: true }, partial: { color: "#f9a825", label: "一部" },
   not_started: { color: "#9e9e9e", label: "未着手" }, blocked: { color: "#c62828", label: "ブロック" }, unchecked: { color: "#6a1b9a", label: "未確認" } };
