@@ -42,6 +42,7 @@ import {
   isActive,
   treeOrder,
 } from "./model";
+import type { GanttSourceBar, GanttStatuses } from "./source";
 
 export type GanttLabels = {
   /** state → people-facing word (tooltips / badges) */
@@ -74,14 +75,61 @@ export type GanttOptions = {
   log?: boolean;
   /** a ⋯ button at the right end of each row calls this (the page opens its dialog) */
   onOpen?: (bar: GanttRow) => void;
+  /** status → colour / label (the adapter's statuses: any task source's own values) */
+  statuses?: GanttStatuses;
   /** localStorage key for the folds the user opened or closed (per device); null = do not remember */
   foldKey?: string | null;
 };
 
 /** a bar may carry extra display flags */
-export type GanttRow = GanttBar & { blocked?: boolean; what?: string };
+export type GanttRow = GanttBar & { blocked?: boolean; what?: string } & Partial<
+    Pick<GanttSourceBar, "status" | "undated" | "milestone" | "deps">
+  >;
 
-const ZH: Required<GanttLabels> = {
+/** built-in label sets; pass one (or your own) as options.labels */
+export const LABELS_EN: Required<GanttLabels> = {
+  states: {
+    verified: "verified",
+    unverified: "done · unverified",
+    open: "in progress",
+    late: "past ETA",
+    stale: "not closed",
+    planned: "planned",
+    human: "waiting on a person",
+    lane: "waiting on a lane",
+    cancel: "cancelled",
+  },
+  now: "now",
+  blocked: "blocked",
+  empty: "no tasks",
+  fold: "Fold sub-tasks",
+  unfold: "Unfold sub-tasks",
+  open: "Details",
+  wait: "waiting {d}",
+  confirmed: "confirmed {d} ago",
+};
+export const LABELS_JA: Required<GanttLabels> = {
+  states: {
+    verified: "検証済み",
+    unverified: "完了・未検証",
+    open: "進行中",
+    late: "ETA 超過",
+    stale: "未クローズ",
+    planned: "予定",
+    human: "人待ち",
+    lane: "レーン待ち",
+    cancel: "取消",
+  },
+  now: "現在",
+  blocked: "ブロック",
+  empty: "タスクなし",
+  fold: "サブタスクを折りたたむ",
+  unfold: "サブタスクを展開",
+  open: "詳細",
+  wait: "待機 {d}",
+  confirmed: "{d} 前に確認",
+};
+export const LABELS_ZH: Required<GanttLabels> = {
   states: {
     verified: "已验证",
     unverified: "完成·未验证",
@@ -176,6 +224,7 @@ export class GanttChart {
     canvas: boolean;
     log: boolean;
     freePan: boolean;
+    statuses?: GanttStatuses;
   };
   private raf = 0;
   private onOpen?: (bar: GanttRow) => void;
@@ -189,13 +238,14 @@ export class GanttChart {
       tzOffset: opts.tzOffset ?? 32400,
       now: opts.now ?? (() => Date.now() / 1000),
       labels: {
-        ...ZH,
+        ...LABELS_EN,
         ...opts.labels,
-        states: { ...ZH.states, ...opts.labels?.states },
+        states: { ...LABELS_EN.states, ...opts.labels?.states },
       } as Required<GanttLabels>,
       virtual: opts.virtual ?? true,
       canvas: opts.canvas ?? true,
       log: opts.log ?? false,
+      statuses: opts.statuses,
       freePan: opts.freePan ?? true,
     };
     this.onOpen = opts.onOpen;
@@ -276,6 +326,7 @@ export class GanttChart {
     this.draw();
   }
 
+  private rowOf = new Map<string, number>();
   private folded = new Set<string>();
   private kids = new Set<string>();
   private foldKey: string | null = "rgui-gantt-fold";
@@ -315,7 +366,7 @@ export class GanttChart {
         lane = b.lane;
         this.lines.push({ lane, segs: [] });
       }
-      const ln: Line = { bar: b, segs: segmentsOf(b, n), depth };
+      const ln: Line = { bar: b, segs: b.undated ? [] : segmentsOf(b, n), depth };
       if (depth > 0 && b.lane !== lane) ln.otherLane = b.lane;
       if (fold) {
         this.folded.add(k);
@@ -329,6 +380,8 @@ export class GanttChart {
       }
       this.lines.push(ln);
     }
+    this.rowOf = new Map();
+    this.lines.forEach((l, i) => l.bar && this.rowOf.set(l.bar.id, i));
   }
 
   // ---- time ↔ content x. linear: (t - T0) / spp. log: now sits at the middle C of the content; the slope
@@ -630,7 +683,8 @@ export class GanttChart {
         if (x1 < 0 || x0 > W) continue;
         x0 = Math.max(-2, x0);
         x1 = Math.min(W + 2, Math.max(x0 + 2, x1));
-        const c = GANTT_COLORS[s.state];
+        const c =
+          (s.part !== "late" && b?.status && this.o.statuses?.[b.status]?.color) || GANTT_COLORS[s.state];
         ctx.globalAlpha = s.part === "range" ? 0.13 : 0.32;
         ctx.fillStyle = c;
         ctx.fillRect(x0, y + 3, x1 - x0, H - 6);
@@ -664,6 +718,51 @@ export class GanttChart {
             3,
           );
         }
+      }
+      // milestone: a diamond at its end
+      if (b?.milestone && !b.undated) {
+        const mx = X(b.due),
+          r = H / 2 - 4;
+        if (mx > -r && mx < W + r) {
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = (b.status && this.o.statuses?.[b.status]?.color) || "#455a64";
+          ctx.beginPath();
+          ctx.moveTo(mx, y + H / 2 - r);
+          ctx.lineTo(mx + r, y + H / 2);
+          ctx.lineTo(mx, y + H / 2 + r);
+          ctx.lineTo(mx - r, y + H / 2);
+          ctx.fill();
+        }
+      }
+    }
+    // dependencies: an elbow arrow from each dependency's end to the dependent's start (both rows shown)
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = "#607d8b";
+    ctx.fillStyle = "#607d8b";
+    for (let i = 0; i < this.lines.length; i++) {
+      const b = this.lines[i]!.bar;
+      if (!b?.deps || b.undated) continue;
+      for (const d of b.deps) {
+        const j = this.rowOf.get(d),
+          db = j === undefined ? undefined : this.lines[j]!.bar;
+        if (j === undefined || !db || db.undated) continue;
+        if (Math.max(i, j) < first || Math.min(i, j) > last) continue;
+        const x0 = X(db.due),
+          y0 = j * H - st + H / 2,
+          x1 = X(b.a),
+          y1 = i * H - st + H / 2,
+          xm = Math.max(x0 + 6, Math.min(x1 - 6, x0 + 6));
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(xm, y0);
+        ctx.lineTo(xm, y1);
+        ctx.lineTo(x1 - 1, y1);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x1 - 5, y1 - 3);
+        ctx.lineTo(x1 - 5, y1 + 3);
+        ctx.fill();
       }
     }
     ctx.globalAlpha = 1;
@@ -754,8 +853,14 @@ export class GanttChart {
       c.textContent = `${grp.open}/${grp.n}`;
       nm.appendChild(c);
     }
-    const badge = late ? "late" : st === "verified" || st === "open" || st === "planned" ? "" : st;
-    if (badge) {
+    const sst = b.status ? this.o.statuses?.[b.status] : undefined,
+      badge = late ? "late" : st === "verified" || st === "open" || st === "planned" ? "" : st;
+    if (sst && sst.badge !== false && !late) {
+      const i = document.createElement("i");
+      i.style.background = sst.color;
+      i.textContent = sst.label;
+      nm.appendChild(i);
+    } else if (badge && !b.undated) {
       const i = document.createElement("i");
       i.style.background = GANTT_COLORS[badge as keyof typeof GANTT_COLORS] ?? "#999";
       i.textContent = late

@@ -44,6 +44,11 @@
       "import": "./dist/rgui.js",
       "default": "./dist/rgui.js"
     },
+    "./gantt": {
+      "types": "./src/gantt/index.ts",
+      "import": "./dist/gantt.js",
+      "default": "./dist/gantt.js"
+    },
     "./src": "./src/index.ts",
     "./package.json": "./package.json"
   },
