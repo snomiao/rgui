@@ -75,3 +75,15 @@ test("controller: crosshair focus after scrolling settles, snap, padding, rememb
   c.setFocus(c.lines[3]!.bar);
   expect(c.crosshairRow()).toBe(3);
 });
+
+test("controller: at open the crosshair snaps from a header to the nearest task and focuses it", async () => {
+  const c = new GanttController({ now: () => now, foldKey: null, focusKey: null });
+  let got: unknown;
+  c.on("focus", (b) => (got = b));
+  c.setViewport(800, 400);
+  c.setBars([{ id: "/l/x", lane: "l", a: now - 60, due: now + 60 }]);
+  expect(c.crosshairRow()).toBe(0); // the lane header sits under the crosshair at first
+  await new Promise((r) => setTimeout(r, 220));
+  expect(c.crosshairRow()).toBe(1);
+  expect((got as { id: string }).id).toBe("/l/x");
+});

@@ -347,7 +347,15 @@ export class GanttController {
     }
     return undefined;
   }
-  private centreY(i: number) {
+  /** i itself when it is a task row, else the closest task row (a header has none) */
+  private nearestTask(i: number) {
+    for (let d = 0; d < this.lines.length; d++) {
+      if (this.lines[i - d]?.bar) return i - d;
+      if (this.lines[i + d]?.bar) return i + d;
+    }
+    return i;
+  }
+    private centreY(i: number) {
     return this.rowTop(i) + this.o.rowHeight / 2 - this.H / 2;
   }
   private setFocusKey(k: string | undefined) {
@@ -366,10 +374,12 @@ export class GanttController {
     if (!this.o.crosshair || !this.lines.length) return;
     clearTimeout(this.settle);
     this.settle = setTimeout(() => {
-      const i = this.crosshairRow(),
+      // the row under the crosshair, or the nearest task row when that is a group header
+      const i = this.nearestTask(this.crosshairRow()),
         b = this.lines[i]?.bar,
-        y = this.centreY(i);
-      if (Math.abs(y - this.scrollY) > 0.5 && Math.abs(y - this.scrollY) < this.o.rowHeight)
+        y = this.centreY(i),
+        far = Math.abs(y - this.scrollY);
+      if (far > 0.5 && (far < this.o.rowHeight || !this.lines[this.crosshairRow()]?.bar))
         this.scrollTo(this.scrollX, y, true);
       if (b) this.setFocusKey(`${b.lane} ${b.id}`);
     }, 160);
