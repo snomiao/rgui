@@ -544,7 +544,8 @@ export class GanttChart {
           ctx.clip();
           ctx.globalAlpha = 0.35;
           ctx.strokeStyle = c;
-          for (let hx = w0 - H - ((w0 + st) % 8); hx < w1; hx += 8) {
+          // stripes are fixed to the screen (taku 11-11): the old phase mixed in scrollTop, so they crawled on pan
+          for (let hx = w0 - H - (((w0 % 8) + 8) % 8); hx < w1; hx += 8) {
             ctx.moveTo(hx, y + H - 3);
             ctx.lineTo(hx + H, y + 3);
           }
