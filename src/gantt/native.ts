@@ -161,6 +161,9 @@ const CSS = `
 .rg-gantt .rg-name i{font-style:normal;font-size:11px;margin-left:6px;padding:0 4px;border-radius:3px;color:#fff;text-shadow:none}
 .rg-gantt .rg-name i.rg-wait{background:none;color:inherit;border:1px solid #8d6e63}
 .rg-gantt .rg-name i.rg-count{background:none;color:inherit;opacity:.6;border:1px solid currentColor}
+.rg-gantt .rg-name b{font-weight:600}
+.rg-gantt .rg-desc{color:#555}
+@media (max-width:640px){.rg-gantt .rg-desc{display:none}}
 .rg-gantt .rg-empty{padding:20px;color:#888}
 `;
 
@@ -661,7 +664,17 @@ export class GanttChart {
       };
       nm.appendChild(f);
     }
-    nm.append((b.blocked ? "❗" : "") + (ln.otherLane ? `[${ln.otherLane}] ` : "") + (b.name ?? b.id));
+    // "name: description" (taku 11-11): the name bold; the description follows while there is room (hidden on
+    // phones, cut with … at the right edge on wide screens)
+    nm.append((b.blocked ? "❗" : "") + (ln.otherLane ? `[${ln.otherLane}] ` : ""));
+    const nb = document.createElement("b");
+    nb.textContent = b.name ?? b.id;
+    nm.appendChild(nb);
+    if (b.what && b.name && b.what !== b.name) {
+      const d = el("span", "rg-desc");
+      d.textContent = `: ${b.what.replace(/\s+/g, " ")}`;
+      nm.appendChild(d);
+    }
     const grp = (b as GanttRow & { group?: { n: number; open: number } }).group;
     if (grp) {
       const c = document.createElement("i");
