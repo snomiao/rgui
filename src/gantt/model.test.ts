@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { dur, fitView, paceOf, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
+import { categorize, categoryOf, dur, fitView, paceOf, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
 
 test("zoomAt keeps the time under the cursor", () => {
   const v = { t0: 1000, spp: 10 },
@@ -38,4 +38,18 @@ test("paceOf: underline tip against now", () => {
   expect(paceOf({ ...b, progress: 0.9 }, 18000)).toBe("ahead");
   expect(paceOf({ ...b, progress: 0.5 }, 18000)).toBe("on");
   expect(paceOf(b, 18000)).toBeUndefined();
+});
+
+test("categorize: a category without its own bar gets a group row, members follow it", () => {
+  const b = (id: string, a: number, due: number, x: object = {}) => ({ id, lane: "l", a, due, ...x });
+  const out = categorize([
+    b("/l/ui/a", 0, 10, { b: 10, outcome: "verified" }),
+    b("/l/solo", 5, 20),
+    b("/l/ui/b", 3, 30),
+  ]);
+  expect(out.map((x) => x.id)).toEqual(["/l/ui", "/l/ui/a", "/l/ui/b", "/l/solo"]);
+  expect(out[0]).toMatchObject({ a: 0, due: 30, group: { n: 2, open: 1 } });
+  expect(out[0]!.b).toBeUndefined();
+  expect(categoryOf("/l/ui/a")).toBe("/l/ui");
+  expect(categoryOf("/l/solo")).toBeUndefined();
 });

@@ -37,6 +37,9 @@ import {
   tickLabel,
   tickStep,
   ticks,
+  categorize,
+  categoryOf,
+  isActive,
 } from "./model";
 
 export type GanttLabels = {
@@ -70,6 +73,8 @@ export type GanttOptions = {
   log?: boolean;
   /** a ⋯ button at the right end of each row calls this (the page opens its dialog) */
   onOpen?: (bar: GanttRow) => void;
+  /** localStorage key for the folds the user opened or closed (per device); null = do not remember */
+  foldKey?: string | null;
 };
 
 /** a bar may carry extra display flags */
@@ -127,6 +132,7 @@ const CSS = `
 .rg-gantt .rg-lane .rg-name{padding-left:6px}
 .rg-gantt .rg-name i{font-style:normal;font-size:11px;margin-left:6px;padding:0 4px;border-radius:3px;color:#fff;text-shadow:none}
 .rg-gantt .rg-name i.rg-wait{background:none;color:inherit;border:1px solid #8d6e63}
+.rg-gantt .rg-name i.rg-count{background:none;color:inherit;opacity:.6;border:1px solid currentColor}
 .rg-gantt .rg-empty{padding:20px;color:#888}
 `;
 
@@ -188,6 +194,11 @@ export class GanttChart {
       freePan: opts.freePan ?? true,
     };
     this.onOpen = opts.onOpen;
+    if (opts.foldKey !== undefined) this.foldKey = opts.foldKey;
+    if (this.foldKey)
+      try {
+        this.userFold = JSON.parse(localStorage.getItem(this.foldKey) || "{}");
+      } catch {}
     if (!document.getElementById("rg-gantt-css")) {
       const s = document.createElement("style");
       s.id = "rg-gantt-css";
@@ -245,11 +256,15 @@ export class GanttChart {
     } else this.setView(v);
   }
 
-  /** fold or unfold a row's sub-tasks (rows whose id starts with "<id>/", same lane) */
+  /** fold or unfold a row's sub-tasks (rows whose id starts with "<id>/", same lane); remembered per device */
   toggle(lane: string, id: string) {
     const k = `${lane} ${id}`;
-    if (this.folded.has(k)) this.folded.delete(k);
-    else this.folded.add(k);
+    this.userFold[k] = !this.folded.has(k);
+    const key = this.foldKey;
+    if (key)
+      try {
+        localStorage.setItem(key, JSON.stringify(this.userFold));
+      } catch {}
     this.relines();
     this.band = [0, -1];
     this.renderRows(true);
@@ -258,11 +273,28 @@ export class GanttChart {
 
   private folded = new Set<string>();
   private kids = new Set<string>();
+  private foldKey: string | null = "rgui-gantt-fold";
+  private userFold: Record<string, boolean> = {};
   private relines() {
     const n = this.o.now();
     this.lines = [];
     this.kids = new Set();
-    for (const g of groupRows(this.bars)) {
+    this.folded = new Set();
+    for (const g0 of groupRows(this.bars)) {
+      const g = { lane: g0.lane, bars: categorize(g0.bars as GanttRow[]) };
+      // categories (/<lane>/<category>) fold by default unless a member is started, overdue or blocked;
+      // any row the user folded or unfolded keeps that choice
+      const active = new Set<string>();
+      for (const b of g.bars) {
+        const c = categoryOf(b.id);
+        if (c && isActive(b)) active.add(c);
+      }
+      for (const b of g.bars) {
+        const k = `${g.lane} ${b.id}`,
+          isCat = !categoryOf(b.id) && b.id.split("/").length === 3,
+          def = isCat && !active.has(b.id);
+        if (this.userFold[k] ?? def) this.folded.add(k);
+      }
       const ids = g.bars.map((b) => b.id);
       for (const id of ids)
         for (const o of ids) if (o.startsWith(`${id}/`)) this.kids.add(`${g.lane} ${id}`);
@@ -702,6 +734,13 @@ export class GanttChart {
       nm.appendChild(f);
     }
     nm.append((b.blocked ? "❗" : "") + (b.name ?? b.id));
+    const grp = (b as GanttRow & { group?: { n: number; open: number } }).group;
+    if (grp) {
+      const c = document.createElement("i");
+      c.className = "rg-count";
+      c.textContent = `${grp.open}/${grp.n}`;
+      nm.appendChild(c);
+    }
     const badge = late ? "late" : st === "verified" || st === "open" || st === "planned" ? "" : st;
     if (badge) {
       const i = document.createElement("i");

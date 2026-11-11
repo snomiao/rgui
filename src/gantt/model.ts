@@ -209,3 +209,57 @@ export function paceOf(b: GanttBar, now: number): GanttPace | undefined {
     near = Math.max(300, span * 0.05);
   return tip < now - near ? "behind" : tip > now + near ? "ahead" : "on";
 }
+
+/** the category of a task: the first two path segments, /<lane>/<category>, when the id is deeper than that */
+export function categoryOf(id: string): string | undefined {
+  const p = id.split("/");
+  return p.length > 3 && p[0] === "" ? `/${p[1]}/${p[2]}` : undefined;
+}
+
+/** a task someone is on now: started (open), overdue or blocked; planned, closed and stale ones are not */
+export const isActive = (b: GanttBar) => !b.planned && !b.stale && b.b === undefined;
+
+/**
+ * group each lane's rows by category: the category row first (synthesized when the category has no bar of its
+ * own: its span covers the members, open while any member is open), then its members in their order
+ */
+export function categorize<T extends GanttBar>(bars: T[]): (T & { group?: { n: number; open: number } })[] {
+  const ids = new Set(bars.map((b) => `${b.lane} ${b.id}`)),
+    order: string[] = [],
+    members = new Map<string, T[]>();
+  for (const b of bars) {
+    const c = categoryOf(b.id),
+      k = c ? `${b.lane} ${c}` : `${b.lane} ${b.id}`;
+    if (!members.has(k)) {
+      members.set(k, []);
+      order.push(k);
+    }
+    members.get(k)!.push(b);
+  }
+  const out: (T & { group?: { n: number; open: number } })[] = [];
+  for (const k of order) {
+    const ms = members.get(k)!,
+      [lane, id] = [k.slice(0, k.indexOf(" ")), k.slice(k.indexOf(" ") + 1)];
+    const own = ms.find((b) => b.id === id),
+      rest = ms.filter((b) => b !== own);
+    if (own) out.push(own);
+    else if (!ids.has(k) && categoryOf(rest[0]!.id)) {
+      const open = rest.filter((b) => isActive(b)).length,
+        ends = rest.map((b) => b.b ?? b.due);
+      out.push({
+        id,
+        lane,
+        name: id.split("/")[2],
+        a: Math.min(...rest.map(startOf)),
+        due: Math.max(...rest.map((b) => b.due)),
+        ...(open || rest.some((b) => b.b === undefined && !b.stale)
+          ? {}
+          : { b: Math.max(...ends), outcome: rest.every((b) => b.outcome === "verified") ? "verified" : undefined }),
+        ...(rest.every((b) => b.planned) ? { planned: true } : {}),
+        group: { n: rest.length, open },
+      } as unknown as T & { group: { n: number; open: number } });
+    }
+    out.push(...rest);
+  }
+  return out;
+}
