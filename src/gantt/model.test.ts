@@ -49,7 +49,7 @@ test("categorize: a category without its own bar gets a group row, members follo
   ]);
   expect(out.map((x) => x.id)).toEqual(["/l/ui", "/l/ui/a", "/l/ui/b", "/l/solo"]);
   expect(out[0]).toMatchObject({ a: 0, due: 30, group: { n: 2, open: 1 } });
-  expect(out[0]!.b).toBeUndefined();
+  expect((out[0] as { b?: number }).b).toBeUndefined();
   expect(categoryOf("/l/ui/a")).toBe("/l/ui");
   expect(categoryOf("/l/solo")).toBeUndefined();
 });

@@ -4,4 +4,6 @@
  */
 export * from "./model";
 export * from "./native";
+export * from "./core";
+export * from "./input";
 export * from "./source";
