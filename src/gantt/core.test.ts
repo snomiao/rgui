@@ -154,3 +154,17 @@ test("controller: status marks, ghost of the first plan, standalone milestones i
   c.toggle("s", "/s/a");
   expect(JSON.parse(mem.get("rgui-gantt-fold")!)).toEqual({ "s /s/a": true });
 });
+
+test("controller: log mode setBars/setViewport keep the view; today() recentres", () => {
+  const c = mk();
+  c.setLog(true);
+  c.scrollTo(c.scrollX - 200, 0, true); // away from now
+  const t0 = c.view.t0;
+  const px = () => Math.abs(c.t(1) - c.t(0));
+  c.setBars([...c.bars]);
+  expect(Math.abs(c.view.t0 - t0)).toBeLessThanOrEqual(px());
+  c.setViewport(810, 400);
+  expect(Math.abs(c.view.t0 - t0)).toBeLessThanOrEqual(px());
+  c.today();
+  expect(Math.abs(c.t(c.W / 2) - now)).toBeLessThan(1);
+});

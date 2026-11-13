@@ -558,7 +558,11 @@ export class GanttController {
 
   setView(v: GanttView) {
     this.spp = Math.min(MAX_SPP, Math.max(MIN_SPP, v.spp));
-    if (this.o.log) return this.today();
+    if (this.o.log) {
+      // keep N (the log anchor) and put v.t0 at the left edge; only today()/fit() recentre on now
+      this.scrollX = Math.max(0, Math.min(this.contentWidth - this.W, this.cx(v.t0)));
+      return this.emit("view");
+    }
     const mid = ((SCREENS - 1) / 2) * this.W;
     this.T0 = v.t0 - mid * this.spp;
     this.scrollX = mid;
