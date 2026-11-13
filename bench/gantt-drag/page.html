@@ -1,0 +1,61 @@
+<!doctype html><meta charset="utf-8" /><meta
+  name="viewport"
+  content="width=device-width, initial-scale=1"
+/>
+<style>
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+  }
+  #c {
+    position: absolute;
+    inset: 0;
+  }
+</style>
+<div id="c"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search),
+    v = q.get("v") || "A";
+  const { GanttChart } = await import(v === "A" ? "./a.js" : "./native.js");
+  const OPTS = {
+    B: { virtual: false, canvas: false, freePan: false },
+    C: { virtual: true, canvas: false, freePan: false },
+    D: { virtual: true, canvas: true, freePan: false },
+    E: { virtual: true, canvas: true, freePan: true, onOpen() {} },
+  };
+  // N synthetic bars like st-eta's: lanes of 20, mixed states, spread over 3 days around now
+  const n = +q.get("n") || 200,
+    now = Date.now() / 1000;
+  let s = 1;
+  const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const bars = [];
+  for (let i = 0; i < n; i++) {
+    const a = now - 72 * 3600 * r() + 12 * 3600,
+      d = 600 + 6 * 3600 * r(),
+      k = r();
+    const b = {
+      id: `/bench/t${i}`,
+      name: `task ${i}`,
+      lane: `lane${Math.floor(i / 20)}`,
+      a,
+      due: a + d,
+    };
+    if (a > now) Object.assign(b, { planned: true, loA: a - d / 2, lo: a + d / 2 });
+    else if (k < 0.4)
+      Object.assign(b, {
+        b: Math.min(now, a + d * (0.5 + r())),
+        outcome: k < 0.25 ? "verified" : undefined,
+      });
+    bars.push(b);
+  }
+  const t0 = performance.now();
+  window.g = new GanttChart(document.getElementById("c"), OPTS[v]);
+  g.setBars(bars);
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      window.first = performance.now() - t0;
+      document.title = "ok";
+    }),
+  );
+</script>
