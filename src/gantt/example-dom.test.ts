@@ -36,3 +36,19 @@ test("a custom plain-DOM renderer on the shared core: rows, fold by click, ctrl+
   expect(c.spp).toBeLessThan(spp);
   g.destroy();
 });
+
+test("canvas renderer (GanttChart) on the core: blank rows from arrange render as empty .rg-blank rows", async () => {
+  const { GanttChart, stableSlots } = await import("./canvas");
+  const now = 1_800_000_000,
+    host = document.createElement("div");
+  document.body.appendChild(host);
+  const chart = new GanttChart(host, { now: () => now, foldKey: null, focusKey: null, virtual: false, canvas: false }); // happy-dom has no 2D context
+  const s = stableSlots();
+  chart.controller.arrange = s.arrange;
+  const bar = (id: string) => ({ id, lane: "l", a: now - 60, due: now + 60, name: id });
+  chart.setBars([bar("/l/a"), bar("/l/b")]);
+  chart.setBars([bar("/l/b")]);
+  expect(chart.rows.querySelectorAll(".rg-blank").length).toBe(1);
+  expect(chart.controller.lines.map((l) => (l.blank ? "_" : (l.bar?.id ?? l.lane)))).toEqual(["l", "_", "/l/b"]);
+  chart.destroy();
+});

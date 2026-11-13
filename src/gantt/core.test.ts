@@ -7,9 +7,30 @@ const mk = () => {
   c.setViewport(800, 400);
   c.setBars([
     { id: "/l/cat/a", lane: "l", a: now - 3600, due: now + 3600 },
-    { id: "/l/cat/b", lane: "l", a: now - 7200, due: now - 3600, b: now - 3600, outcome: "verified" },
-    { id: "/l/idle/a", lane: "l", a: now - 9000, due: now - 8000, b: now - 8000, outcome: "verified" },
-    { id: "/l/idle/b", lane: "l", a: now - 8000, due: now - 7000, b: now - 7000, outcome: "verified" },
+    {
+      id: "/l/cat/b",
+      lane: "l",
+      a: now - 7200,
+      due: now - 3600,
+      b: now - 3600,
+      outcome: "verified",
+    },
+    {
+      id: "/l/idle/a",
+      lane: "l",
+      a: now - 9000,
+      due: now - 8000,
+      b: now - 8000,
+      outcome: "verified",
+    },
+    {
+      id: "/l/idle/b",
+      lane: "l",
+      a: now - 8000,
+      due: now - 7000,
+      b: now - 7000,
+      outcome: "verified",
+    },
   ]);
   return c;
 };
@@ -86,4 +107,50 @@ test("controller: at open the crosshair snaps from a header to the nearest task 
   await new Promise((r) => setTimeout(r, 220));
   expect(c.crosshairRow()).toBe(1);
   expect((got as { id: string }).id).toBe("/l/x");
+});
+
+test("controller: status marks, ghost of the first plan, standalone milestones in the frame; storage is pluggable", () => {
+  const mem = new Map<string, string>(),
+    storage = {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => void mem.set(k, v),
+      removeItem: (k: string) => void mem.delete(k),
+    };
+  const c = new GanttController({
+    now: () => now,
+    storage,
+    crosshair: false,
+    statuses: { done: { color: "#2e7d32", label: "Done", mark: "✓", closed: true } },
+  });
+  c.setViewport(800, 400);
+  c.setBars([
+    {
+      id: "/s/a",
+      lane: "s",
+      a: now - 3600,
+      due: now + 3600,
+      status: "done",
+      a0: now - 7200,
+      due0: now,
+    },
+    { id: "/s/a/x", lane: "s", a: now, due: now + 60 },
+  ]);
+  c.setMilestones([{ id: "rel", t: now + 1800, name: "release", status: "done" }]);
+  const f = c.frame(),
+    r = f.rows.find((x) => x.line.bar?.id === "/s/a")!;
+  expect(r.status).toEqual({ key: "done", label: "Done", color: "#2e7d32", mark: "✓" });
+  expect(r.ghost!.x).toBeCloseTo(c.x(now - 7200));
+  expect(f.milestones).toEqual([
+    {
+      id: "rel",
+      t: now + 1800,
+      name: "release",
+      status: "done",
+      x: c.x(now + 1800),
+      color: "#2e7d32",
+      mark: "✓",
+    },
+  ]);
+  c.toggle("s", "/s/a");
+  expect(JSON.parse(mem.get("rgui-gantt-fold")!)).toEqual({ "s /s/a": true });
 });

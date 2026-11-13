@@ -18,12 +18,19 @@
  * Zoom: ctrl+wheel / trackpad pinch, Safari gesture events, two-finger pinch;
  * the time under the cursor / the fingers' midpoint stays put.
  */
-import { GANTT_COLORS, dur, endOf, paceOf, PACE_COLORS, startOf, stateOf, type GanttView } from "./model";
+import {
+  GANTT_COLORS,
+  dur,
+  endOf,
+  paceOf,
+  PACE_COLORS,
+  startOf,
+  stateOf,
+  type GanttView,
+} from "./model";
 import { GanttController, SCREENS, type GanttLine, type GanttRow } from "./core";
 import { bindInput } from "./input";
 import type { GanttStatuses } from "./source";
-export type { GanttRow } from "./core";
-export { packSlices, openSpp } from "./core";
 
 export type GanttLabels = {
   /** state → people-facing word (tooltips / badges) */
@@ -173,9 +180,11 @@ export class GanttChart {
   readonly root: HTMLDivElement;
   /** the headless core: state and operations (fold, pan, zoom, mapping); listen to its events */
   readonly controller: GanttController;
-  private inner: HTMLDivElement;
+  /** the scrolled content layer (overlays such as desired-slot shadows go here, in content px) */
+  readonly inner: HTMLDivElement;
   private axis: HTMLDivElement;
-  private rows: HTMLDivElement;
+  /** the rows layer (pointer events for hover focus / drag-to-propose) */
+  readonly rows: HTMLDivElement;
   private cvw?: HTMLDivElement;
   private cv?: HTMLCanvasElement;
   private base = 0;
@@ -379,14 +388,14 @@ export class GanttChart {
       this.frame();
     });
   }
-  private draw() {
+  /** redraw the canvas now (e.g. every animation frame while controller.dy animates rows) */
+  draw() {
     const cv = this.cv;
     if (!cv) return;
     const ctx = cv.getContext("2d")!,
       dpr = globalThis.devicePixelRatio || 1,
       H = this.o.rowHeight,
       c = this.controller,
-      st = c.scrollY,
       W = c.W,
       n = c.o.now(),
       h = this.Hv - AXIS_H,
@@ -559,6 +568,19 @@ export class GanttChart {
         ctx.fill();
       }
     }
+    // standalone milestones (setMilestones): a dashed line down the chart
+    ctx.setLineDash([4, 3]);
+    for (const m of c.milestones) {
+      const mx = Math.round(X(m.t)) + 0.5;
+      if (mx < 0 || mx > W) continue;
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = (m.status && this.o.statuses?.[m.status]?.color) || "#b26a00";
+      ctx.beginPath();
+      ctx.moveTo(mx, 0);
+      ctx.lineTo(mx, h);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
     // focus: the crosshair across the chart at the viewport middle, and a band on the focused row
     const fi = c.focusRow();
     if (fi !== undefined) {
@@ -620,6 +642,7 @@ export class GanttChart {
     const L = this.o.labels,
       tz = this.o.tzOffset,
       n = this.controller.o.now();
+    if (ln.blank) return el("div", "rg-r rg-blank");
     if (ln.lane !== undefined) {
       const r = el("div", "rg-r rg-lane"),
         nm = el("span", "rg-name");
@@ -716,7 +739,6 @@ export class GanttChart {
     }
     return row;
   }
-
 }
 
 function el(tag: string, cls: string) {

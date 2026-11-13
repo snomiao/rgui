@@ -1,2 +1,2 @@
-/** the sytaku page's old entry: same as @snomiao/rgui/gantt (src/gantt/index.ts) */
-export * from "./index";
+/** the sytaku page's old entry: the core and the canvas renderer (same as @snomiao/rgui/gantt/canvas) */
+export * from "./canvas";

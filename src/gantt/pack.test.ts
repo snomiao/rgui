@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { openSpp, packSlices } from "./native";
+import { openSpp, packSlices } from "./core";
 
 test("packSlices: overlapping sub-tasks get separate sub-lanes, others reuse them", () => {
   const k = (id: string, a: number, b: number) => ({ id, lane: "l", a, due: b, b, outcome: "verified" });

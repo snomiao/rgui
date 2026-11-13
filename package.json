@@ -1,6 +1,6 @@
 {
   "name": "@snomiao/rgui",
-  "version": "0.3.0-tk.6",
+  "version": "0.3.0",
   "description": "Framework-agnostic readable-grid UI library — screen-adaptive grid, snap-everything, semantic-zoom LOD node graphs. Canvas 2D now, WebGPU next.",
   "type": "module",
   "license": "MIT",
@@ -49,7 +49,13 @@
       "import": "./dist/gantt.js",
       "default": "./dist/gantt.js"
     },
+    "./gantt/canvas": {
+      "types": "./src/gantt/canvas.ts",
+      "import": "./dist/gantt-canvas.js",
+      "default": "./dist/gantt-canvas.js"
+    },
     "./gantt/src": "./src/gantt/index.ts",
+    "./gantt/canvas/src": "./src/gantt/canvas.ts",
     "./src": "./src/index.ts",
     "./package.json": "./package.json"
   },

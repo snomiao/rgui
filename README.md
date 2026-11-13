@@ -292,6 +292,25 @@ Full rationale, the `SIGNALS` presets, the diagnostics, and the mapping onto
 [sflow](https://github.com/snomiao/sflow)'s `tees` / `distributeBys` / `merges` /
 `toLatests`: **[docs/signal.md](docs/signal.md)**.
 
+## Gantt — a headless core, bring your own renderer
+
+`@snomiao/rgui/gantt` is a renderer-agnostic gantt core: data model (bars, groups and a task tree, milestones,
+statuses with non-colour marks, planned vs actual, desired slots), time scale (linear and log, zoom / pan / fit /
+today, day and week presets), row layout (folding, grouping, a stable-slot `arrange` hook, blank rows), the
+visible-window query, and hit-testing / drag-to-propose, all driven by a `GanttController` that emits frames in
+pixels. No DOM, no styling, zero runtime dependencies. The default DOM + canvas renderer is
+`@snomiao/rgui/gantt/canvas`.
+
+```ts
+import { GanttController } from "@snomiao/rgui/gantt";
+const ctl = new GanttController();
+ctl.setViewport(800, 400);
+ctl.setBars([{ id: "/web/login", lane: "web", name: "login", a: start, due: end }]);
+ctl.on("view", () => paint(ctl.frame())); // frame.rows[i].y, .parts[{ x, w, color }], frame.ticks, frame.nowX
+```
+
+See [src/gantt/README.md](src/gantt/README.md) for the API and plain-DOM / canvas renderer examples.
+
 ## API overview
 
 The default export is `createRgui` (alias `rgui`). Named exports additionally expose the rg

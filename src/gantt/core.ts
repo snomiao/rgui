@@ -11,8 +11,12 @@
  *     each bar's parts already in px
  *   - events: "change" (rows changed: fold, data), "view" (scroll or zoom; renderers sync scroll position from
  *     scrollX/scrollY: a recentre moves it), "open" (a row was opened)
- * input.ts binds the shared gestures (scroll/drag pan, 2D touch pan with momentum, ctrl+wheel and pinch zoom)
- * to any element; native.ts is the default renderer (DOM names + one canvas) built on this.
+ *   - "focus" (the focused task changed: crosshair, hover via focusAt(y), or setFocus)
+ * Hooks: `arrange(lines)` reorders / pads the rows after every layout (stable slots, see layout.ts), `dy(i)` offsets
+ * a row's y (animations); `{ blank: true }` lines are empty rows. Hit-testing (hitTest), milestones, status marks and
+ * desired slots (setDesires) are in frame() too. No DOM: persistence goes through `storage` (default: localStorage
+ * when there is one), timers through setTimeout only.
+ * The DOM renderer (canvas.ts: GanttChart, bindInput) lives on the `@snomiao/rgui/gantt/canvas` subpath.
  */
 import {
   GANTT_COLORS,
@@ -39,6 +43,7 @@ import {
   treeOrder,
 } from "./model";
 import type { GanttSourceBar, GanttStatuses } from "./source";
+import { type GanttDesire, type GanttHit, desireAnswered, hitPart } from "./interact";
 
 /** a bar may carry extra display flags */
 export type GanttRow = GanttBar & { blocked?: boolean; what?: string } & Partial<
@@ -60,6 +65,20 @@ export type GanttLine = {
   /** has children (shows a fold toggle) and is folded now */
   hasKids?: boolean;
   folded?: boolean;
+  /** an empty row (a free slot left by `arrange`, e.g. stableSlots): drawn as nothing */
+  blank?: boolean;
+  /** a stable identity for the row when it is not a task or a group header (e.g. a repeated header) */
+  key?: string;
+};
+
+/** a dated point not tied to a task row (a release, a deadline): drawn across the chart */
+export type GanttMilestone = { id: string; t: number; name?: string; status?: string };
+
+/** the minimal key/value store the controller remembers folds and focus in (localStorage fits) */
+export type GanttStorage = {
+  getItem(k: string): string | null;
+  setItem(k: string, v: string): void;
+  removeItem(k: string): void;
 };
 
 export type GanttCoreOptions = {
@@ -80,6 +99,10 @@ export type GanttCoreOptions = {
   crosshair?: boolean;
   /** localStorage key for the focused task (per device); null = do not remember */
   focusKey?: string | null;
+  /** where folds and focus are remembered (default: globalThis.localStorage when present; null = nowhere) */
+  storage?: GanttStorage | null;
+  /** reorder / pad the rows after every layout (see stableSlots in layout.ts) */
+  arrange?: (lines: GanttLine[]) => GanttLine[];
 };
 
 export type GanttAxisTick = { x: number; label: string };
@@ -101,6 +124,12 @@ export type GanttFrameRow = {
   /** progress underline */
   progress?: { x: number; w: number; color: string };
   milestoneX?: number;
+  /** the first plan (a0..due0) as a faint ghost, when it moved */
+  ghost?: { x: number; w: number };
+  /** the status from the statuses map, with its non-colour mark (✓ ▶ ■ ○ …) */
+  status?: { key: string; label: string; color: string; mark?: string };
+  /** the desired slot set for this row (setDesires), in viewport px */
+  desire?: { x: number; w: number; a: number; b: number };
 };
 export type GanttFrame = {
   width: number;
@@ -112,9 +141,19 @@ export type GanttFrame = {
   /** the crosshair's y (viewport middle) and the focused row's index, when any */
   crosshairY?: number;
   focusIndex?: number;
+  /** standalone milestones (setMilestones) in view, x in viewport px */
+  milestones: (GanttMilestone & { x: number; color?: string; mark?: string })[];
 };
 
 type Ev = "change" | "view" | "open" | "focus";
+
+const defaultStorage = (): GanttStorage | null => {
+  try {
+    return (globalThis as { localStorage?: GanttStorage }).localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
 
 export const SCREENS = 7;
 /** log axis labels: offsets from now */
@@ -135,9 +174,20 @@ const LOG_STEPS = [
 ];
 
 export class GanttController {
-  readonly o: Required<Omit<GanttCoreOptions, "statuses" | "foldKey" | "focusKey">> & {
+  readonly o: Required<
+    Omit<GanttCoreOptions, "statuses" | "foldKey" | "focusKey" | "storage" | "arrange">
+  > & {
     statuses?: GanttStatuses;
   };
+  /** reorder / pad rows after every layout (stable slots); set before setBars */
+  arrange?: (lines: GanttLine[]) => GanttLine[];
+  /** extra y offset of row i in px (animations: FLIP rows to their new slot); rowY adds it */
+  dy?: (i: number) => number;
+  /** standalone milestones */
+  milestones: GanttMilestone[] = [];
+  /** desired slots by "<lane> <id>" (drag-to-propose shadows) */
+  desires: Record<string, GanttDesire> = {};
+  private store: GanttStorage | null;
   /** the focused task ("<lane> <id>"), the row under the crosshair */
   focus?: string;
   private focusKey: string | null = "rgui-gantt-focus";
@@ -159,7 +209,8 @@ export class GanttController {
   lo = 0;
   hi = 0;
   opened?: GanttRow;
-  private fitted = false;
+  /** the first data set has fitted the view (renderers wait for it before filtering by view) */
+  fitted = false;
   private rowOf = new Map<string, number>();
   private foldKey: string | null = "rgui-gantt-fold";
   private userFold: Record<string, boolean> = {};
@@ -174,15 +225,17 @@ export class GanttController {
       statuses: opts.statuses,
       crosshair: opts.crosshair ?? true,
     };
+    this.arrange = opts.arrange;
+    this.store = opts.storage === undefined ? defaultStorage() : opts.storage;
     if (opts.focusKey !== undefined) this.focusKey = opts.focusKey;
     if (this.focusKey)
       try {
-        this.focus = globalThis.localStorage?.getItem(this.focusKey) || undefined;
+        this.focus = this.store?.getItem(this.focusKey) || undefined;
       } catch {}
     if (opts.foldKey !== undefined) this.foldKey = opts.foldKey;
     if (this.foldKey)
       try {
-        this.userFold = JSON.parse(globalThis.localStorage?.getItem(this.foldKey) || "{}");
+        this.userFold = JSON.parse(this.store?.getItem(this.foldKey) || "{}");
       } catch {}
     this.N = this.o.now();
   }
@@ -229,7 +282,7 @@ export class GanttController {
     this.userFold[k] = !(ln?.bar?.lane === lane && ln.folded);
     if (this.foldKey)
       try {
-        globalThis.localStorage?.setItem(this.foldKey, JSON.stringify(this.userFold));
+        this.store?.setItem(this.foldKey, JSON.stringify(this.userFold));
       } catch {}
     this.relines();
     this.emit("change");
@@ -291,6 +344,7 @@ export class GanttController {
       }
       this.lines.push(ln);
     }
+    if (this.arrange) this.lines = this.arrange(this.lines);
     this.rowOf = new Map();
     this.lines.forEach((l, i) => l.bar && this.rowOf.set(l.bar.id, i));
   }
@@ -317,7 +371,63 @@ export class GanttController {
   }
   /** a row's top in viewport px */
   rowY(i: number) {
-    return this.rowTop(i) - this.scrollY;
+    return this.rowTop(i) - this.scrollY + (this.dy?.(i) ?? 0);
+  }
+
+  /** the row index at viewport y (no dy), or undefined outside the rows */
+  rowAt(y: number): number | undefined {
+    const i = Math.floor((y + this.scrollY - this.pad) / this.o.rowHeight);
+    return i >= 0 && i < this.lines.length ? i : undefined;
+  }
+
+  /**
+   * what is under viewport point (x, y): the row, its task, the time there, and which part of the bar
+   * ("start" / "end" edge within `edge` px on bars wider than 16 px, "body", or "none" off the bar)
+   */
+  hitTest(x: number, y: number, edge = 6): GanttHit | undefined {
+    const index = this.rowAt(y);
+    if (index === undefined) return undefined;
+    const line = this.lines[index]!,
+      bar = line.bar,
+      t = this.t(x);
+    if (!bar || line.blank) return { index, line, t, part: "none" };
+    if (bar.undated) return { index, line, bar, t, part: "none" };
+    const x0 = this.x(startOf(bar)),
+      x1 = this.x(endOf(bar, this.o.now()));
+    return { index, line, bar, t, x0, x1, part: hitPart(x, x0, x1, edge) };
+  }
+
+  /** hover focus (a pointer that can hover): focus the task row at viewport y; a header or blank row keeps focus */
+  focusAt(y: number) {
+    const i = this.rowAt(y),
+      b = i === undefined ? undefined : this.lines[i]?.bar;
+    if (b) this.setFocusKey(`${b.lane} ${b.id}`);
+    return b;
+  }
+
+  /** standalone milestones (a release date, a deadline); frame().milestones places them */
+  setMilestones(ms: GanttMilestone[]) {
+    this.milestones = ms;
+    this.emit("change");
+  }
+
+  /**
+   * desired slots ("<lane> <id>" → desire): frame rows carry them as `desire`. Desires whose task was re-planned
+   * (its start or due moved since the desire was made) are dropped; returns the keys that were dropped.
+   */
+  setDesires(d: Record<string, GanttDesire>): string[] {
+    const gone: string[] = [];
+    this.desires = { ...d };
+    for (const b of this.bars) {
+      const k = `${b.lane} ${b.id}`,
+        w = this.desires[k];
+      if (w && desireAnswered(w, b)) {
+        delete this.desires[k];
+        gone.push(k);
+      }
+    }
+    this.emit("change");
+    return gone;
   }
 
   // ---- focus: the row under the crosshair (the vertical middle of the viewport)
@@ -355,19 +465,20 @@ export class GanttController {
     }
     return i;
   }
-    private centreY(i: number) {
+  private centreY(i: number) {
     return this.rowTop(i) + this.o.rowHeight / 2 - this.H / 2;
   }
-  private setFocusKey(k: string | undefined) {
+  /** focus by "<lane> <id>" without scrolling (hover focus); emits "focus" */
+  setFocusKey(k: string | undefined) {
     if (k === this.focus) return;
     this.focus = k;
     if (this.focusKey)
       try {
-        if (k) globalThis.localStorage?.setItem(this.focusKey, k);
-        else globalThis.localStorage?.removeItem(this.focusKey);
+        if (k) this.store?.setItem(this.focusKey, k);
+        else this.store?.removeItem(this.focusKey);
       } catch {}
     const i = this.focusRow();
-    this.emit("focus", i === undefined ? undefined : this.lines[i]!.bar);
+    this.emit("focus", i === undefined ? undefined : this.lines[i]?.bar);
   }
   /** after scrolling settles: snap the row under the crosshair to its middle and focus it */
   private settleSoon() {
@@ -402,7 +513,10 @@ export class GanttController {
     if (!settled) this.settleSoon();
   }
   panBy(dx: number, dy: number) {
-    this.scrollTo(Math.max(0, Math.min(this.contentWidth - this.W, this.scrollX + dx)), this.scrollY + dy);
+    this.scrollTo(
+      Math.max(0, Math.min(this.contentWidth - this.W, this.scrollX + dx)),
+      this.scrollY + dy,
+    );
   }
 
   // ---- time ↔ x. linear: content x = (t - T0) / spp. log: now sits in the middle C of the content; the slope
@@ -410,13 +524,15 @@ export class GanttController {
   get log() {
     return this.o.log;
   }
-  private cx(t: number) {
+  /** time → content px */
+  cx(t: number) {
     if (!this.o.log) return (t - this.T0) / this.spp;
     const d = t - this.N,
       L = this.W / 6;
     return this.contentWidth / 2 + Math.sign(d) * L * Math.log1p(Math.abs(d) / (L * this.spp));
   }
-  private ct(x: number) {
+  /** content px → time */
+  ct(x: number) {
     if (!this.o.log) return this.T0 + x * this.spp;
     const d = x - this.contentWidth / 2,
       L = this.W / 6;
@@ -468,7 +584,10 @@ export class GanttController {
     if (this.o.log) {
       const far = Math.max(this.N - this.lo, this.hi - this.N, 3600),
         L = this.W / 6;
-      this.spp = Math.min(MAX_SPP, Math.max(MIN_SPP, far / (L * Math.expm1((this.W / 2 - 24) / L))));
+      this.spp = Math.min(
+        MAX_SPP,
+        Math.max(MIN_SPP, far / (L * Math.expm1((this.W / 2 - 24) / L))),
+      );
       return this.today();
     }
     this.setView(fitView(this.lo, this.hi, this.W));
@@ -511,6 +630,11 @@ export class GanttController {
     ];
   }
 
+  /** the time span in view: [t(0), t(W)] (in-view filters, data paging) */
+  timeSpan(): { from: number; to: number } {
+    return { from: this.t(0), to: this.t(this.W) };
+  }
+
   /** axis ticks over [x0, x1] content px (default: the whole content); x is content px */
   axis(x0 = 0, x1 = this.contentWidth): { ticks: GanttAxisTick[]; step?: number } {
     const tz = this.o.tzOffset;
@@ -540,7 +664,8 @@ export class GanttController {
 
   colorOf(b: GanttRow | undefined, s: GanttSegment) {
     return (
-      (s.part !== "late" && b?.status && this.o.statuses?.[b.status]?.color) || GANTT_COLORS[s.state]
+      (s.part !== "late" && b?.status && this.o.statuses?.[b.status]?.color) ||
+      GANTT_COLORS[s.state]
     );
   }
 
@@ -572,6 +697,18 @@ export class GanttController {
         };
       }
       if (b?.milestone && !b.undated) r.milestoneX = this.x(b.due);
+      if (b && !b.planned && b.due0 !== undefined && (b.due0 !== b.due || (b.a0 ?? b.a) !== b.a)) {
+        const g0 = this.x(b.a0 ?? b.a);
+        r.ghost = { x: g0, w: Math.max(2, this.x(b.due0) - g0) };
+      }
+      const st = b?.status ? this.o.statuses?.[b.status] : undefined;
+      if (b?.status && st)
+        r.status = { key: b.status, label: st.label, color: st.color, mark: st.mark };
+      const want = b && this.desires[`${b.lane} ${b.id}`];
+      if (want) {
+        const d0 = this.x(want.a);
+        r.desire = { x: d0, w: Math.max(4, this.x(want.b) - d0), a: want.a, b: want.b };
+      }
       rows.push(r);
     }
     const ax = this.axis(this.scrollX - 60, this.scrollX + this.W + 60);
@@ -584,6 +721,11 @@ export class GanttController {
       nowX: this.x(n),
       crosshairY: this.o.crosshair ? this.H / 2 : undefined,
       focusIndex: this.focusRow(),
+      milestones: this.milestones.flatMap((m) => {
+        const x = this.x(m.t),
+          st = m.status ? this.o.statuses?.[m.status] : undefined;
+        return x < -60 || x > this.W + 60 ? [] : [{ ...m, x, color: st?.color, mark: st?.mark }];
+      }),
     };
   }
 }

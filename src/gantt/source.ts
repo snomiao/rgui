@@ -12,7 +12,9 @@
 import type { GanttBar } from "./model";
 
 /** one status: bar/badge colour, people-facing label, and whether the item is finished (its bar ends at end) */
-export type GanttStatus = { color: string; label: string; closed?: boolean; badge?: boolean };
+/** one status: bar/badge colour, people-facing label, a mark that does not rely on colour (✓ ▶ ■ ○), and whether
+ * the item is finished (its bar ends at end) */
+export type GanttStatus = { color: string; label: string; mark?: string; closed?: boolean; badge?: boolean };
 export type GanttStatuses = Record<string, GanttStatus>;
 
 /** what a task source maps each of its items to */
