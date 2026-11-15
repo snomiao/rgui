@@ -1,6 +1,5 @@
 /**
- * rgui gantt — view on a NATIVE scroll container (taku 11-09: drag must be
- * smooth in every direction). The time header is position:sticky top, each
+ * rgui gantt — view on a native scroll container with smooth dragging in every direction. The time header is position:sticky top, each
  * row's name position:sticky left (always at the left edge of what you see),
  * bars a see-through band under it.
  *
@@ -445,7 +444,7 @@ export class GanttChart {
           ctx.clip();
           ctx.globalAlpha = 0.35;
           ctx.strokeStyle = wc;
-          // stripes are fixed to the screen (taku 11-11): the old phase mixed in scrollTop, so they crawled on pan
+          // stripes are fixed to the screen: the old phase mixed in scrollTop, so they crawled on pan
           for (let hx = w0 - H - (((w0 % 8) + 8) % 8); hx < w1; hx += 8) {
             ctx.moveTo(hx, y + H - 3);
             ctx.lineTo(hx + H, y + 3);
@@ -686,7 +685,7 @@ export class GanttChart {
       };
       nm.appendChild(f);
     }
-    // "name: description" (taku 11-11): the name bold; the description follows as far as there is room, on phones
+    // "name: description": the name bold; the description follows as far as there is room, on phones
     // too («能顕示多少就顕示多少»), cut with … at the edge
     nm.append((b.blocked ? "❗" : "") + (ln.otherLane ? `[${ln.otherLane}] ` : ""));
     const nb = document.createElement("b");

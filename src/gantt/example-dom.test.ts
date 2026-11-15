@@ -1,11 +1,14 @@
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
-GlobalRegistrator.register();
+const ownsDom = !GlobalRegistrator.isRegistered;
+if (ownsDom) GlobalRegistrator.register();
 
 import { afterAll, expect, test } from "bun:test";
 import { plainGantt } from "./example-dom";
 
-afterAll(() => GlobalRegistrator.unregister());
+afterAll(async () => {
+  if (ownsDom) await GlobalRegistrator.unregister();
+});
 
 test("a custom plain-DOM renderer on the shared core: rows, fold by click, ctrl+wheel zoom", () => {
   const now = 1_800_000_000,

@@ -1,5 +1,5 @@
 /**
- * rgui gantt — HEADLESS core (taku 11-11 «先抽一层无头组件…操作是公用的…客户只管渲染»).
+ * rgui gantt — headless state and shared operations for custom renderers.
  *
  * GanttController owns the state and every operation; a renderer only draws:
  *   - data: setBars(rows); rows form one tree by id (children under parents, across groups), categories fold
@@ -92,7 +92,7 @@ export type GanttCoreOptions = {
   /** localStorage key for the folds the user opened or closed (per device); null = do not remember */
   foldKey?: string | null;
   /**
-   * focus crosshair (taku 11-11 «准星线…拖到屏幕中间表示聚焦这项»): the row under the vertical middle of the
+   * focus crosshair: the row under the vertical middle of the
    * viewport is the focused task (after scrolling settles, with a small snap); the list gets half a viewport of
    * empty space at top and bottom so every row can reach it (default true)
    */

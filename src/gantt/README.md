@@ -157,7 +157,7 @@ chart.setBars(bars);
 chart.controller.setMilestones([{ id: "v1", t: releaseAt, name: "v1" }]);
 ```
 
-## Migrating from 0.3.0-tk.* (the takusym fork)
+## Migrating from 0.3.0-tk.* (the prerelease fork)
 
 - `GanttChart`, `bindInput`, `LABELS_*` and `plainGantt` moved from `@snomiao/rgui/gantt` to
   `@snomiao/rgui/gantt/canvas`, which re-exports the core too: change one import line.
