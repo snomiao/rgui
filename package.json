@@ -44,6 +44,18 @@
       "import": "./dist/rgui.js",
       "default": "./dist/rgui.js"
     },
+    "./gantt": {
+      "types": "./src/gantt/index.ts",
+      "import": "./dist/gantt.js",
+      "default": "./dist/gantt.js"
+    },
+    "./gantt/canvas": {
+      "types": "./src/gantt/canvas.ts",
+      "import": "./dist/gantt-canvas.js",
+      "default": "./dist/gantt-canvas.js"
+    },
+    "./gantt/src": "./src/gantt/index.ts",
+    "./gantt/canvas/src": "./src/gantt/canvas.ts",
     "./src": "./src/index.ts",
     "./package.json": "./package.json"
   },
