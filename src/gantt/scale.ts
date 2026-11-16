@@ -77,5 +77,9 @@ export function columns(
 export function parseDay(s: string, tzOffset = 32400): number | undefined {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
   if (!m) return undefined;
-  return Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!) / 1000 - tzOffset;
+  const year = +m[1]!, month = +m[2]! - 1, day = +m[3]!;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month, day);
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day) return undefined;
+  return date.getTime() / 1000 - tzOffset;
 }

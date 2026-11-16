@@ -328,7 +328,7 @@ export class GanttController {
       }
       const ln: GanttLine = {
         bar: b,
-        segs: b.undated ? [] : segmentsOf(b, n),
+        segs: "undated" in b && b.undated ? [] : segmentsOf(b, n),
         depth,
         hasKids,
         folded: fold,

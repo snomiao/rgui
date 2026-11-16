@@ -99,9 +99,9 @@ export function segmentsOf(b: GanttBar, now: number): GanttSegment[] {
     if (b.lo > b.a) out.push({ from: b.a, to: b.lo, part: "core", state: st });
     return out;
   }
-  const okEnd = b.planned || b.stale ? end : Math.min(end, b.due);
+  const okEnd = b.planned || b.stale || b.wait ? end : Math.min(end, b.due);
   out.push({ from: b.a, to: okEnd, part: "core", state: st });
-  if (!b.planned && !b.stale && end > b.due)
+  if (!b.planned && !b.stale && !b.wait && end > b.due)
     out.push({ from: b.due, to: end, part: "late", state: "late" });
   return out;
 }
@@ -144,7 +144,8 @@ const STEPS = [
 
 /** the smallest readable step putting ticks at least minPx apart */
 export function tickStep(spp: number, minPx = 80): number {
-  return STEPS.find((s) => s / spp >= minPx) ?? STEPS[STEPS.length - 1]!;
+  const minimum = spp * minPx;
+  return STEPS.find((s) => s >= minimum) ?? Math.ceil(minimum / 2592000) * 2592000;
 }
 
 /**
@@ -223,23 +224,26 @@ export const isActive = (b: GanttBar) => !b.planned && !b.stale && b.b === undef
  * group each lane's rows by category: the category row first (synthesized when the category has no bar of its
  * own and at least two members: its span covers the members, open while any member is open), then its members in their order
  */
-export function categorize<T extends GanttBar>(bars: T[], known?: Set<string>): (T & { group?: { n: number; open: number } })[] {
-  const ids = new Set(bars.map((b) => `${b.lane} ${b.id}`)),
+export type CategoryBar = GanttBar & { synthetic: true; group: { n: number; open: number } };
+export type CategorizedBar<T extends GanttBar> = (T & { synthetic?: false; group?: undefined }) | CategoryBar;
+
+export function categorize<T extends GanttBar>(bars: T[], known?: Set<string>): CategorizedBar<T>[] {
+  const ids = new Set(bars.map((b) => JSON.stringify([b.lane, b.id]))),
     order: string[] = [],
-    members = new Map<string, T[]>();
+    members = new Map<string, { lane: string; id: string; rows: T[] }>();
   for (const b of bars) {
     const c = categoryOf(b.id),
-      k = c ? `${b.lane} ${c}` : `${b.lane} ${b.id}`;
+      id = c ?? b.id,
+      k = JSON.stringify([b.lane, id]);
     if (!members.has(k)) {
-      members.set(k, []);
+      members.set(k, { lane: b.lane, id, rows: [] });
       order.push(k);
     }
-    members.get(k)!.push(b);
+    members.get(k)!.rows.push(b);
   }
-  const out: (T & { group?: { n: number; open: number } })[] = [];
+  const out: CategorizedBar<T>[] = [];
   for (const k of order) {
-    const ms = members.get(k)!,
-      [lane, id] = [k.slice(0, k.indexOf(" ")), k.slice(k.indexOf(" ") + 1)];
+    const { rows: ms, lane, id } = members.get(k)!;
     const own = ms.find((b) => b.id === id),
       rest = ms.filter((b) => b !== own);
     if (own) out.push(own);
@@ -256,8 +260,9 @@ export function categorize<T extends GanttBar>(bars: T[], known?: Set<string>): 
           ? {}
           : { b: Math.max(...ends), outcome: rest.every((b) => b.outcome === "verified") ? "verified" : undefined }),
         ...(rest.every((b) => b.planned) ? { planned: true } : {}),
+        synthetic: true,
         group: { n: rest.length, open },
-      } as unknown as T & { group: { n: number; open: number } });
+      });
     }
     out.push(...rest);
   }

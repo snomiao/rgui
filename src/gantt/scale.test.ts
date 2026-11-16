@@ -23,3 +23,10 @@ test("day preset: fixed columns, today and weekends marked", () => {
   const wk = columns(presetView("week", from, 70, JST), 0, 139, "week", from, JST);
   expect(wk.map((c) => c.date)).toEqual(["2026-11-09", "2026-11-16"]);
 });
+
+
+test("parseDay rejects normalized invalid dates and accepts leap days", () => {
+  for (const day of ["2026-02-30", "2026-13-01", "2026-00-01", "2026-01-00", "2025-02-29"]) expect(parseDay(day, 0)).toBeUndefined();
+  expect(parseDay("2024-02-29", 0)).toBe(Date.UTC(2024, 1, 29) / 1000);
+  expect(new Date(parseDay("0099-01-01", 0)! * 1000).getUTCFullYear()).toBe(99);
+});

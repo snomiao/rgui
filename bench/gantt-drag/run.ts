@@ -134,9 +134,9 @@ for (const V of Vs)
           const f = (t: number) => {
             w.fr.push(t - l);
             l = t;
-            if (w.go) requestAnimationFrame(f);
+            if (w.go) w.frameHandle = requestAnimationFrame(f);
           };
-          requestAnimationFrame(f);
+          w.frameHandle = requestAnimationFrame(f);
         });
         const pos = () =>
           p.evaluate(() => {
@@ -157,6 +157,7 @@ for (const V of Vs)
         const fr: number[] = await p.evaluate(() => {
           const w = window as any;
           w.go = 0;
+          cancelAnimationFrame(w.frameHandle);
           return w.fr.slice(1);
         });
         fr.sort((a, b) => a - b);

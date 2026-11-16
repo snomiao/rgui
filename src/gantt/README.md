@@ -11,7 +11,7 @@ renderer (DOM rows + one canvas, native scroll, sticky names) is on its own subp
 | `…/gantt/src`, `…/gantt/canvas/src` | the TypeScript sources (git installs without `dist/`) |
 
 Times are epoch **seconds**. `tzOffset` is seconds east of UTC (default 32400 = JST; `localTzOffset()` gives the
-runtime's zone).
+runtime's zone). `toBars` is the exception: numeric `start` and `end` inputs are epoch **milliseconds**, and the adapter converts them to seconds.
 
 ## API
 
@@ -74,12 +74,13 @@ function draw() {
 }
 ctl.on("change", draw);
 ctl.on("view", draw);
+draw();
 box.onwheel = (e) => {
   e.preventDefault();
-  if (e.ctrlKey) ctl.zoomAt(e.offsetX, Math.exp(-e.deltaY / 200));
+  if (e.ctrlKey) ctl.zoomAt((e.clientX - box.getBoundingClientRect().left), Math.exp(-e.deltaY / 200));
   else ctl.panBy(e.deltaX, e.deltaY);
 };
-box.onpointermove = (e) => ctl.focusAt(e.offsetY); // hover focus
+box.onpointermove = (e) => ctl.focusAt((e.clientY - box.getBoundingClientRect().top)); // hover focus
 draw();
 ```
 
@@ -114,17 +115,18 @@ function draw() {
 }
 ctl.on("change", draw);
 ctl.on("view", draw);
+draw();
 
 // drag-to-propose: dragging a bar proposes a desired slot instead of moving the task
 let drag: GanttDrag | undefined,
   x0 = 0;
 cv.onpointerdown = (e) => {
-  const h = ctl.hitTest(e.offsetX, e.offsetY);
+  const h = ctl.hitTest((e.clientX - cv.getBoundingClientRect().left), (e.clientY - cv.getBoundingClientRect().top));
   drag = h?.bar && startDrag(h, ctl.desires[`${h.bar.lane} ${h.bar.id}`]);
-  x0 = e.offsetX;
+  x0 = (e.clientX - cv.getBoundingClientRect().left);
 };
 cv.onpointermove = (e) => {
-  if (drag) (drag = dragTo(drag, e.offsetX - x0, ctl)), draw();
+  if (drag) (drag = dragTo(drag, (e.clientX - cv.getBoundingClientRect().left) - x0, ctl)), draw();
 };
 cv.onpointerup = () => {
   if (drag?.moved) ctl.setDesires({ ...ctl.desires, [drag.key]: toDesire(drag) }); // and send it to the owner

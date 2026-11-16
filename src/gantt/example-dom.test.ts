@@ -55,3 +55,51 @@ test("canvas renderer (GanttChart) on the core: blank rows from arrange render a
   expect(chart.controller.lines.map((l) => (l.blank ? "_" : (l.bar?.id ?? l.lane)))).toEqual(["l", "_", "/l/b"]);
   chart.destroy();
 });
+
+
+test("plain renderer preserves vacant stable slots without dereferencing an absent bar", async () => {
+  const { stableSlots } = await import("./layout");
+  const slots = stableSlots(), host = document.createElement("div");
+  document.body.appendChild(host);
+  const g = plainGantt(host, { now: () => 100, foldKey: null, arrange: slots.arrange });
+  const bar = (id: string) => ({ id, lane: "l", a: 0, due: 200 });
+  g.controller.setBars([bar("a"), bar("b")]);
+  g.draw();
+  g.controller.setBars([bar("b")]);
+  expect(() => g.draw()).not.toThrow();
+  expect(host.querySelector('[data-id="b"]')).not.toBeNull();
+  g.destroy();
+});
+
+test("details buttons inside a form open the task without submitting", async () => {
+  const { GanttChart } = await import("./canvas");
+  const form = document.createElement("form");
+  document.body.appendChild(form);
+  let submitted = 0, opened = 0;
+  form.addEventListener("submit", e => { e.preventDefault(); submitted++; });
+  const chart = new GanttChart(form, { canvas: false, virtual: false, crosshair: false, foldKey: null, focusKey: null, onOpen: () => opened++ });
+  chart.setBars([{ id: "task", lane: "l", a: 0, due: 100 }]);
+  chart.rows.querySelector<HTMLButtonElement>(".rg-open")!.click();
+  expect(opened).toBe(1);
+  expect(submitted).toBe(0);
+  chart.destroy();
+});
+
+test("milestone changes schedule a redraw while the chart is idle", async () => {
+  const { GanttChart } = await import("./canvas");
+  const original = globalThis.requestAnimationFrame;
+  const frames: FrameRequestCallback[] = [];
+  globalThis.requestAnimationFrame = cb => { frames.push(cb); return frames.length; };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  let chart: InstanceType<typeof GanttChart> | undefined;
+  try {
+    chart = new GanttChart(host, { canvas: false, virtual: false, foldKey: null, focusKey: null });
+    while (frames.length) frames.shift()!(0);
+    let draws = 0;
+    chart.draw = () => { draws++; };
+    chart.controller.setMilestones([]);
+    while (frames.length) frames.shift()!(0);
+    expect(draws).toBeGreaterThan(0);
+  } finally { chart?.destroy(); globalThis.requestAnimationFrame = original; }
+});

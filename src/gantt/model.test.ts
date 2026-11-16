@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { treeOrder, categorize, categoryOf, dur, fitView, paceOf, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
+import { MAX_SPP, tickStep, treeOrder, categorize, categoryOf, dur, fitView, paceOf, panBy, segmentsOf, stateOf, toT, toX, zoomAt } from "./model";
 
 test("zoomAt keeps the time under the cursor", () => {
   const v = { t0: 1000, spp: 10 },
@@ -65,4 +65,29 @@ test("treeOrder: children sit right under their parent, in order, with depth", (
   expect(out.map((x) => `${x.depth}${x.bar.id}`)).toEqual([
     "0/l/a", "1/l/a/1", "1/l/a/2", "0/l/b", "1/l/b/x", "2/l/b/x/y",
   ]);
+});
+
+
+test("waiting bars keep their full span without a late segment", () => {
+  expect(segmentsOf({ id: "a", lane: "l", a: 0, due: 100, wait: { t: 50 } }, 150))
+    .toEqual([{ from: 0, to: 150, part: "core", state: "open" }]);
+});
+
+test("ticks stay readable through maximum zoom-out", () => {
+  for (const spp of [7561, 86400, MAX_SPP]) expect(tickStep(spp) / spp).toBeGreaterThanOrEqual(80);
+});
+
+test("category identity preserves lanes containing spaces and custom row types", () => {
+  const rows = categorize([
+    { id: "/l/ui/a", lane: "Team Alpha", a: 0, due: 1, meta: { owner: "example" } },
+    { id: "/l/ui/b", lane: "Team Alpha", a: 0, due: 1, meta: { owner: "example" } },
+  ]);
+  expect(rows[0]).toMatchObject({ id: "/l/ui", lane: "Team Alpha", synthetic: true });
+  for (const row of rows) {
+    if (row.synthetic) {
+      // @ts-expect-error synthesized categories do not have caller-specific metadata
+      const metadata = row.meta;
+      expect(metadata).toBeUndefined();
+    } else expect(row.meta.owner).toBe("example");
+  }
 });

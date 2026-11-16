@@ -306,7 +306,10 @@ import { GanttController } from "@snomiao/rgui/gantt";
 const ctl = new GanttController();
 ctl.setViewport(800, 400);
 ctl.setBars([{ id: "/web/login", lane: "web", name: "login", a: start, due: end }]);
-ctl.on("view", () => paint(ctl.frame())); // frame.rows[i].y, .parts[{ x, w, color }], frame.ticks, frame.nowX
+const repaint = () => paint(ctl.frame());
+ctl.on("view", repaint);
+ctl.on("change", repaint);
+repaint(); // frame.rows[i].y, .parts[{ x, w, color }], frame.ticks, frame.nowX
 ```
 
 See [src/gantt/README.md](src/gantt/README.md) for the API and plain-DOM / canvas renderer examples.

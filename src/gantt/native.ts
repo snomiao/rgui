@@ -156,7 +156,7 @@ const CSS = `
 .rg-gantt .rg-open{position:sticky;right:0;z-index:1;border:0;background:rgba(255,255,255,.85);font:inherit;font-size:16px;line-height:1;padding:0 10px;margin:2px 2px;border-radius:4px;cursor:pointer;color:#555}
 .rg-gantt .rg-fold{pointer-events:auto;border:0;background:none;font:inherit;padding:0 4px 0 0;margin-left:-12px;width:16px;cursor:pointer;color:#666}
 .rg-gantt.rg-virt .rg-r{position:absolute;left:0;right:0}
-.rg-gantt .rg-lane{font-weight:600;background:rgba(250,250,250,.85);border-top:1px solid #e5e5e5}
+.rg-gantt .rg-lane{box-sizing:border-box;font-weight:600;background:rgba(250,250,250,.85);border-top:1px solid #e5e5e5}
 .rg-gantt .rg-seg{position:absolute;top:3px;bottom:3px;border-radius:3px;box-sizing:border-box;left:calc((var(--a) - var(--o)) * var(--k) * 1px);width:max(2px,calc(var(--d) * var(--k) * 1px))}
 .rg-gantt .rg-core{opacity:.32}
 .rg-gantt .rg-range{opacity:.13;border:1px dashed currentColor}
@@ -259,6 +259,7 @@ export class GanttChart {
     c.on("change", () => {
       this.band = [0, -1];
       this.renderRows(true);
+      this.schedule();
     });
     // a view change (scroll, zoom, recentre): CSS variables and axis now, rows and canvas in the next frame
     c.on("view", () => {
@@ -728,6 +729,7 @@ export class GanttChart {
     if (this.onOpen) {
       const sp = el("span", "rg-sp"),
         op = el("button", "rg-open");
+      op.type = "button";
       op.textContent = "⋯";
       op.title = L.open;
       op.onclick = (e) => {
@@ -740,8 +742,8 @@ export class GanttChart {
   }
 }
 
-function el(tag: string, cls: string) {
-  const e = document.createElement(tag) as HTMLDivElement;
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string) {
+  const e = document.createElement(tag);
   e.className = cls;
   return e;
 }

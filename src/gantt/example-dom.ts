@@ -26,6 +26,7 @@ export function plainGantt(host: HTMLElement, opts: GanttCoreOptions & { onOpen?
     };
     for (const t of f.ticks) div(`left:${t.x}px;top:0;color:#888`, t.label);
     for (const r of f.rows) {
+      if (r.line.blank) continue;
       const top = r.y + 18,
         b = r.line.bar;
       for (const p of r.parts) {
