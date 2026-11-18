@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 
-// library build: bun run build:lib → dist/rgui.js + dist/gantt.js (the headless @snomiao/rgui/gantt) + dist/gantt-canvas.js (@snomiao/rgui/gantt/canvas) + dist/*.d.ts
+// library build: bun run build:lib → dist/rgui.js + dist/gantt.js (the headless @snomiao/rgui/gantt) + dist/gantt-canvas.js (@snomiao/rgui/gantt/canvas) + dist/*.d.ts (tsrs)
 export default defineConfig({
   build: {
     lib: {
